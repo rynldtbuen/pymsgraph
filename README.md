@@ -1,1 +1,1 @@
-# pymsgraph
+# Microsoft Graph API Python client
