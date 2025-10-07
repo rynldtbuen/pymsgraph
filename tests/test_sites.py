@@ -262,7 +262,7 @@ def test_sites_by_id_lists(
     )
 
 
-def test_sites_by_id_lists_by_id(
+def test_lists_by_id(
     sites: s.Sites,
     url: str,
     check_request_attributes: Callable,
@@ -274,7 +274,7 @@ def test_sites_by_id_lists_by_id(
     check_request_attributes(obj, _type="query_param", SELECT=True)
 
 
-def test_sites_by_id_lists_by_id_items(
+def test_list_items_01(
     sites: s.Sites,
     url: str,
     check_request_attributes: Callable,
@@ -284,22 +284,57 @@ def test_sites_by_id_lists_by_id_items(
 
     check_request_attributes(obj, _type="method", GET=True, POST=True)
     check_request_attributes(
-        obj, _type="query_param", SELECT=True, FILTER=True, ORDERBY=True
+        obj, _type="query_param", SELECT=True, FILTER=True, ORDERBY=True, EXPAND=True
     )
 
 
-# def test_list_from_site_relative_path(
-#     site_root_by_relative_path: s.SiteByRelativePath,
-#     url: str,
-#     check_request_attributes: Callable,
-# ):
-#     obj = site_root_by_relative_path.lists
-#     assert obj.url == f"{url}/sites/root:/sites/testpath12345:/lists"
+def test_list_by_name(
+    sites: s.Sites,
+    url: str,
+    check_request_attributes: Callable,
+):
+    obj = sites.root.by_relative_path("sites/test_by_path").lists.by_name("test list")
+    assert obj.url == f"{url}/sites/root:/sites/test_by_path:/lists/test list"
 
-#     check_request_attributes(obj, _type="method", GET=True)
-#     check_request_attributes(
-#         obj, _type="query_param", SELECT=True, ORDERBY=True, FILTER=True
-#     )
+    check_request_attributes(obj, _type="method", GET=True)
+    check_request_attributes(obj, _type="query_param", SELECT=True)
+
+
+def test_list_items_02(
+    sites: s.Sites,
+    url: str,
+    check_request_attributes: Callable,
+):
+    obj = (
+        sites.root.by_relative_path("sites/test_by_path")
+        .lists.by_name("test list")
+        .items
+    )
+    assert obj.url == f"{url}/sites/root:/sites/test_by_path:/lists/test list/items"
+
+    check_request_attributes(obj, _type="method", GET=True, POST=True)
+    check_request_attributes(
+        obj, _type="query_param", SELECT=True, FILTER=True, ORDERBY=True, EXPAND=True
+    )
+
+
+def test_list_item(
+    sites: s.Sites,
+    url: str,
+    check_request_attributes: Callable,
+):
+    obj = (
+        sites.root.by_relative_path("sites/test_by_path")
+        .lists.by_name("test list")
+        .items.by_id("item123")
+    )
+    assert (
+        obj.url
+        == f"{url}/sites/root:/sites/test_by_path:/lists/test list/items/item123"
+    )
+
+    check_request_attributes(obj, _type="method", GET=True, DELETE=True)
+    check_request_attributes(obj, _type="query_param", SELECT=True, EXPAND=True)
 
 
 # def test_list_by_name_from_site_relative_path(

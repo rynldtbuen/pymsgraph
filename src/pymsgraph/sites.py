@@ -224,6 +224,9 @@ class ListItems(MultiValuedResource["ListItem"]):
     class RequestMethod(MultiValuedResource.RequestMethod):
         POST = True
 
+    class RequestQueryParam(MultiValuedResource.RequestQueryParam):
+        EXPAND = True
+
     ITEM_CLASS = "ListItem"
 
     @property
@@ -238,6 +241,9 @@ class ListItem(SingleValuedResource):
 
     class RequestMethod(SingleValuedResource.RequestMethod):
         DELETE = True
+
+    class RequestQueryParam(SingleValuedResource.RequestQueryParam):
+        EXPAND = True
 
     id = CharField()
     name = CharField()
