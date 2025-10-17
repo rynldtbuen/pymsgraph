@@ -1,8 +1,16 @@
 from typing import Any
 
-from .drives import Drive, Drives, RootDriveItem
+from .drives import Drive, DriveById, RootDriveItem
 from .fields import CharField, DateTimeField
 from .resources import MultiValuedResource, Resource, SingleValuedResource
+
+
+class AllSites(MultiValuedResource["SiteById"]):
+    ITEM_CLASS = "SiteById"
+
+    @property
+    def relative_url(self) -> str:
+        return "/getAllSites"
 
 
 class Sites(MultiValuedResource["Site"]):
@@ -17,12 +25,16 @@ class Sites(MultiValuedResource["Site"]):
     def relative_url(self) -> str:
         return "/sites"
 
-    def __call__(self, hostname: str):
-        return SiteByHostname(self._client, parent=self, hostname=hostname)
+    @property
+    def get_all_sites(self):
+        return AllSites(self._client, parent=self)
 
     @property
     def root(self) -> "SiteRoot":
         return SiteRoot(client=self._client, parent=self)
+
+    def __call__(self, hostname: str):
+        return SiteByHostname(self._client, parent=self, hostname=hostname)
 
     def by_id(self, id: str) -> "SiteById":
         return SiteById(self._client, parent=self, site_id=id)
@@ -83,11 +95,23 @@ class Site(SingleValuedResource):
         return self.Lists(self._client, parent=self)
 
 
+class Drives(MultiValuedResource["DriveById"]):
+    ITEM_CLASS = "DriveById"
+
+    @property
+    def relative_url(self) -> str:
+        return "/drives"
+
+
 class SiteRoot(Site):
 
     @property
     def relative_url(self) -> str:
         return "/root"
+
+    @property
+    def drives(self) -> Drives:
+        return Drives(self._client, parent=self)
 
     def by_relative_path(self, relative_path: str) -> "SiteByRelativePath":
         return SiteByRelativePath(
