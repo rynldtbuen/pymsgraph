@@ -192,8 +192,6 @@ class RootDriveItem(BaseDriveItem):
         )
 
     def upload(self, path: str) -> "RootDriveItem":
-        # PUT https://graph.microsoft.com/v1.0/me/drive/root:/FolderA/FileB.txt:/content
-
         _, filename = os.path.split(path)
         with open(path, "rb") as f:
             content = f.read()
@@ -213,7 +211,11 @@ class DriveItemByRelativePath(DriveItem):
 
     @property
     def relative_url(self) -> str:
-        return f":/{self._relative_path}"
+        if p := self._parent:
+            if "root:" not in p.url:
+                return f":/{self._relative_path}"
+            return f"/{self._relative_path}"
+        raise ValueError("Object requires a parent.")
 
     def _set_kwargs(self, kwargs: dict[str, Any]) -> None:
         _relative_path = kwargs.get("relative_path")
@@ -223,8 +225,6 @@ class DriveItemByRelativePath(DriveItem):
         self._children_relative_url = ":/chidren"
 
     def upload(self, path: str) -> "DriveItem":
-        # PUT https://graph.microsoft.com/v1.0/me/drive/root:/FolderA/FileB.txt:/content
-
         _, filename = os.path.split(path)
         with open(path, "rb") as f:
             content = f.read()
