@@ -167,6 +167,13 @@ class DriveItem(BaseDriveItem):
             f.write(content._get_response.content)
         return self
 
+    def move(self, parent_id: str, filename: str | None = None):
+        data: dict[str, Any] = {"parentReference": {"id": parent_id}}
+        if filename:
+            data["name"] = filename
+
+        self.patch(data)
+
     class Content(SingleValuedResource):
         @property
         def relative_url(self) -> str:
@@ -224,8 +231,9 @@ class DriveItemByRelativePath(DriveItem):
         self._relative_path = _relative_path
         self._children_relative_url = ":/chidren"
 
-    def upload(self, path: str) -> "DriveItem":
-        _, filename = os.path.split(path)
+    def upload(self, path: str, filename: str | None) -> "DriveItem":
+        if filename is None:
+            _, filename = os.path.split(path)
         with open(path, "rb") as f:
             content = f.read()
             self.by_relative_path(filename).content.put(content)
