@@ -1,63 +1,74 @@
+from __future__ import annotations
+
+# pytest automatically discovers this file and makes its fixtures available to
+# all tests in this directory tree.
+
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+
+import httpx
 import pytest
 
-import pymsgraph
+from pymsgraph.client import GraphClient
+
+
+@dataclass(slots=True)
+class DummyTokenProvider:
+    """Minimal token provider for tests.
+
+    GraphClient only needs an object with `get_access_token(scopes=...) -> str`.
+    """
+
+    token: str = "TEST_TOKEN"
+
+    def get_access_token(
+        self, scopes: Sequence[str] | None = None
+    ) -> str:  # noqa: ARG002
+        # Tests don't care about scopes; they care that auth header exists.
+        return self.token
 
 
 @pytest.fixture
-def client():
-    return pymsgraph.Client("test", "test", "str", _test=True)
+def make_graph(
+    request: pytest.FixtureRequest,
+) -> Callable[[Callable[[httpx.Request], httpx.Response]], GraphClient]:
+    """Factory fixture: create a GraphClient wired to an httpx.MockTransport handler.
 
+    Key idea:
+      - Each test passes a handler(request)->response, so it can assert request details.
+      - We register teardown finalizers so the http client is always closed, even
+        when assertions fail (so tests don't need try/finally).
+    """
 
-@pytest.fixture
-def url():
-    return "https://graph.microsoft.com/v1.0"
+    def _make(handler: Callable[[httpx.Request], httpx.Response]) -> GraphClient:
+        # MockTransport routes all outgoing requests to our handler.
+        transport = httpx.MockTransport(handler)
 
+        # We create an httpx.Client ourselves so we can inject the transport.
+        # Register it for teardown so the test doesn't need to close it manually.
+        http = httpx.Client(transport=transport)
+        request.addfinalizer(http.close)
 
-@pytest.fixture
-def request_query_param():
-    return {
-        "SELECT": False,
-        "EXPAND": False,
-        "FILTER": False,
-        "ORDERBY": False,
-        "TOP": False,
-        "COUNT": False,
-        "SEARCH": False,
-    }
+        # Build the GraphClient using the injected httpx client.
+        graph = GraphClient(
+            DummyTokenProvider(),
+            http=http,
+            base_url="https://graph.microsoft.com/v1.0",
+        )
 
+        # Make this client the default for all GraphModel subclasses used in this test.
+        graph.configure_default()
 
-@pytest.fixture
-def request_method():
-    return {
-        "GET": False,
-        "POST": False,
-        "PATCH": False,
-        "DELETE": False,
-    }
+        # Defensive cleanup: after the test, clear the default client if it still points
+        # to this graph (which will now have a closed httpx.Client).
+        from pymsgraph.models.base import GraphModel
 
+        def _reset_default_client() -> None:
+            if GraphModel._default_client is graph:  # type: ignore[attr-defined]
+                GraphModel._default_client = None  # type: ignore[attr-defined]
 
-@pytest.fixture
-def check_request_attributes(request_method, request_query_param):
-    def check_request_query_param(obj, **kwargs):
-        for k, v in kwargs.items():
-            request_query_param[k] = v
+        request.addfinalizer(_reset_default_client)
 
-        for k, v in request_query_param.items():
-            assert v == getattr(obj.RequestQueryParam, k)
+        return graph
 
-    def check_request_method(obj, **kwargs):
-        for k, v in kwargs.items():
-            request_method[k] = v
-
-        for k, v in request_method.items():
-            assert v == getattr(obj.RequestMethod, k)
-
-    def wrapper(obj, _type, **kwargs):
-        func = func_mapping[_type]
-        func(obj, **kwargs)
-
-    func_mapping = {
-        "method": check_request_method,
-        "query_param": check_request_query_param,
-    }
-    return wrapper
+    return _make
