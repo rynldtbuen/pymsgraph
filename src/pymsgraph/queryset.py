@@ -105,6 +105,8 @@ class QuerySet(Generic[TModel]):
         self._headers = headers or {}
 
         self._kwargs: dict[str, Any] = dict(kwargs)
+        self._changed: bool = True
+        self._data: dict[str, Any] = {}
 
     @classmethod
     def as_manager(cls):
@@ -200,10 +202,15 @@ class QuerySet(Generic[TModel]):
         return p
 
     def __iter__(self) -> Iterator[TModel]:
-        client = self.model._get_client()
-        data = client.get(
-            self.endpoint, params=self._build_params(), headers=self._headers
-        )
+        if self._changed:
+            client = self.model._get_client()
+            data = client.get(
+                self.endpoint, params=self._build_params(), headers=self._headers
+            )
+            self._data = data
+            self._changed = False
+        else:
+            data = self._data
         for item in data.get("value", []):
             yield self.model.from_graph(item)
 
@@ -212,7 +219,7 @@ class QuerySet(Generic[TModel]):
             return obj
         return None
 
-    def get(self, id: str | None = None, **lookups: Any) -> TModel:
+    def get(self, *, id: str | None = None, **lookups: Any) -> TModel:
         if id:
             m = self.model
             return m.from_graph(
