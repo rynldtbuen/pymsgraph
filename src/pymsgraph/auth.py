@@ -101,12 +101,15 @@ class PublicClientAuth(TokenProvider):
             authority=self.authority,
             token_cache=cache,
         )
+        self._default_scopes: list[str] = ["https://graph.microsoft.com/.default"]
 
     def get_access_token(self, scopes: Sequence[str] | None = None) -> str:
-        if not scopes:
-            raise ValueError("Delegated auth requires explicit scopes")
+        scopes_list = list(scopes) if scopes else self._default_scopes
 
-        scopes_list = list(scopes)
+        # if not scopes:
+        #     raise ValueError("Delegated auth requires explicit scopes")
+
+        # scopes_list = list(scopes)
 
         accounts = self.app.get_accounts()
         account = accounts[0] if accounts else None
