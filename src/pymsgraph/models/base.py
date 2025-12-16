@@ -16,6 +16,15 @@ TManager = TypeVar("TManager", bound="GraphManager")
 
 
 @dataclass(frozen=True)
+class Capabilities:
+    filter: bool = True
+    search: bool = False
+    order_by: bool = True
+    # implement later
+    # select_related: bool = False
+
+
+@dataclass(frozen=True)
 class ModelOptions:
     """Django-ish _meta container."""
 
@@ -64,6 +73,10 @@ class GraphModelBase(type):
             cls.objects = objects  # type: ignore
         objects.contribute_to_model(cls)
 
+        capabilities = getattr(cls, "capabilities", None)
+        if capabilities is None:
+            setattr(cls, "capabilities", Capabilities())
+
         return cls
 
 
@@ -79,11 +92,12 @@ class GraphModel(metaclass=GraphModelBase):
 
     endpoint: ClassVar[str] = ""
     objects: ClassVar[Any]  # set by GraphModelBase (default) or overridden on model
+    capabilities: ClassVar[Capabilities]
     _meta: ClassVar[ModelOptions]  # populated by GraphModelBase
 
     # shared client (simple start)
     _default_client: ClassVar["GraphClient | None"] = None
-    _client: ClassVar["GraphClient | None"] = None  # per-model override
+    _client: ClassVar["GraphClient | None"] = None  # per-modsel override
 
     # common id field
     id = Field(read_only=True)
