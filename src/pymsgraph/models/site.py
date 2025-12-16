@@ -3,7 +3,7 @@ from typing import Any
 
 from pymsgraph.fields import CharField, Field
 from pymsgraph.manager import BaseManager
-from pymsgraph.models.base import GraphModel
+from pymsgraph.models.base import GraphModel, Capabilities
 from pymsgraph.queryset import QuerySet
 from urllib.parse import quote
 
@@ -109,6 +109,7 @@ class Site(GraphModel):
     """
 
     endpoint = "/sites"
+    capabilities = Capabilities(search=True, filter=False)
     objects = SiteQuerySet.as_manager()
 
     # Common site fields returned by Graph
@@ -155,8 +156,7 @@ class _SiteListsQuerySet(QuerySet["List"]):
 
     @property
     def endpoint(self) -> str:
-        site: Site = self._kwargs["site"]
-        return f"{site.get_endpoint()}/lists"
+        return f"{self._kwargs['site'].get_endpoint()}/lists"
 
 
 class List(GraphModel):
