@@ -77,9 +77,9 @@ class BaseManager(Generic[TModel]):
             },
         )
 
-    def contribute_to_model(self, model: type[TModel]) -> None:
+    def contribute_to_model(self, model):
         self.model = model
-        setattr(model, "objects", ManagerDescriptor(model.objects))
+        setattr(model, "objects", ManagerDescriptor(self))
 
     def get_queryset(self) -> "QuerySet[TModel]":
         return self._queryset_class(self.model, **self._qs_kwargs)  # type: ignore[arg-type]

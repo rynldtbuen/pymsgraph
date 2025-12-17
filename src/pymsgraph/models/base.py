@@ -64,16 +64,16 @@ class GraphModelBase(type):
             if f.graph_name:
                 by_graph[f.graph_name] = f
 
-        cls._meta = ModelOptions(fields=fields, fields_by_graph=by_graph)  # type: ignore
+        setattr(cls, "_meta", ModelOptions(fields=fields, fields_by_graph=by_graph))
 
         # Bind objects manager if present; otherwise attach a default manager.
-        objects = getattr(cls, "objects", None)
+        objects = attrs.get("objects")
         if objects is None:
             objects = GraphManager(cls)
-            cls.objects = objects  # type: ignore
+            setattr(cls, "objects", objects)  # type: ignore
         objects.contribute_to_model(cls)
 
-        capabilities = getattr(cls, "capabilities", None)
+        capabilities = attrs.get("capabilities")
         if capabilities is None:
             setattr(cls, "capabilities", Capabilities())
 
