@@ -218,10 +218,10 @@ class QuerySet(Generic[TModel]):
         p["$orderby"] = ",".join(parts)
         return self._clone(params=p)
 
-    def top(self, n: int) -> QuerySet[TModel]:
-        p = dict(self._params)
-        p["$top"] = int(n)
-        return self._clone(params=p)
+    # def top(self, n: int) -> QuerySet[TModel]:
+    #     p = dict(self._params)
+    #     p["$top"] = int(n)
+    #     return self._clone(params=p)
 
     def count(self) -> QuerySet[TModel]:
         # $count typically requires ConsistencyLevel: eventual
@@ -232,7 +232,7 @@ class QuerySet(Generic[TModel]):
         return self._clone(params=p, headers=h)
 
     def first(self) -> TModel | None:
-        for obj in self.top(1):
+        for obj in self[:1]:
             return obj
         return None
 
@@ -246,7 +246,7 @@ class QuerySet(Generic[TModel]):
                     headers=self._headers,
                 )
             )
-        objs = list(self.filter(**lookups).top(2))
+        objs = list(self.filter(**lookups)[:2])
         if not objs:
             raise LookupError("DoesNotExist")
         if len(objs) > 1:

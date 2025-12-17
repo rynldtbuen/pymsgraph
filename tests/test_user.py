@@ -143,9 +143,8 @@ def test_user_create_missing_required_field_raises(make_graph):
 def test_user_queryset_compiles_params_and_iterates(make_graph):
     qs = (
         User.objects.filter(account_enabled=True)
-        .top(2)
-        .select("display_name", "user_principal_name")
-        .order_by("display_name")
+        .only("display_name", "user_principal_name")
+        .order_by("display_name")[:2]
     )
 
     expected_params = qs._build_params()
@@ -374,13 +373,9 @@ def test_user_groups_member_of_returns_groups_only(make_graph):
 
     # Calling u.groups returns a *manager* bound to Group and configured with
     # the related endpoint: /users/{id}/memberOf
-    qs = (
-        u.groups.top(  # type: ignore
-            10
-        )  # QuerySet method injected onto the related manager
-        .select("display_name", "mail_nickname")
-        .order_by("display_name")
-    )
+    qs = u.groups.only("display_name", "mail_nickname").order_by(  # type: ignore
+        "display_name"
+    )[:2]
 
     # The QuerySet compiles params lazily; compute the expected dict once so
     # we can verify what GraphClient sends on the wire.

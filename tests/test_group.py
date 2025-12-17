@@ -5,7 +5,6 @@ import pytest
 
 from pymsgraph.models.group import Group
 from pymsgraph.queryset import Q
-
 from tests.utils import read_json
 
 
@@ -87,8 +86,7 @@ def test_group_create_missing_required_field_raises(make_graph):
 def test_group_queryset_compiles_params_and_iterates(make_graph):
     qs = (
         Group.objects.filter(mail_enabled=False)
-        .top(1)
-        .select("display_name", "mail_nickname")
+        .only("display_name", "mail_nickname")
         .order_by("display_name")
     )
 
