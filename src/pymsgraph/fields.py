@@ -90,7 +90,7 @@ class CharField(Field):
         required: bool = False,
         read_only: bool = False,
         max_length: int | None = None,
-        strip: bool = False,
+        strip: bool = True,
         dump: Callable[[Any], Any] | None = None,
         load: Callable[[Any], Any] | None = None,
     ) -> None:
