@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import secrets
 import string
+from typing import Any, Iterable
+
+from pymsgraph.queryset import QuerySet
 
 
 def generate_password(length: int = 12) -> str:
@@ -41,3 +44,66 @@ def generate_password(length: int = 12) -> str:
     secrets.SystemRandom().shuffle(chars)
 
     return "".join(chars)
+
+
+def chunks(items: list[str], size: int) -> Iterable[list[str]]:
+    for i in range(0, len(items), size):
+        yield items[i : i + size]
+
+
+def coerce_ids(*args: Any) -> list[str]:
+    """
+    Flatten *args of:
+      - "user-id" strings
+      - User objects
+      - QuerySet[User] / iterables of the above
+    into a deduped list of directoryObject ids.
+    """
+
+    def _dedupe_keep_order(items: Iterable[str]) -> list[str]:
+        seen: set[str] = set()
+        out: list[str] = []
+        for x in items:
+            if x not in seen:
+                seen.add(x)
+                out.append(x)
+        return out
+
+    ids: list[str] = []
+
+    def add_one(x: Any) -> None:
+        if x is None:
+            return
+
+        # string id
+        if isinstance(x, str):
+            ids.append(x)
+            return
+
+        # QuerySet or any other iterable (but not strings)
+        if isinstance(x, QuerySet):
+            for item in x:
+                add_one(item)
+            return
+
+        # assume User-like model instance
+        # (your User has get_directory_object_id(), which resolves id if needed)
+        if hasattr(x, "get_id"):
+            ids.append(x.get_id())  # type: ignore
+            return
+
+        raise TypeError(f"Unsupported member type: {type(x)!r}")
+
+    for arg in args:
+        add_one(arg)
+
+    return _dedupe_keep_order(ids)
+
+
+def raise_batch_errors(batch_payload: dict[str, Any], *, action: str) -> None:
+    # Graph returns 200 for the batch envelope even if individual requests failed. :contentReference[oaicite:2]{index=2}
+    for r in batch_payload.get("responses", []) or []:
+        status = int(r.get("status", 0) or 0)
+        if status >= 400:
+            body = r.get("body")
+            raise RuntimeError(f"Batch {action} failed (status={status}): {body}")

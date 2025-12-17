@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from pymsgraph import utils
 from pymsgraph.fields import BooleanField, CharField, Field
 from pymsgraph.manager import BaseManager
 from pymsgraph.models.base import GraphModel
@@ -24,9 +25,9 @@ class Group(GraphModel):
     endpoint = "/groups"
 
     # Required on create
-    display_name = CharField(required=True, max_length=256, strip=True)
+    display_name = CharField(required=True, max_length=256)
     mail_enabled = BooleanField(required=True)
-    mail_nickname = CharField(required=True, max_length=64, strip=True)
+    mail_nickname = CharField(required=True, max_length=100)
     security_enabled = BooleanField(required=True)
 
     # Optional
@@ -47,22 +48,59 @@ class Group(GraphModel):
 
 
 class _MembersQuerySet(QuerySet["User"]):
-
     @property
     def endpoint(self) -> str:
         return f"{self._kwargs['group'].get_endpoint()}/members"
 
-    def add(self, directory_object_id: str) -> None:
-        """Add *this user* to the group (POST /groups/{group-id}/members/$ref)."""
-        client = self.model._get_client()
+    def add(self, *users: "str | User | QuerySet['User']") -> None:
+        """
+        Add one or many users to this group.
 
-        # Graph expects a full @odata.id pointing at a directoryObject
-        json_body = {
-            "@odata.id": f"{client.base_url}/directoryObjects/{directory_object_id}"
-        }
-        client.post(f"{self.endpoint}/$ref", json_body=json_body)
+        Fast path:
+          PATCH /groups/{id} with members@odata.bind (up to 20 per call). :contentReference[oaicite:3]{index=3}
+        """
+        user_ids = utils.coerce_ids(*users)
+        if not user_ids:
+            return
 
-    def remove(self, directory_object_id: str) -> None:
-        """Remove *this user* from the group (DELETE /groups/{group-id}/members/{id}/$ref)."""
         client = self.model._get_client()
-        client.delete(f"{self.endpoint}/{directory_object_id}/$ref")
+        group = self._kwargs["group"]
+
+        # Graph supports adding up to 20 members per PATCH via members@odata.bind.
+        for chunk in utils.chunks(user_ids, 20):
+            binds = [f"{client.base_url}/directoryObjects/{uid}" for uid in chunk]
+            client.patch(
+                group.get_endpoint(),
+                json_body={"members@odata.bind": binds},
+            )
+
+    def remove(self, *users: "str | User | QuerySet['User']") -> None:
+        """
+        Remove one or many users from this group.
+
+        Uses:
+          DELETE /groups/{id}/members/{member-id}/$ref :contentReference[oaicite:4]{index=4}
+        Batched with POST /$batch (max 20 requests per batch). :contentReference[oaicite:5]{index=5}
+        """
+        user_ids = utils.coerce_ids(*users)
+        if not user_ids:
+            return
+
+        client = self.model._get_client()
+        group = self._kwargs["group"]
+
+        # Batch delete refs (20 requests max per batch)
+        for chunk in utils.chunks(user_ids, 20):
+            requests: list[dict[str, Any]] = []
+            for i, uid in enumerate(chunk, start=1):
+                requests.append(
+                    {
+                        "id": str(i),
+                        "method": "DELETE",
+                        # batch urls must be relative like "/groups/..." :contentReference[oaicite:6]{index=6}
+                        "url": f"{group.get_endpoint()}/members/{uid}/$ref",
+                    }
+                )
+
+            batch_resp = client.post("/$batch", json_body={"requests": requests})
+            utils.raise_batch_errors(batch_resp, action="remove members")
