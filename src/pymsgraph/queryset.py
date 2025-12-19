@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from collections.abc import Iterable, Iterator
-from typing import Any, Generic, TYPE_CHECKING, TypeVar
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 if TYPE_CHECKING:
-    from pymsgraph.models.base import GraphModel
+    from pymsgraph.client import Client
+    from pymsgraph.models.base import Model
 
 
 Lookup = tuple[str, Any, str]  # (field_name, value, lookup)
@@ -86,180 +87,185 @@ class Q:
 type Node = Q | Lookup
 
 
-TModel = TypeVar("TModel", bound="GraphModel")
+TModel = TypeVar("TModel", bound="Model")
 
 
-class BaseQuerySet(Generic[TModel]):
-    def __init__(
-        self,
-        model: type[TModel],
-        *,
-        q: Q | None = None,
-        params: dict[str, Any] | None = None,
-        headers: dict[str, Any] | None = None,
-        **kwargs: Any,
-    ) -> None:
-        self.model = model
-        self._q = q
-        self._params = params or {}
-        self._headers = headers or {}
+# class BaseQuerySet(Generic[TModel]):
+#     def __init__(
+#         self,
+#         model: type[TModel],
+#         *,
+#         q: Q | None = None,
+#         params: dict[str, Any] | None = None,
+#         headers: dict[str, Any] | None = None,
+#         **kwargs: Any,
+#     ) -> None:
+#         self.model = model
+#         self._q = q
+#         self._params = params or {}
+#         self._headers = headers or {}
 
-        self._kwargs: dict[str, Any] = dict(kwargs)
-        self._changed: bool = True
-        self._data: dict[str, Any] = {}
+#         self._kwargs: dict[str, Any] = dict(kwargs)
+#         self._changed: bool = True
+#         self._data: dict[str, Any] = {}
 
-    @property
-    def endpoint(self):
-        return self.model.endpoint
+#     @property
+#     def endpoint(self):
+#         return self.model.endpoint
 
-    def __iter__(self) -> Iterator[TModel]:
-        if self._changed:
-            client = self.model._get_client()
-            data = client.get(
-                self.endpoint, params=self._build_params(), headers=self._headers
-            )
-            self._data = data
-            self._changed = False
-        else:
-            data = self._data
-        for item in data.get("value", []):
-            yield self.model.from_graph(item)
+#     def __iter__(self) -> Iterator[TModel]:
+#         if self._changed:
+#             client = self.model._get_client()
+#             data = client.get(
+#                 self.endpoint, params=self._build_params(), headers=self._headers
+#             )
+#             self._data = data
+#             self._changed = False
+#         else:
+#             data = self._data
+#         for item in data.get("value", []):
+#             yield self.model.from_graph(item)
 
-    def only(self, *fields: str) -> BaseQuerySet[TModel]:
-        graph_fields = [self.model._meta.field_to_graph(f) for f in fields]
-        p = dict(self._params)
-        p["$select"] = ",".join(graph_fields)
-        return self._clone(params=p)
+#     def only(self, *fields: str) -> BaseQuerySet[TModel]:
+#         graph_fields = [self.model._meta.field_to_graph(f) for f in fields]
+#         p = dict(self._params)
+#         p["$select"] = ",".join(graph_fields)
+#         return self._clone(params=p)
 
-    def _clone(
-        self,
-        *,
-        q: Q | None = None,
-        params: dict[str, Any] | None = None,
-        headers: dict[str, Any] | None = None,
-    ) -> BaseQuerySet[TModel]:
+#     def _clone(
+#         self,
+#         *,
+#         q: Q | None = None,
+#         params: dict[str, Any] | None = None,
+#         headers: dict[str, Any] | None = None,
+#     ) -> BaseQuerySet[TModel]:
 
-        return self.__class__(
-            self.model,
-            q=q or self._q,
-            params=dict(self._params) if params is None else params,
-            headers=dict(self._headers) if headers is None else headers,
-            **dict(self._kwargs),
-        )
+#         return self.__class__(
+#             self.model,
+#             q=q or self._q,
+#             params=dict(self._params) if params is None else params,
+#             headers=dict(self._headers) if headers is None else headers,
+#             **dict(self._kwargs),
+#         )
 
-    def _compile_q(self, q: Q) -> str:
-        def compile_node(node: Node) -> str:
-            if isinstance(node, Q):
-                inner = f" {node.op.lower()} ".join(
-                    compile_node(c) for c in node.children
-                )
-                return f"({inner})"
+#     def _compile_q(self, q: Q) -> str:
+#         def compile_node(node: Node) -> str:
+#             if isinstance(node, Q):
+#                 inner = f" {node.op.lower()} ".join(
+#                     compile_node(c) for c in node.children
+#                 )
+#                 return f"({inner})"
 
-            field_name, value, lookup = node
-            gf = self.model._meta.field_to_graph(field_name)
-            return compile_lookup(gf, lookup, value)
+#             field_name, value, lookup = node
+#             gf = self.model._meta.field_to_graph(field_name)
+#             return compile_lookup(gf, lookup, value)
 
-        return compile_node(q)
+#         return compile_node(q)
 
-    def _build_params(self) -> dict[str, Any]:
-        p = dict(self._params)
-        parts: list[str] = []
-        if self._q is not None:
-            parts.append(self._compile_q(self._q))
-        if parts:
-            p["$filter"] = " and ".join(parts)
-        return p
+#     def _build_params(self) -> dict[str, Any]:
+#         p = dict(self._params)
+#         parts: list[str] = []
+#         if self._q is not None:
+#             parts.append(self._compile_q(self._q))
+#         if parts:
+#             p["$filter"] = " and ".join(parts)
+#         return p
+
+
+@dataclass(frozen=True)
+class Capabilities:
+    filter: bool = True
+    search: bool = False
+    order_by: bool = True
+    expand: bool = False
+    only: bool = True
 
 
 class QuerySet(Generic[TModel]):
+    capabilities: Capabilities = Capabilities()
+
     def __init__(
         self,
+        client: Client,
         model: type[TModel],
+        endpoint: str,
         *,
         q: Q | None = None,
         params: dict[str, Any] | None = None,
         headers: dict[str, Any] | None = None,
-        **kwargs: Any,
     ) -> None:
-        self.model = model
+        self._client = client
+        self._model = model
+        self._endpoint = endpoint
         self._q = q
         self._params = params or {}
         self._headers = headers or {}
 
-        self._kwargs: dict[str, Any] = dict(kwargs)
         self._changed: bool = True
         self._data: dict[str, Any] = {}
 
-    @classmethod
-    def as_manager(cls):
-        from .manager import BaseManager
-
-        return BaseManager.from_queryset(cls)()
-
-    @property
-    def endpoint(self):
-        return self.model.endpoint
-
     def __iter__(self) -> Iterator[TModel]:
+        client = self._client
         if self._changed:
-            client = self.model._get_client()
             data = client.get(
-                self.endpoint, params=self._build_params(), headers=self._headers
+                self._endpoint, params=self._build_params(), headers=self._headers
             )
             self._data = data
             self._changed = False
         else:
             data = self._data
         for item in data.get("value", []):
-            yield self.model.from_graph(item)
+            yield self._model.from_graph(
+                client, base_endpoint=self._endpoint, payload=item
+            )
 
-    def __getitem__(self, key: slice | int) -> "QuerySet[TModel]":
-        if isinstance(key, int):
-            # Optional: Django-style would execute and return an item.
-            # For a purely-lazy QuerySet, returning a sliced QuerySet is simplest:
-            if key < 0:
-                raise IndexError(
-                    "Negative indexes are not supported for Graph querysets."
-                )
-            return self[key : key + 1]
+    # def __getitem__(self, key: slice | int) -> "QuerySet[TModel]":
+    #     if isinstance(key, int):
+    #         # Optional: Django-style would execute and return an item.
+    #         # For a purely-lazy QuerySet, returning a sliced QuerySet is simplest:
+    #         if key < 0:
+    #             raise IndexError(
+    #                 "Negative indexes are not supported for Graph querysets."
+    #             )
+    #         return self[key : key + 1]
 
-        if key.step not in (None, 1):
-            raise TypeError("Slicing with a step is not supported (use [:N] or [A:B]).")
+    #     if key.step not in (None, 1):
+    #         raise TypeError("Slicing with a step is not supported (use [:N] or [A:B]).")
 
-        start = 0 if key.start is None else key.start
-        stop = key.stop
+    #     start = 0 if key.start is None else key.start
+    #     stop = key.stop
 
-        if start < 0 or (stop is not None and stop < 0):
-            raise IndexError("Negative slicing is not supported for Graph querysets.")
+    #     if start < 0 or (stop is not None and stop < 0):
+    #         raise IndexError("Negative slicing is not supported for Graph querysets.")
 
-        p = dict(self._params or {})
+    #     p = dict(self._params or {})
 
-        # read existing paging state (if any)
-        base_skip = int(p.get("$skip", 0) or 0)
-        base_top = int(p["$top"]) if "$top" in p and p["$top"] is not None else None
+    #     # read existing paging state (if any)
+    #     base_skip = int(p.get("$skip", 0) or 0)
+    #     base_top = int(p["$top"]) if "$top" in p and p["$top"] is not None else None
 
-        # new skip is relative to existing skip
-        new_skip = base_skip + start
+    #     # new skip is relative to existing skip
+    #     new_skip = base_skip + start
 
-        # compute new top (limit)
-        if stop is None:
-            new_top = None if base_top is None else max(base_top - start, 0)
-        else:
-            length = stop - start
-            if length <= 0:
-                new_top = 0
-            else:
-                if base_top is None:
-                    new_top = length
-                else:
-                    new_top = max(min(length, max(base_top - start, 0)), 0)
+    #     # compute new top (limit)
+    #     if stop is None:
+    #         new_top = None if base_top is None else max(base_top - start, 0)
+    #     else:
+    #         length = stop - start
+    #         if length <= 0:
+    #             new_top = 0
+    #         else:
+    #             if base_top is None:
+    #                 new_top = length
+    #             else:
+    #                 new_top = max(min(length, max(base_top - start, 0)), 0)
 
-        p["$skip"] = str(new_skip)
-        if new_top is not None:
-            p["$top"] = str(new_top)
-        # else: leave $top unset (don’t force it)
+    #     p["$skip"] = str(new_skip)
+    #     if new_top is not None:
+    #         p["$top"] = str(new_top)
+    #     # else: leave $top unset (don’t force it)
 
-        return self._clone(params=p)
+    #     return self._clone(params=p)
 
     def filter(self, *q: Q, **lookups: Any) -> QuerySet[TModel]:
         self._check_capability("filter")
@@ -277,7 +283,8 @@ class QuerySet(Generic[TModel]):
         return self._clone(q=new_q)
 
     def only(self, *fields: str) -> QuerySet[TModel]:
-        graph_fields = [self.model._meta.field_to_graph(f) for f in fields]
+        self._check_capability("only")
+        graph_fields = [self._model._meta.field_to_graph(f) for f in fields]
         p = dict(self._params)
         p["$select"] = ",".join(graph_fields)
         return self._clone(params=p)
@@ -294,16 +301,16 @@ class QuerySet(Generic[TModel]):
         for item in fields:
             desc = item.startswith("-")
             py_name = item[1:] if desc else item
-            gf = self.model._meta.field_to_graph(py_name)
+            gf = self._model._meta.field_to_graph(py_name)
             parts.append(f"{gf} desc" if desc else gf)
         p = dict(self._params)
         p["$orderby"] = ",".join(parts)
         return self._clone(params=p)
 
-    # def top(self, n: int) -> QuerySet[TModel]:
-    #     p = dict(self._params)
-    #     p["$top"] = int(n)
-    #     return self._clone(params=p)
+    def top(self, n: int) -> QuerySet[TModel]:
+        p = dict(self._params)
+        p["$top"] = int(n)
+        return self._clone(params=p)
 
     def count(self) -> QuerySet[TModel]:
         # $count typically requires ConsistencyLevel: eventual
@@ -314,21 +321,19 @@ class QuerySet(Generic[TModel]):
         return self._clone(params=p, headers=h)
 
     def first(self) -> TModel | None:
-        for obj in self[:1]:
+        for obj in self.top(1):
             return obj
         return None
 
     def get(self, *, id: str | None = None, **lookups: Any) -> TModel:
         if id:
-            m = self.model
-            return m.from_graph(
-                m._get_client().get(
-                    f"{m.endpoint}/{id}",
-                    params=self._params,
-                    headers=self._headers,
-                )
+            payload = self._client.get(
+                f"{self._endpoint}/{id}", params=self._params, headers=self._headers
             )
-        objs = list(self.filter(**lookups)[:2])
+            return self._model.from_graph(
+                self._client, base_endpoint=self._endpoint, payload=payload
+            )
+        objs = list(self.filter(**lookups).top(2))
         if not objs:
             raise LookupError("DoesNotExist")
         if len(objs) > 1:
@@ -336,7 +341,7 @@ class QuerySet(Generic[TModel]):
         return objs[0]
 
     def create(self, **kwargs: Any) -> TModel:
-        obj = self.model(**kwargs)
+        obj = self._model(self._client, base_endpoint=self._endpoint, **kwargs)
         obj.save()
         return obj
 
@@ -349,11 +354,12 @@ class QuerySet(Generic[TModel]):
     ) -> QuerySet[TModel]:
 
         return self.__class__(
-            self.model,
+            self._client,
+            self._model,
+            self._endpoint,
             q=q or self._q,
             params=dict(self._params) if params is None else params,
             headers=dict(self._headers) if headers is None else headers,
-            **dict(self._kwargs),
         )
 
     def _compile_q(self, q: Q) -> str:
@@ -365,7 +371,7 @@ class QuerySet(Generic[TModel]):
                 return f"({inner})"
 
             field_name, value, lookup = node
-            gf = self.model._meta.field_to_graph(field_name)
+            gf = self._model._meta.field_to_graph(field_name)
             return compile_lookup(gf, lookup, value)
 
         return compile_node(q)
@@ -380,37 +386,37 @@ class QuerySet(Generic[TModel]):
         return p
 
     def _check_capability(self, name: str) -> None:
-        if not getattr(self.model.capabilities, name, False):
-            raise ValueError(f"{self.model.__name__} does not support {name}()")
+        if not getattr(self.capabilities, name, False):
+            raise ValueError(f"{self._model.__name__} does not support {name}()")
 
 
-class QuerySetBulkOperation:
+# class QuerySetBulkOperation:
 
-    def __init__(self, qs):
-        self.qs = qs
+#     def __init__(self, qs):
+#         self.qs = qs
 
-    def get_ids(self, attr="id") -> list[str]:
-        ids: list[str] = []
-        seen: set[str] = set()
+#     def get_ids(self, attr="id") -> list[str]:
+#         ids: list[str] = []
+#         seen: set[str] = set()
 
-        for item in self.qs.only(attr):
-            item_id = getattr(item, attr)  # Let it raise KeyError
-            if item_id not in seen:
-                seen.add(item_id)
-                ids.append(item_id)
+#         for item in self.qs.only(attr):
+#             item_id = getattr(item, attr)  # Let it raise KeyError
+#             if item_id not in seen:
+#                 seen.add(item_id)
+#                 ids.append(item_id)
 
-        return ids
+#         return ids
 
-    @classmethod
-    def as_descriptor(cls):
-        return QuerySetDescriptor(cls)
+#     @classmethod
+#     def as_descriptor(cls):
+#         return QuerySetDescriptor(cls)
 
 
-class QuerySetDescriptor:
-    def __init__(self, klass: type["QuerySetBulkOperation"]):
-        self.klass = klass
+# class QuerySetDescriptor:
+#     def __init__(self, klass: type["QuerySetBulkOperation"]):
+#         self.klass = klass
 
-    def __get__(self, obj: QuerySet, objtype=None) -> QuerySetBulkOperation:
-        if obj is None:
-            return self
-        return self.klass(obj)
+#     def __get__(self, obj: QuerySet, objtype=None) -> QuerySetBulkOperation:
+#         if obj is None:
+#             return self
+#         return self.klass(obj)

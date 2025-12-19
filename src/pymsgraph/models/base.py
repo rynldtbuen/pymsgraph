@@ -14,13 +14,6 @@ TReadOnlyModel = TypeVar("TReadOnlyModel", bound="ReadOnlyModel")
 
 
 @dataclass(frozen=True)
-class Capabilities:
-    filter: bool = True
-    search: bool = False
-    order_by: bool = True
-
-
-@dataclass(frozen=True)
 class Meta:
     fields: dict[str, Field]  # python_name -> Field
     fields_by_graph: dict[str, Field]  # graph_name -> Field
@@ -132,8 +125,14 @@ class Model(metaclass=ModelBase):
             setattr(self, k, v)
 
     @classmethod
-    def from_graph(cls: type[TModel], payload: dict[str, Any]) -> TModel:
-        obj = cls()  # type: ignore[call-arg]
+    def from_graph(
+        cls: type[TModel],
+        client: Client,
+        base_endpoint: str,
+        *,
+        payload: dict[str, Any],
+    ) -> TModel:
+        obj = cls(client=client, base_endpoint=base_endpoint)
 
         for gname, value in payload.items():
             field = cls._meta.fields_by_graph.get(gname)
@@ -169,32 +168,34 @@ class Model(metaclass=ModelBase):
 
         return out
 
-    def save(self) -> None:
+    def save(self) -> bool:
         client = self._client
-
-        if getattr(self, "id") is None:
-            self._validate_for_create()
-            payload = self.to_graph(for_update=False)
-            created = client.post(self.endpoint, json_body=payload)
-            hydrated = self.__class__.from_graph(created)
-            self._data = hydrated._data
-            self._dirty.clear()
-            return
 
         payload = self.to_graph(for_update=True)
         if not payload:
-            return
+            return False
 
-        client.patch(f"{self.endpoint}/{self.id}", json_body=payload)
+        client.patch(self.endpoint, json_body=payload)
+        self._dirty.clear()
+        return True
+
+    def delete(self, *, force: bool = False) -> None:
+        if not force:
+            raise RuntimeError(
+                "Refusing to delete User without confirmation. "
+                "Call delete(force=True) to proceed."
+            )
+
+        self._client.delete(self.endpoint)
+
+        # Local cleanup (object represents a deleted remote resource)
+        self._data.clear()
         self._dirty.clear()
 
-    def delete(self) -> None:
-        if getattr(self, "id") is None:
-            return
-        self._client.delete(f"{self.endpoint}/{self.id}")
-
     def refresh_from_graph(self, payload: dict[str, Any]) -> None:
-        hydrated = self.__class__.from_graph(payload)
+        hydrated = self.__class__.from_graph(
+            self._client, self._base_endpoint, payload=payload
+        )
         self._data = hydrated._data
         self._dirty.clear()
         self._graph_payload = payload

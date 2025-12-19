@@ -206,44 +206,44 @@ class User(Model):
     @property
     def licenses(self): ...
 
-    def save(
-        self,
-        password: str | None = None,
-        force_change_password_next_sign_in: bool = True,
-        auto_generate_password: bool = False,
-    ) -> None:
-        self._generated_password: str | None = None
+    # def save(self) -> bool:
+    # self._generated_password: str | None = None
 
-        if self.id is None:
-            if auto_generate_password and not password:
-                password = utils.generate_password(14)
-                self._generated_password = password
+    # if self.id is None:
+    #     if auto_generate_password and not password:
+    #         password = utils.generate_password(14)
+    #         self._generated_password = password
 
-            if not password:
-                raise ValueError(
-                    "'password' is required when creating a user. Set auto_generate_password=True to let the system create a random password for this user."
-                )
+    #     if not password:
+    #         raise ValueError(
+    #             "'password' is required when creating a user. Set auto_generate_password=True to let the system create a random password for this user."
+    #         )
 
-            self._validate_for_create()
-            payload = self.to_graph(for_update=False)
-            payload.update(
-                PasswordProfile(
-                    password=password,
-                    force_change_password_next_sign_in=force_change_password_next_sign_in,
-                ).to_graph()
-            )
-            created = self._client.post(self.endpoint, json_body=payload)
-            hydrated = self.__class__.from_graph(created)
-            self._data = hydrated._data
-            self._dirty.clear()
-            return
+    #     self._validate_for_create()
+    #     payload = self.to_graph(for_update=False)
+    #     payload.update(
+    #         PasswordProfile(
+    #             password=password,
+    #             force_change_password_next_sign_in=force_change_password_next_sign_in,
+    #         ).to_graph()
+    #     )
+    #     created = self._client.post(self.endpoint, json_body=payload)
+    #     hydrated = self.__class__.from_graph(created)
+    #     self._data = hydrated._data
+    #     self._dirty.clear()
+    #     return
 
-        payload = self.to_graph(for_update=True)
-        if not payload:
-            return
+    # if self.id is None:
+    #     raise ValueError(
+    #         "Cannot save User without an id. Create user via client.users.create(...)"
+    #     )
 
-        self._client.patch(f"{self.endpoint}/{self.id}", json_body=payload)
-        self._dirty.clear()
+    # payload = self.to_graph(for_update=True)
+    # if not payload:
+    #     return
+
+    # self._client.patch(self.endpoint, json_body=payload)
+    # self._dirty.clear()
 
     def reset_password(
         self,
@@ -276,24 +276,10 @@ class User(Model):
             force_change_password_next_sign_in_with_mfa=force_change_password_next_sign_in_with_mfa,
         ).to_graph()
 
-        self._client.patch(f"{self.endpoint}/{self.id}", json_body=body)
+        self._client.patch(self.endpoint, json_body=body)
 
     def revoke_sign_in_sessions(self):
         return self._client.post(f"{self.endpoint}/revokeSignInSessions")
-
-    def delete(self, *, force: bool = False) -> None:
-
-        if not force:
-            raise RuntimeError(
-                "Refusing to delete User without confirmation. "
-                "Call delete(force=True) to proceed."
-            )
-
-        self._client.delete(f"{self.endpoint}/{self.id}")
-
-        # Local cleanup (object represents a deleted remote resource)
-        self._data.clear()
-        self._dirty.clear()
 
     def get_generated_password(self) -> str | None:
         """Return the auto-generated password (if any) and clear it immediately.
@@ -306,8 +292,8 @@ class User(Model):
 
 
 class PasswordProfile(ReadOnlyModel):
-    password = CharField
-    force_change_password_next_sign_in = BooleanField()
+    password = CharField()
+    force_change_password_next_sign_in = BooleanField(default=True)
     force_change_password_next_sign_in_with_mfa = BooleanField()
 
     def to_graph(self) -> dict[str, Any]:
