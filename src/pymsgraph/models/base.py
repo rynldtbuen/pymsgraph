@@ -1,18 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar, Self, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
-from pymsgraph.fields import Field
-from pymsgraph.manager import GraphManager
+from pymsgraph.fields import CharField, Field
 
 
 if TYPE_CHECKING:
-    from pymsgraph.manager import GraphManager
-    from pymsgraph.client import GraphClient
+    from pymsgraph.client import Client
 
-TModel = TypeVar("TModel", bound="GraphModel")
-TManager = TypeVar("TManager", bound="GraphManager")
+TModel = TypeVar("TModel", bound="Model")
+TReadOnlyModel = TypeVar("TReadOnlyModel", bound="ReadOnlyModel")
 
 
 @dataclass(frozen=True)
@@ -21,14 +19,9 @@ class Capabilities:
     search: bool = False
     order_by: bool = True
 
-    # implement later
-    # select_related: bool = False
-
 
 @dataclass(frozen=True)
-class ModelOptions:
-    """Django-ish _meta container."""
-
+class Meta:
     fields: dict[str, Field]  # python_name -> Field
     fields_by_graph: dict[str, Field]  # graph_name -> Field
 
@@ -41,14 +34,14 @@ class ModelOptions:
         return f.graph_name
 
 
-class GraphModelBase(type):
-    """Collect Field descriptors and bind managers."""
+class ModelBase(type):
+    """Metaclass thats collects Field descriptors from class definitions"""
 
     def __new__(mcls, name: str, bases: tuple[type, ...], attrs: dict[str, Any]):
         # inherit fields from bases
         fields: dict[str, Field] = {}
         for b in bases:
-            meta: ModelOptions | None = getattr(b, "_meta", None)
+            meta: Meta | None = getattr(b, "_meta", None)
             if meta:
                 fields.update(meta.fields)
 
@@ -65,49 +58,70 @@ class GraphModelBase(type):
             if f.graph_name:
                 by_graph[f.graph_name] = f
 
-        setattr(cls, "_meta", ModelOptions(fields=fields, fields_by_graph=by_graph))
-
-        # Bind objects manager if present; otherwise attach a default manager.
-        if not attrs.get("endpoint"):
-            objects = attrs.get("objects")
-            if objects is None:
-                objects = GraphManager(cls)
-                setattr(cls, "objects", objects)  # type: ignore
-            objects.contribute_to_model(cls)
-
-            capabilities = attrs.get("capabilities")
-            if capabilities is None:
-                setattr(cls, "capabilities", Capabilities())
+        setattr(cls, "_meta", Meta(fields=fields, fields_by_graph=by_graph))
 
         return cls
 
 
-class GraphModel(metaclass=GraphModelBase):
-    """Base model for Graph resources.
-
-    Expected client interface:
-      client.get(path, params=None) -> dict
-      client.post(path, json_body=None) -> dict
-      client.patch(path, json_body=None) -> Any
-      client.delete(path) -> Any
+class ReadOnlyModel(metaclass=ModelBase):
+    """
+    Base model for read-only Graph resources
     """
 
-    endpoint: ClassVar[str] = ""
-    objects: ClassVar[Any]  # set by GraphModelBase (default) or overridden on model
-    capabilities: ClassVar[Capabilities]
-    _meta: ClassVar[ModelOptions]  # populated by GraphModelBase
-    # shared client (simple start)
-    _default_client: ClassVar["GraphClient | None"] = None
-    _client: ClassVar["GraphClient | None"] = None  # per-modsel override
-
-    # common id field
-    id = Field(read_only=True)
+    _meta: ClassVar[Meta]
 
     def __init__(self, **kwargs: Any) -> None:
         self._data: dict[str, Any] = {}
-        self._dirty: set[str] = set()
-        self._initializing = True
         self._graph_payload: dict[str, Any] = {}
+
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+    @classmethod
+    def from_graph(
+        cls: type[TReadOnlyModel], payload: dict[str, Any]
+    ) -> TReadOnlyModel:
+        obj = cls()
+
+        for gname, value in payload.items():
+            field = cls._meta.fields_by_graph.get(gname)
+            if not field:
+                continue
+            obj._data[field.name] = field.to_python(value)
+
+        obj._graph_payload = payload
+        return obj
+
+    def to_graph(self) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+
+        for py_name, field in self._meta.fields.items():
+            val = self._data.get(py_name, field.default)
+            if val is None:
+                continue
+
+            assert field.graph_name is not None
+            out[field.graph_name] = field.to_graph(val)
+
+        return out
+
+
+class Model(metaclass=ModelBase):
+    """
+    Base model for Graph resources
+    """
+
+    _meta: ClassVar[Meta]
+
+    # common id field
+    id = CharField(read_only=True)
+
+    def __init__(self, client: Client, *, base_endpoint: str, **kwargs: Any) -> None:
+        self._client = client
+        self._data: dict[str, Any] = {}
+        self._dirty: set[str] = set()
+        self._graph_payload: dict[str, Any] = {}
+        self._base_endpoint = base_endpoint
 
         # apply defaults
         for fname, f in self._meta.fields.items():
@@ -117,30 +131,9 @@ class GraphModel(metaclass=GraphModelBase):
         for k, v in kwargs.items():
             setattr(self, k, v)
 
-        self._initializing = False
-
-    @classmethod
-    def configure(cls, client: "GraphClient") -> None:
-        cls._client = client
-
-    @classmethod
-    def configure_default(cls, client: "GraphClient") -> None:
-        # global/default binding (call once)
-        GraphModel._default_client = client
-
-    @classmethod
-    def _get_client(cls) -> "GraphClient":
-        c = cls._client or cls._default_client
-        if not c:
-            raise RuntimeError(
-                "Graph client not configured. Call graph.configure_default() or Model.configure()."
-            )
-        return c
-
     @classmethod
     def from_graph(cls: type[TModel], payload: dict[str, Any]) -> TModel:
         obj = cls()  # type: ignore[call-arg]
-        obj._initializing = True
 
         for gname, value in payload.items():
             field = cls._meta.fields_by_graph.get(gname)
@@ -150,19 +143,13 @@ class GraphModel(metaclass=GraphModelBase):
 
         obj._dirty.clear()
         obj._graph_payload = payload
-        obj._initializing = False
         return obj
 
-    def get_endpoint(self) -> str:
-        if self.id:
-            return f"{self.endpoint}/{self.get_id()}"
-        return self.endpoint
-
-    def get_id(self):
-        val = self.id
-        if not val:
-            raise ValueError("model is not initialized or does not exist.")
-        return val
+    @property
+    def endpoint(self) -> str:
+        if self.id is None:
+            raise ValueError("Resource has not been initialized or does not exist")
+        return f"{self._base_endpoint}/{self.id}"
 
     def to_graph(self, *, for_update: bool) -> dict[str, Any]:
         out: dict[str, Any] = {}
@@ -182,20 +169,8 @@ class GraphModel(metaclass=GraphModelBase):
 
         return out
 
-    def _validate_for_create(self) -> None:
-        missing: list[str] = []
-        for py_name, field in self._meta.fields.items():
-            if field.read_only:
-                continue
-            if field.required:
-                val = getattr(self, py_name)
-                if val in (None, ""):
-                    missing.append(py_name)
-        if missing:
-            raise ValueError(f"Missing required fields: {', '.join(missing)}")
-
     def save(self) -> None:
-        client = self.__class__._get_client()
+        client = self._client
 
         if getattr(self, "id") is None:
             self._validate_for_create()
@@ -216,11 +191,22 @@ class GraphModel(metaclass=GraphModelBase):
     def delete(self) -> None:
         if getattr(self, "id") is None:
             return
-        self.__class__._get_client().delete(f"{self.endpoint}/{self.id}")
+        self._client.delete(f"{self.endpoint}/{self.id}")
 
-    def refresh_from_graph(self, payload: dict[str, Any]) -> Self:
+    def refresh_from_graph(self, payload: dict[str, Any]) -> None:
         hydrated = self.__class__.from_graph(payload)
         self._data = hydrated._data
         self._dirty.clear()
         self._graph_payload = payload
-        return self
+
+    def _validate_for_create(self) -> None:
+        missing: list[str] = []
+        for py_name, field in self._meta.fields.items():
+            if field.read_only:
+                continue
+            if field.required:
+                val = getattr(self, py_name)
+                if val in (None, ""):
+                    missing.append(py_name)
+        if missing:
+            raise ValueError(f"Missing required fields: {', '.join(missing)}")

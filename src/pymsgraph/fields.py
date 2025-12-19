@@ -5,13 +5,7 @@ from dataclasses import asdict, is_dataclass
 from typing import TYPE_CHECKING, Any, Generic, Protocol, Self, TypeVar
 
 if TYPE_CHECKING:
-    from pymsgraph.models.base import GraphModel
-
-
-class FieldSerializable(Protocol):
-    @classmethod
-    def from_graph(cls, payload: dict[str, Any]) -> Self: ...
-    def to_graph(self) -> dict[str, Any]: ...
+    from pymsgraph.models.base import Model
 
 
 def snake_to_camel(name: str) -> str:
@@ -38,7 +32,7 @@ class Field:
         self.dump = dump
         self.load = load
 
-    def __set_name__(self, owner: type[GraphModel], name: str) -> None:
+    def __set_name__(self, owner: type[Model], name: str) -> None:
         self.name = name
         if self.graph_name is None:
             self.graph_name = snake_to_camel(name)
@@ -52,10 +46,10 @@ class Field:
         """Python value -> Graph JSON."""
         return self.dump(value) if self.dump else value
 
-    def _get_raw(self, instance: GraphModel) -> Any:
+    def _get_raw(self, instance: Model) -> Any:
         return instance._data.get(self.name, self.default)
 
-    def __get__(self, instance: GraphModel | None, owner: type[GraphModel]) -> Any:
+    def __get__(self, instance: Model | None, owner: type[Model]) -> Any:
         if instance is None:
             return self
 
@@ -71,13 +65,12 @@ class Field:
 
         return py_val
 
-    def __set__(self, instance: GraphModel, value: Any) -> None:
+    def __set__(self, obj: Model, value: Any) -> None:
         # Normalize to python representation on assignment.
         py_val = self.to_python(value)
-        instance._data[self.name] = py_val
+        obj._data[self.name] = py_val
 
-        if not instance._initializing and not self.read_only:
-            instance._dirty.add(self.name)
+        obj._dirty.add(self.name)
 
 
 class CharField(Field):
@@ -91,7 +84,6 @@ class CharField(Field):
         required: bool = False,
         read_only: bool = False,
         max_length: int | None = None,
-        strip: bool = True,
         dump: Callable[[Any], Any] | None = None,
         load: Callable[[Any], Any] | None = None,
     ) -> None:
@@ -104,18 +96,15 @@ class CharField(Field):
             load=load,
         )
         self.max_length = max_length
-        self.strip = strip
 
     def to_python(self, value: Any) -> str | None:
         if value is None:
             return None
         if not isinstance(value, str):
             raise TypeError(f"{self.name} must be str (got {type(value).__name__})")
-        if self.strip:
-            value = value.strip()
         if self.max_length is not None and len(value) > self.max_length:
             raise ValueError(f"{self.name} exceeds max_length={self.max_length}")
-        return value
+        return " ".join([i.strip() for i in value.split(" ")])
 
 
 class EmailField(CharField):
@@ -138,10 +127,6 @@ class EmailField(CharField):
         required: bool = False,
         read_only: bool = False,
         max_length: int | None = None,
-        strip: bool = True,
-        allow_blank: bool = False,
-        allow_domain_without_dot: bool = False,
-        normalize_domain: bool = True,
         dump: Callable[[Any], Any] | None = None,
         load: Callable[[Any], Any] | None = None,
     ) -> None:
@@ -151,43 +136,28 @@ class EmailField(CharField):
             required=required,
             read_only=read_only,
             max_length=max_length,
-            strip=strip,
             dump=dump,
             load=load,
         )
-        self.allow_blank = allow_blank
-        self.allow_domain_without_dot = allow_domain_without_dot
-        self.normalize_domain = normalize_domain
 
     def to_python(self, value: Any) -> str | None:
         s = super().to_python(value)
         if s is None:
             return None
 
-        if s == "":
-            if self.allow_blank:
-                return s
-            raise ValueError(f"{self.name} must not be blank")
-
-        if any(ch.isspace() for ch in s):
-            raise ValueError(f"{self.name} must not contain whitespace")
-        if s.count("@") != 1:
-            raise ValueError(f"{self.name} must contain a single '@'")
-
         local, _, domain = s.rpartition("@")
         if not local or not domain:
-            raise ValueError(f"{self.name} must look like local@domain")
-
-        if not self.allow_domain_without_dot and "." not in domain:
-            raise ValueError(f"{self.name} domain must contain a '.'")
+            raise ValueError(f"Invalid email address, '{self.name}'")
 
         if domain.startswith(".") or domain.endswith(".") or ".." in domain:
-            raise ValueError(f"{self.name} domain is invalid")
+            raise ValueError(f"Invalid dommain, '{self.name}'")
 
-        if self.normalize_domain:
-            s = f"{local}@{domain.lower()}"
+        if len(local) < 4:
+            raise ValueError(
+                f"Mail nickname should be atleast three characters long, '{self.name}'"
+            )
 
-        return s
+        return f"{local}@{domain.lower()}"
 
 
 class IntegerField(Field):
@@ -306,9 +276,9 @@ class ObjectField(Field, Generic[T]):
         self.many = many
         self.factory = factory
 
-    # ---- GraphModel hooks (these names cover most Field implementations) ----
+    # ---- Model hooks (these names cover most Field implementations) ----
     # If your base Field uses different hook names, just alias these to whatever
-    # GraphModel calls (e.g. to_python / from_graph_value / clean / etc.)
+    # Model calls (e.g. to_python / from_graph_value / clean / etc.)
 
     def to_python(self, value: Any) -> Any:
         if value is None:
