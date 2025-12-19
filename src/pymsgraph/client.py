@@ -2,16 +2,34 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from typing import Any, TYPE_CHECKING
+import platform
+import sys
 
 import httpx
+
+try:
+    import importlib.metadata as importlib_metadata
+except ImportError:  # pragma: no cover
+    import importlib_metadata  # type: ignore
 
 if TYPE_CHECKING:
     from .auth import TokenProvider
 
-__all__ = ["GraphClient"]
+__all__ = ["Client"]
 
 
-class GraphClient:
+def _default_user_agent() -> str:
+    """Build a descriptive UA: pymsgraph/<version> (python X.Y; os)."""
+    py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
+    os_name = (platform.system() or "unknown").lower()
+    try:
+        version = importlib_metadata.version("pymsgraph")
+    except importlib_metadata.PackageNotFoundError:
+        version = "0.0.0"
+    return f"pymsgraph/{version} (python {py_ver}; {os_name})"
+
+
+class Client:
 
     def __init__(
         self,
@@ -22,6 +40,7 @@ class GraphClient:
         scopes: Sequence[str] | None = None,
         default_headers: Mapping[str, str] | None = None,
         timeout: float | None = 30.0,
+        user_agent: str | None = None,
     ) -> None:
         self.token_provider = token_provider
         self.base_url = base_url.rstrip("/")
@@ -30,9 +49,14 @@ class GraphClient:
         self._owns_http = http is None
         self.http = http or httpx.Client(timeout=timeout)
 
+        ua = _default_user_agent()
+        if user_agent:
+            ua = f"{user_agent} {ua}"
+
         self.default_headers: dict[str, str] = {
             "Accept": "application/json",
             "Content-Type": "application/json",
+            "User-Agent": ua,
         }
         if default_headers:
             self.default_headers.update(dict(default_headers))
@@ -140,13 +164,13 @@ class GraphClient:
         if self._owns_http:
             self.http.close()
 
-    def __enter__(self) -> "GraphClient":
+    def __enter__(self) -> "Client":
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
         self.close()
 
-    def configure_default(self) -> "GraphClient":
+    def configure_default(self) -> "Client":
         # make this client the default for all models
         from pymsgraph.models.base import GraphModel
 

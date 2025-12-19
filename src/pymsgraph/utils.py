@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import secrets
 import string
-from typing import Any, Iterable
+from collections.abc import Iterable as AbcIterable
+from typing import Any, Callable, Iterable, Iterator, TypeVar
 
 from pymsgraph.queryset import QuerySet
 
@@ -107,3 +108,80 @@ def raise_batch_errors(batch_payload: dict[str, Any], *, action: str) -> None:
         if status >= 400:
             body = r.get("body")
             raise RuntimeError(f"Batch {action} failed (status={status}): {body}")
+
+
+T = TypeVar("T")
+
+
+def coerce_values(
+    *args: Any,
+    resolver: Callable[[Any], T] | None = None,
+    attr_names: tuple[str, ...] = (),
+    allow_str: bool = True,
+) -> list[T]:
+    """
+    Generic: flatten args -> resolve each item -> dedupe_keep_order.
+
+    - resolver: custom extraction function
+    - attr_names: fallbacks for objects (e.g. ("sku_id","skuId","id"))
+    - allow_str: if True and T is str-like, pass strings through
+    """
+
+    def _dedupe_keep_order(items: AbcIterable[T]) -> list[T]:
+        seen: set[T] = set()
+        out: list[T] = []
+        for x in items:
+            if x not in seen:
+                seen.add(x)
+                out.append(x)
+        return out
+
+    def _is_iterable_but_not_str(x: Any) -> bool:
+        return isinstance(x, AbcIterable) and not isinstance(
+            x, (str, bytes, bytearray, dict)
+        )
+
+    def _flatten_args(*args: Any) -> Iterator[Any]:
+        """Flatten QuerySets and iterables (lists/tuples/sets/etc) but not strings/dicts."""
+
+        for x in args:
+            if x is None:
+                continue
+
+            if isinstance(x, QuerySet):
+                for item in x:
+                    yield item
+                continue
+
+            if _is_iterable_but_not_str(x):
+                for item in x:
+                    yield item
+                continue
+
+            yield x
+
+    out: list[T] = []
+
+    for x in _flatten_args(*args):
+        if allow_str and isinstance(x, str):
+            out.append(x)  # type: ignore[arg-type]
+            continue
+
+        if resolver is not None:
+            out.append(resolver(x))
+            continue
+
+        # attr-based extraction fallback
+        got = False
+        for name in attr_names:
+            if hasattr(x, name):
+                out.append(getattr(x, name))
+                got = True
+                break
+
+        if got:
+            continue
+
+        raise TypeError(f"Unsupported value type: {type(x)!r}")
+
+    return _dedupe_keep_order(out)

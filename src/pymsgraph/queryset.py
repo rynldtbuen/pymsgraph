@@ -89,6 +89,88 @@ type Node = Q | Lookup
 TModel = TypeVar("TModel", bound="GraphModel")
 
 
+class BaseQuerySet(Generic[TModel]):
+    def __init__(
+        self,
+        model: type[TModel],
+        *,
+        q: Q | None = None,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        self.model = model
+        self._q = q
+        self._params = params or {}
+        self._headers = headers or {}
+
+        self._kwargs: dict[str, Any] = dict(kwargs)
+        self._changed: bool = True
+        self._data: dict[str, Any] = {}
+
+    @property
+    def endpoint(self):
+        return self.model.endpoint
+
+    def __iter__(self) -> Iterator[TModel]:
+        if self._changed:
+            client = self.model._get_client()
+            data = client.get(
+                self.endpoint, params=self._build_params(), headers=self._headers
+            )
+            self._data = data
+            self._changed = False
+        else:
+            data = self._data
+        for item in data.get("value", []):
+            yield self.model.from_graph(item)
+
+    def only(self, *fields: str) -> BaseQuerySet[TModel]:
+        graph_fields = [self.model._meta.field_to_graph(f) for f in fields]
+        p = dict(self._params)
+        p["$select"] = ",".join(graph_fields)
+        return self._clone(params=p)
+
+    def _clone(
+        self,
+        *,
+        q: Q | None = None,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, Any] | None = None,
+    ) -> BaseQuerySet[TModel]:
+
+        return self.__class__(
+            self.model,
+            q=q or self._q,
+            params=dict(self._params) if params is None else params,
+            headers=dict(self._headers) if headers is None else headers,
+            **dict(self._kwargs),
+        )
+
+    def _compile_q(self, q: Q) -> str:
+        def compile_node(node: Node) -> str:
+            if isinstance(node, Q):
+                inner = f" {node.op.lower()} ".join(
+                    compile_node(c) for c in node.children
+                )
+                return f"({inner})"
+
+            field_name, value, lookup = node
+            gf = self.model._meta.field_to_graph(field_name)
+            return compile_lookup(gf, lookup, value)
+
+        return compile_node(q)
+
+    def _build_params(self) -> dict[str, Any]:
+        p = dict(self._params)
+        parts: list[str] = []
+        if self._q is not None:
+            parts.append(self._compile_q(self._q))
+        if parts:
+            p["$filter"] = " and ".join(parts)
+        return p
+
+
 class QuerySet(Generic[TModel]):
     def __init__(
         self,
@@ -300,3 +382,35 @@ class QuerySet(Generic[TModel]):
     def _check_capability(self, name: str) -> None:
         if not getattr(self.model.capabilities, name, False):
             raise ValueError(f"{self.model.__name__} does not support {name}()")
+
+
+class QuerySetBulkOperation:
+
+    def __init__(self, qs):
+        self.qs = qs
+
+    def get_ids(self, attr="id") -> list[str]:
+        ids: list[str] = []
+        seen: set[str] = set()
+
+        for item in self.qs.only(attr):
+            item_id = getattr(item, attr)  # Let it raise KeyError
+            if item_id not in seen:
+                seen.add(item_id)
+                ids.append(item_id)
+
+        return ids
+
+    @classmethod
+    def as_descriptor(cls):
+        return QuerySetDescriptor(cls)
+
+
+class QuerySetDescriptor:
+    def __init__(self, klass: type["QuerySetBulkOperation"]):
+        self.klass = klass
+
+    def __get__(self, obj: QuerySet, objtype=None) -> QuerySetBulkOperation:
+        if obj is None:
+            return self
+        return self.klass(obj)

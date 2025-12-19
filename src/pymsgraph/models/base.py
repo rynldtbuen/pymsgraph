@@ -20,6 +20,7 @@ class Capabilities:
     filter: bool = True
     search: bool = False
     order_by: bool = True
+
     # implement later
     # select_related: bool = False
 
@@ -67,15 +68,16 @@ class GraphModelBase(type):
         setattr(cls, "_meta", ModelOptions(fields=fields, fields_by_graph=by_graph))
 
         # Bind objects manager if present; otherwise attach a default manager.
-        objects = attrs.get("objects")
-        if objects is None:
-            objects = GraphManager(cls)
-            setattr(cls, "objects", objects)  # type: ignore
-        objects.contribute_to_model(cls)
+        if not attrs.get("endpoint"):
+            objects = attrs.get("objects")
+            if objects is None:
+                objects = GraphManager(cls)
+                setattr(cls, "objects", objects)  # type: ignore
+            objects.contribute_to_model(cls)
 
-        capabilities = attrs.get("capabilities")
-        if capabilities is None:
-            setattr(cls, "capabilities", Capabilities())
+            capabilities = attrs.get("capabilities")
+            if capabilities is None:
+                setattr(cls, "capabilities", Capabilities())
 
         return cls
 
@@ -94,7 +96,6 @@ class GraphModel(metaclass=GraphModelBase):
     objects: ClassVar[Any]  # set by GraphModelBase (default) or overridden on model
     capabilities: ClassVar[Capabilities]
     _meta: ClassVar[ModelOptions]  # populated by GraphModelBase
-
     # shared client (simple start)
     _default_client: ClassVar["GraphClient | None"] = None
     _client: ClassVar["GraphClient | None"] = None  # per-modsel override

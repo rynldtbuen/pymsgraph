@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, TYPE_CHECKING, Generic, Protocol, Self, TypeVar
+from dataclasses import asdict, is_dataclass
+from typing import TYPE_CHECKING, Any, Generic, Protocol, Self, TypeVar
 
 if TYPE_CHECKING:
     from pymsgraph.models.base import GraphModel
@@ -274,27 +275,99 @@ class BooleanField(Field):
         raise TypeError(f"{self.name} must be bool (got {type(value).__name__})")
 
 
-TObj = TypeVar("TObj", bound=FieldSerializable)
+T = TypeVar("T")
 
 
-class ObjectField(Field, Generic[TObj]):
+class ObjectField(Field, Generic[T]):
+    """
+    Field that auto-hydrates nested Graph objects into a Python type.
+
+    Supports:
+      - dict  -> T.from_graph(dict)  (or T(**dict) fallback)
+      - list[dict] -> list[T]   (auto-detected unless many=False)
+      - T instances pass through
+
+    Examples:
+        prepaid_units = ObjectField(LicenseUnitsDetail)
+        service_plans = ObjectField(ServicePlanInfo)  # list will auto-hydrate
+        service_plans = ObjectField(ServicePlanInfo, many=True)  # explicit
+    """
+
     def __init__(
-        self, obj_type: type[TObj], graph_name: str | None = None, **kwargs: Any
-    ) -> None:
-        super().__init__(graph_name, **kwargs)
+        self,
+        obj_type: type[T],
+        *,
+        many: bool | None = None,
+        factory: Callable[[dict[str, Any]], T] | None = None,
+        **kwargs: Any,
+    ):
+        super().__init__(**kwargs)
         self.obj_type = obj_type
+        self.many = many
+        self.factory = factory
 
-    def to_python(self, value: Any) -> TObj | None:
+    # ---- GraphModel hooks (these names cover most Field implementations) ----
+    # If your base Field uses different hook names, just alias these to whatever
+    # GraphModel calls (e.g. to_python / from_graph_value / clean / etc.)
+
+    def to_python(self, value: Any) -> Any:
         if value is None:
             return None
-        if isinstance(value, self.obj_type):
-            return value
-        if isinstance(value, dict):
-            return self.obj_type.from_graph(value)
-        raise TypeError(f"{self.name} must be {self.obj_type.__name__} or dict")
+
+        if self.many is True or (self.many is None and isinstance(value, list)):
+            return [self._one_to_python(v) for v in (value or [])]
+
+        return self._one_to_python(value)
 
     def to_graph(self, value: Any) -> Any:
         if value is None:
             return None
-        obj = self.to_python(value)
-        return obj.to_graph() if obj is not None else None
+
+        if self.many is True or (self.many is None and isinstance(value, list)):
+            return [self._one_to_graph(v) for v in (value or [])]
+
+        return self._one_to_graph(value)
+
+    # ---- internal helpers ----
+
+    def _one_to_python(self, v: Any) -> Any:
+        if v is None:
+            return None
+
+        # Already hydrated
+        if isinstance(v, self.obj_type):
+            return v
+
+        # Graph gives dicts for complex types
+        if isinstance(v, dict):
+            if self.factory is not None:
+                return self.factory(v)
+
+            from_graph = getattr(self.obj_type, "from_graph", None)
+            if callable(from_graph):
+                return from_graph(v)
+
+            # fallback: dataclass / normal ctor
+            return self.obj_type(**v)  # type: ignore[misc]
+
+        # Unknown shape: pass through
+        return v
+
+    def _one_to_graph(self, v: Any) -> Any:
+        if v is None:
+            return None
+
+        if isinstance(v, dict):
+            return v
+
+        # dataclass instance
+        if is_dataclass(v):
+            return asdict(v)  # type: ignore
+
+        # model-like / dt-like with to_graph()
+        to_graph = getattr(v, "to_graph", None)
+        if callable(to_graph):
+            return to_graph()
+
+        # last resort: pass through
+        return v

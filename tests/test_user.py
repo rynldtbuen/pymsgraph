@@ -422,3 +422,420 @@ def test_user_groups_member_of_returns_groups_only(make_graph):
     assert isinstance(groups[0], Group)
     assert groups[0].id == "g_1"
     assert groups[0].display_name == "A"
+
+
+def _make_user_with_id(uid: str = "u_1") -> User:
+    return User.from_graph(
+        {
+            "id": uid,
+            "displayName": "Test User",
+            "userPrincipalName": "test.user@example.com",
+            "accountEnabled": True,
+            "mailNickname": "testuser",
+        }
+    )
+
+
+def test_user_memberof_add_posts_batch_patch_groups_with_members_bind_and_dedupes(
+    make_graph,
+):
+    u = _make_user_with_id("u_1")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/v1.0/$batch"
+
+        expected_prefix = str(request.url.copy_with(path="/v1.0"))
+
+        body = read_json(request)
+        reqs = body["requests"]
+
+        # input includes duplicate group id -> should dedupe
+        assert len(reqs) == 2
+        assert [r["id"] for r in reqs] == ["1", "2"]
+
+        assert reqs[0]["method"] == "PATCH"
+        assert reqs[0]["url"] == "/groups/g_1"
+        assert reqs[0]["body"]["members@odata.bind"] == [
+            f"{expected_prefix}/directoryObjects/u_1"
+        ]
+
+        assert reqs[1]["method"] == "PATCH"
+        assert reqs[1]["url"] == "/groups/g_2"
+        assert reqs[1]["body"]["members@odata.bind"] == [
+            f"{expected_prefix}/directoryObjects/u_1"
+        ]
+
+        return httpx.Response(
+            200,
+            json={
+                "responses": [{"id": "1", "status": 204}, {"id": "2", "status": 204}]
+            },
+        )
+
+    make_graph(handler)
+
+    u.groups.add("g_1", "g_2", "g_1")  # type: ignore
+
+
+def test_user_memberof_add_chunks_by_20(make_graph):
+    u = _make_user_with_id("u_1")
+    group_ids = [f"g_{i:02d}" for i in range(1, 26)]  # 25 groups => 2 batch calls
+
+    seen: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/v1.0/$batch"
+
+        body = read_json(request)
+        reqs = body["requests"]
+        seen.append(len(reqs))
+
+        # respond success for each subrequest
+        return httpx.Response(
+            200,
+            json={"responses": [{"id": r["id"], "status": 204} for r in reqs]},
+        )
+
+    make_graph(handler)
+
+    u.groups.add(*group_ids)  # type: ignore
+
+    assert seen == [20, 5]
+
+
+def test_user_memberof_remove_posts_batch_delete_refs(make_graph):
+    u = _make_user_with_id("u_1")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/v1.0/$batch"
+
+        body = read_json(request)
+        reqs = body["requests"]
+
+        assert len(reqs) == 3
+        assert [r["id"] for r in reqs] == ["1", "2", "3"]
+        assert all(r["method"] == "DELETE" for r in reqs)
+
+        # batch urls must be relative; should NOT include "/v1.0"
+        assert [r["url"] for r in reqs] == [
+            "/groups/g_1/members/u_1/$ref",
+            "/groups/g_2/members/u_1/$ref",
+            "/groups/g_3/members/u_1/$ref",
+        ]
+
+        return httpx.Response(
+            200,
+            json={"responses": [{"id": r["id"], "status": 204} for r in reqs]},
+        )
+
+    make_graph(handler)
+
+    u.groups.remove("g_1", "g_2", "g_3")  # type: ignore
+
+
+def test_user_memberof_remove_chunks_by_20(make_graph):
+    u = _make_user_with_id("u_1")
+    group_ids = [f"g_{i:02d}" for i in range(1, 26)]  # 25 groups => 2 batch calls
+
+    seen: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/v1.0/$batch"
+
+        body = read_json(request)
+        reqs = body["requests"]
+        seen.append(len(reqs))
+
+        return httpx.Response(
+            200,
+            json={"responses": [{"id": r["id"], "status": 204} for r in reqs]},
+        )
+
+    make_graph(handler)
+
+    u.groups.remove(*group_ids)  # type: ignore
+
+    assert seen == [20, 5]
+
+
+def test_user_memberof_add_raises_on_batch_error(make_graph):
+    u = _make_user_with_id("u_1")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1.0/$batch"
+        return httpx.Response(
+            200,
+            json={
+                "responses": [
+                    {"id": "1", "status": 204},
+                    {
+                        "id": "2",
+                        "status": 404,
+                        "body": {"error": {"code": "Request_ResourceNotFound"}},
+                    },
+                ]
+            },
+        )
+
+    make_graph(handler)
+
+    with pytest.raises(RuntimeError, match=r"Batch add memberOf failed"):
+        u.groups.add("g_1", "g_2")  # type: ignore
+
+
+def test_user_memberof_remove_raises_on_batch_error(make_graph):
+    u = _make_user_with_id("u_1")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1.0/$batch"
+        return httpx.Response(
+            200,
+            json={
+                "responses": [
+                    {"id": "1", "status": 204},
+                    {
+                        "id": "2",
+                        "status": 403,
+                        "body": {"error": {"code": "Authorization_RequestDenied"}},
+                    },
+                ]
+            },
+        )
+
+    make_graph(handler)
+
+    with pytest.raises(RuntimeError, match=r"Batch remove memberOf failed"):
+        u.groups.remove("g_1", "g_2")  # type: ignore
+
+
+def test_user_queryset_licenses_add_posts_batch_assign_license(make_graph):
+    # Any queryset works; we just need it to resolve user ids via GET /users first.
+    qs = User.objects.filter(account_enabled=True)
+
+    sku_ids = ["SKU_1", "SKU_2", "SKU_1"]  # dup should be deduped by coerce_values()
+
+    seen_batch_bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # 1) Resolve users (QuerySetBulkOperation.get_ids() will trigger this)
+        if request.method == "GET" and request.url.path == "/v1.0/users":
+            return httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {
+                            "id": "u_1",
+                            "displayName": "U1",
+                            "userPrincipalName": "u1@example.com",
+                            "accountEnabled": True,
+                            "mailNickname": "u1",
+                        },
+                        {
+                            "id": "u_2",
+                            "displayName": "U2",
+                            "userPrincipalName": "u2@example.com",
+                            "accountEnabled": True,
+                            "mailNickname": "u2",
+                        },
+                        {
+                            "id": "u_3",
+                            "displayName": "U3",
+                            "userPrincipalName": "u3@example.com",
+                            "accountEnabled": True,
+                            "mailNickname": "u3",
+                        },
+                    ]
+                },
+            )
+
+        # 2) Batch assignLicense per user
+        if request.method == "POST" and request.url.path == "/v1.0/$batch":
+            body = read_json(request)
+            seen_batch_bodies.append(body)
+
+            reqs = body["requests"]
+            assert len(reqs) == 3
+            assert [r["id"] for r in reqs] == ["1", "2", "3"]
+            assert all(r["method"] == "POST" for r in reqs)
+            assert [r["url"] for r in reqs] == [
+                "/users/u_1/assignLicense",
+                "/users/u_2/assignLicense",
+                "/users/u_3/assignLicense",
+            ]
+
+            # dedupe SKU_1
+            expected_add = [
+                {"skuId": "SKU_1", "disabledPlans": []},
+                {"skuId": "SKU_2", "disabledPlans": []},
+            ]
+
+            for r in reqs:
+                assert r["headers"]["Content-Type"] == "application/json"
+                assert r["body"]["addLicenses"] == expected_add
+                assert r["body"]["removeLicenses"] == []
+
+            return httpx.Response(
+                200,
+                json={"responses": [{"id": r["id"], "status": 200} for r in reqs]},
+            )
+
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    make_graph(handler)
+
+    qs.licenses.add(*sku_ids)
+    assert len(seen_batch_bodies) == 1
+
+
+def test_user_queryset_licenses_remove_posts_batch_assign_license(make_graph):
+    qs = User.objects.filter(account_enabled=True)
+
+    seen_batch_bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1.0/users":
+            return httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {
+                            "id": "u_1",
+                            "displayName": "U1",
+                            "userPrincipalName": "u1@example.com",
+                            "accountEnabled": True,
+                            "mailNickname": "u1",
+                        },
+                        {
+                            "id": "u_2",
+                            "displayName": "U2",
+                            "userPrincipalName": "u2@example.com",
+                            "accountEnabled": True,
+                            "mailNickname": "u2",
+                        },
+                    ]
+                },
+            )
+
+        if request.method == "POST" and request.url.path == "/v1.0/$batch":
+            body = read_json(request)
+            seen_batch_bodies.append(body)
+
+            reqs = body["requests"]
+            assert len(reqs) == 2
+            assert [r["id"] for r in reqs] == ["1", "2"]
+            assert [r["url"] for r in reqs] == [
+                "/users/u_1/assignLicense",
+                "/users/u_2/assignLicense",
+            ]
+
+            # remove dedupes too
+            assert reqs[0]["body"]["addLicenses"] == []
+            assert reqs[0]["body"]["removeLicenses"] == ["SKU_1", "SKU_2"]
+            assert reqs[1]["body"]["addLicenses"] == []
+            assert reqs[1]["body"]["removeLicenses"] == ["SKU_1", "SKU_2"]
+
+            return httpx.Response(
+                200,
+                json={"responses": [{"id": r["id"], "status": 200} for r in reqs]},
+            )
+
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    make_graph(handler)
+
+    qs.licenses.remove("SKU_1", "SKU_2", "SKU_1")
+    assert len(seen_batch_bodies) == 1
+
+
+def test_user_queryset_licenses_add_chunks_by_20(make_graph):
+    qs = User.objects.filter(account_enabled=True)
+
+    users = []
+    for i in range(1, 26):
+        users.append(
+            {
+                "id": f"u_{i:02d}",
+                "displayName": f"U{i}",
+                "userPrincipalName": f"u{i}@example.com",
+                "accountEnabled": True,
+                "mailNickname": f"u{i}",
+            }
+        )
+
+    batch_sizes: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1.0/users":
+            return httpx.Response(200, json={"value": users})
+
+        if request.method == "POST" and request.url.path == "/v1.0/$batch":
+            body = read_json(request)
+            reqs = body["requests"]
+            batch_sizes.append(len(reqs))
+            return httpx.Response(
+                200,
+                json={"responses": [{"id": r["id"], "status": 200} for r in reqs]},
+            )
+
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    make_graph(handler)
+
+    qs.licenses.add("SKU_1")
+    assert batch_sizes == [20, 5]
+
+
+def test_user_queryset_licenses_remove_raises_on_batch_error(make_graph):
+    qs = User.objects.filter(account_enabled=True)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1.0/users":
+            return httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {
+                            "id": "u_1",
+                            "displayName": "U1",
+                            "userPrincipalName": "u1@example.com",
+                            "accountEnabled": True,
+                            "mailNickname": "u1",
+                        },
+                        {
+                            "id": "u_2",
+                            "displayName": "U2",
+                            "userPrincipalName": "u2@example.com",
+                            "accountEnabled": True,
+                            "mailNickname": "u2",
+                        },
+                    ]
+                },
+            )
+
+        if request.method == "POST" and request.url.path == "/v1.0/$batch":
+            body = read_json(request)
+            reqs = body["requests"]
+            return httpx.Response(
+                200,
+                json={
+                    "responses": [
+                        {"id": reqs[0]["id"], "status": 200},
+                        {
+                            "id": reqs[1]["id"],
+                            "status": 403,
+                            "body": {"error": {"code": "Authorization_RequestDenied"}},
+                        },
+                    ]
+                },
+            )
+
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    make_graph(handler)
+
+    with pytest.raises(RuntimeError, match=r"Batch remove licenses failed"):
+        qs.licenses.remove("SKU_1")
