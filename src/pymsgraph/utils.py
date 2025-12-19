@@ -5,7 +5,7 @@ import string
 from collections.abc import Iterable as AbcIterable
 from typing import Any, Callable, Iterable, Iterator, TypeVar
 
-from pymsgraph.queryset import QuerySet
+from pymsgraph.query import QuerySet
 
 
 def generate_password(length: int = 12) -> str:

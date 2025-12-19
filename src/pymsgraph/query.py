@@ -4,6 +4,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
+
 if TYPE_CHECKING:
     from pymsgraph.client import Client
     from pymsgraph.models.base import Model
@@ -174,15 +175,56 @@ TModel = TypeVar("TModel", bound="Model")
 
 @dataclass(frozen=True)
 class Capabilities:
-    filter: bool = True
-    search: bool = False
-    order_by: bool = True
-    expand: bool = False
-    only: bool = True
+    filter: bool
+    search: bool
+    order_by: bool
+    count: bool
+    top: bool
+    first: bool
+    expand: bool
+    select: bool
+    create: bool
+    get: bool
+
+    @classmethod
+    def read_write(
+        cls,
+        filter: bool = True,
+        search: bool = False,
+        order_by: bool = True,
+        count: bool = True,
+        top: bool = True,
+        first: bool = True,
+        expand: bool = False,
+        select: bool = True,
+        create: bool = True,
+        get: bool = True,
+    ) -> Capabilities:
+        return cls(
+            filter, search, order_by, count, top, first, expand, select, create, get
+        )
+
+    @classmethod
+    def read_only(
+        cls,
+        filter: bool = False,
+        search: bool = False,
+        order_by: bool = False,
+        count: bool = False,
+        top: bool = False,
+        first: bool = False,
+        expand: bool = False,
+        select: bool = True,
+        create: bool = False,
+        get: bool = False,
+    ) -> Capabilities:
+        return cls(
+            filter, search, order_by, count, top, first, expand, select, create, get
+        )
 
 
 class QuerySet(Generic[TModel]):
-    capabilities: Capabilities = Capabilities()
+    capabilities: Capabilities = Capabilities.read_only()
 
     def __init__(
         self,
@@ -203,6 +245,10 @@ class QuerySet(Generic[TModel]):
 
         self._changed: bool = True
         self._data: dict[str, Any] = {}
+        self._next_link: str | None = None
+        self._fetched: list[dict[str, Any]] = []
+        self._objects: list[TModel] = []
+        self._count: int | None = None
 
     def __iter__(self) -> Iterator[TModel]:
         client = self._client
@@ -210,14 +256,61 @@ class QuerySet(Generic[TModel]):
             data = client.get(
                 self._endpoint, params=self._build_params(), headers=self._headers
             )
-            self._data = data
+            self._next_link = data.get("@odata.nextLink")
+            self._count = data.get("@odata.count")
             self._changed = False
+            for item in data.get("value", []):
+                obj = self._model.from_graph(
+                    client, base_endpoint=self._endpoint, payload=item
+                )
+                self._objects.append(obj)
+                yield obj
         else:
-            data = self._data
+            for obj in self._objects:
+                yield obj
+
+    def all(self) -> Iterator[TModel]:
+        """
+        Iterate over all items, fetching nextLink, if any.
+        """
+        yield from self.__iter__()
+        while self._next_link:
+            iter_next_objects = self.iter_next_objects()
+            if iter_next_objects is None:
+                break
+            yield from iter_next_objects
+
+    def iter_next_objects(self) -> Iterator[TModel] | None:
+        """
+        Fetch the nextLink if available and return its items as models.
+        """
+        if not self._next_link:
+            return
+
+        path = self._next_link
+        base = getattr(self._client, "base_url", "")
+        if base and path.startswith(base):
+            path = path[len(base) :]
+        path = path.lstrip("/")
+
+        c = self._client
+        e = self._endpoint
+
+        data = c.get(path, headers=self._headers)
+        self._data = data
+        self._next_link = data.get("@odata.nextLink")
+        self._count = data.get("@odata.count")
+
         for item in data.get("value", []):
-            yield self._model.from_graph(
-                client, base_endpoint=self._endpoint, payload=item
-            )
+            obj = self._model.from_graph(c, base_endpoint=e, payload=item)
+            self._objects.append(obj)
+            yield obj
+
+    def has_next_objects(self) -> bool:
+        """
+        Return True if there is a nextLink available to fetch more items.
+        """
+        return self._next_link is not None
 
     # def __getitem__(self, key: slice | int) -> "QuerySet[TModel]":
     #     if isinstance(key, int):
@@ -282,8 +375,8 @@ class QuerySet(Generic[TModel]):
 
         return self._clone(q=new_q)
 
-    def only(self, *fields: str) -> QuerySet[TModel]:
-        self._check_capability("only")
+    def select(self, *fields: str) -> QuerySet[TModel]:
+        self._check_capability("select")
         graph_fields = [self._model._meta.field_to_graph(f) for f in fields]
         p = dict(self._params)
         p["$select"] = ",".join(graph_fields)
@@ -308,24 +401,29 @@ class QuerySet(Generic[TModel]):
         return self._clone(params=p)
 
     def top(self, n: int) -> QuerySet[TModel]:
+        self._check_capability("top")
         p = dict(self._params)
         p["$top"] = int(n)
         return self._clone(params=p)
 
-    def count(self) -> QuerySet[TModel]:
-        # $count typically requires ConsistencyLevel: eventual
+    def count(self) -> int:
+        self._check_capability("count")
         p = dict(self._params)
         p["$count"] = "true"
         h = dict(self._headers)
         h["ConsistencyLevel"] = "eventual"
-        return self._clone(params=p, headers=h)
+        qs = self._clone(params=p, headers=h)
+        list(qs)
+        return qs._count if qs._count is not None else len(qs._objects)
 
     def first(self) -> TModel | None:
+        self._check_capability("first")
         for obj in self.top(1):
             return obj
         return None
 
     def get(self, *, id: str | None = None, **lookups: Any) -> TModel:
+        self._check_capability("get")
         if id:
             payload = self._client.get(
                 f"{self._endpoint}/{id}", params=self._params, headers=self._headers
@@ -341,6 +439,7 @@ class QuerySet(Generic[TModel]):
         return objs[0]
 
     def create(self, **kwargs: Any) -> TModel:
+        self._check_capability("create")
         obj = self._model(self._client, base_endpoint=self._endpoint, **kwargs)
         obj.save()
         return obj
@@ -387,7 +486,7 @@ class QuerySet(Generic[TModel]):
 
     def _check_capability(self, name: str) -> None:
         if not getattr(self.capabilities, name, False):
-            raise ValueError(f"{self._model.__name__} does not support {name}()")
+            raise ValueError(f"{self.__class__.__name__} does not support {name}()")
 
 
 # class QuerySetBulkOperation:

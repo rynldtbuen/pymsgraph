@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from pymsgraph.models.user import User
-from pymsgraph.queryset import Q
+from pymsgraph.query import Q
 
 from .utils import read_json
 

@@ -5,7 +5,7 @@ from collections.abc import Callable
 from functools import wraps
 from typing import Any, Generic, TYPE_CHECKING, TypeVar
 
-from pymsgraph.queryset import QuerySet
+from pymsgraph.query import QuerySet
 
 if TYPE_CHECKING:
     from pymsgraph.models.base import GraphModel

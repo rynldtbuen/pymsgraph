@@ -4,7 +4,7 @@ from typing import Any
 from pymsgraph.fields import CharField, Field
 from pymsgraph.manager import BaseManager
 from pymsgraph.models.base import GraphModel, Capabilities
-from pymsgraph.queryset import QuerySet
+from pymsgraph.query import QuerySet
 from urllib.parse import quote
 
 

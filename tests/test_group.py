@@ -6,7 +6,7 @@ import pytest
 from pymsgraph.models.group import Group
 from pymsgraph.models.user import User
 
-from pymsgraph.queryset import Q
+from pymsgraph.query import Q
 from tests.utils import read_json
 
 

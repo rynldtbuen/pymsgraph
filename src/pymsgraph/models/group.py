@@ -6,7 +6,7 @@ from pymsgraph import utils
 from pymsgraph.fields import BooleanField, CharField, Field
 from pymsgraph.manager import BaseManager
 from pymsgraph.models.base import GraphModel
-from pymsgraph.queryset import QuerySet
+from pymsgraph.query import QuerySet
 
 if TYPE_CHECKING:
     from .user import User
