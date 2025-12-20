@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from http import client
+from pyexpat import model
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
 
 
 if TYPE_CHECKING:
@@ -224,7 +226,7 @@ class Capabilities:
 
 
 class QuerySet(Generic[TModel]):
-    capabilities: Capabilities = Capabilities.read_only()
+    capabilities: ClassVar[Capabilities] = Capabilities.read_only()
 
     def __init__(
         self,
@@ -260,9 +262,7 @@ class QuerySet(Generic[TModel]):
             self._count = data.get("@odata.count")
             self._changed = False
             for item in data.get("value", []):
-                obj = self._model.from_graph(
-                    client, base_endpoint=self._endpoint, payload=item
-                )
+                obj = self._model(graph_data=item, qs=self)
                 self._objects.append(obj)
                 yield obj
         else:
@@ -293,16 +293,13 @@ class QuerySet(Generic[TModel]):
             path = path[len(base) :]
         path = path.lstrip("/")
 
-        c = self._client
-        e = self._endpoint
-
-        data = c.get(path, headers=self._headers)
+        data = self._client.get(path, headers=self._headers)
         self._data = data
         self._next_link = data.get("@odata.nextLink")
         self._count = data.get("@odata.count")
 
         for item in data.get("value", []):
-            obj = self._model.from_graph(c, base_endpoint=e, payload=item)
+            obj = self._model(graph_data=item, qs=self)
             self._objects.append(obj)
             yield obj
 
@@ -407,14 +404,19 @@ class QuerySet(Generic[TModel]):
         return self._clone(params=p)
 
     def count(self) -> int:
-        self._check_capability("count")
-        p = dict(self._params)
-        p["$count"] = "true"
-        h = dict(self._headers)
-        h["ConsistencyLevel"] = "eventual"
-        qs = self._clone(params=p, headers=h)
-        list(qs)
-        return qs._count if qs._count is not None else len(qs._objects)
+        # Always ensure the first page is fetched so _objects is populated.
+        if self._changed:
+            list(self)
+
+        # If Graph returned @odata.count on the initial page, use it.
+        if self._count is not None:
+            return self._count
+
+        if not getattr(self.capabilities, "count", False):
+            return len(self._objects)
+
+        # Fallback to the number of fetched objects (may be partial if paging not consumed).
+        return len(self._objects)
 
     def first(self) -> TModel | None:
         self._check_capability("first")
@@ -422,15 +424,15 @@ class QuerySet(Generic[TModel]):
             return obj
         return None
 
-    def get(self, *, id: str | None = None, **lookups: Any) -> TModel:
+    def get(self, *, id: str | None = None, **lookups: Any) -> TModel | None:
         self._check_capability("get")
         if id:
-            payload = self._client.get(
+            data = self._client.get(
                 f"{self._endpoint}/{id}", params=self._params, headers=self._headers
             )
-            return self._model.from_graph(
-                self._client, base_endpoint=self._endpoint, payload=payload
-            )
+            if data:
+                return self._model(graph_data=data, qs=self)
+            return None
         objs = list(self.filter(**lookups).top(2))
         if not objs:
             raise LookupError("DoesNotExist")
@@ -440,8 +442,10 @@ class QuerySet(Generic[TModel]):
 
     def create(self, **kwargs: Any) -> TModel:
         self._check_capability("create")
-        obj = self._model(self._client, base_endpoint=self._endpoint, **kwargs)
-        obj.save()
+        obj = self._model(qs=self, **kwargs)
+        payload = obj.to_graph(for_update=False)
+        graph_data = self._client.post(self._endpoint, json_body=payload)
+        obj.refresh_from_graph(graph_data)
         return obj
 
     def _clone(

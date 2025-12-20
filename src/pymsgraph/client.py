@@ -14,6 +14,7 @@ except ImportError:  # pragma: no cover
 
 if TYPE_CHECKING:
     from .auth import TokenProvider
+    from pymsgraph.query import TModel
 
 __all__ = ["Client"]
 
@@ -29,7 +30,65 @@ def _default_user_agent() -> str:
     return f"pymsgraph/{version} (python {py_ver}; {os_name})"
 
 
+class ResourceDescriptor:
+    """
+    Simple descriptor that binds a QuerySet to a Client instance.
+    """
+
+    def __init__(
+        self,
+        qs_path: str | None = None,
+        *,
+        endpoint: str | None = None,
+        model: type[TModel] | None = None,
+    ):
+        self.qs_path = qs_path
+        self.endpoint = endpoint
+        self.model = model
+        self._cache: dict[int, Any] = {}
+
+    def __get__(self, obj: "Client", objtype=None):
+        if obj is None:
+            return self
+
+        cache = getattr(obj, "_qs_cache", None)
+        if cache is None:
+            cache = obj._qs_cache = {}  # type: ignore
+        key = (self.qs_path, self.endpoint, self.model)
+        if key in cache:
+            return cache[key]
+
+        if self.qs_path is not None:
+            import importlib
+
+            module_name, _, cls_name = self.qs_path.rpartition(".")
+            if not module_name or not cls_name:
+                raise ImportError(f"Invalid qs_path, '{self.qs_path}'")
+
+            mod = importlib.import_module(f"pymsgraph.models.{module_name}")
+            qs_cls = getattr(mod, cls_name)
+        else:
+            from pymsgraph.query import QuerySet
+
+            qs_cls = QuerySet
+
+        e = self.endpoint or getattr(qs_cls, "endpoint", None)
+        if e is None:
+            raise ValueError(
+                "Endpoint must be specified in descriptor or QuerySet class"
+            )
+        m = self.model or getattr(qs_cls, "model", None)
+        if m is None:
+            raise ValueError("Model must be specified in descriptor or QuerySet class")
+
+        qs = qs_cls(client=obj, model=m, endpoint=e)
+        cache[key] = qs
+        return qs
+
+
 class Client:
+
+    users = ResourceDescriptor("user.UserQuerySet")
 
     def __init__(
         self,
@@ -169,10 +228,3 @@ class Client:
 
     def __exit__(self, exc_type, exc, tb) -> None:
         self.close()
-
-    def configure_default(self) -> "Client":
-        # make this client the default for all models
-        from pymsgraph.models.base import GraphModel
-
-        GraphModel.configure_default(self)
-        return self

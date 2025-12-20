@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from pyexpat import model
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from pymsgraph import utils
+from pymsgraph.client import Client
 from pymsgraph.fields import BooleanField, CharField, EmailField
-from pymsgraph.models.subscribed_sku import ServicePlanInfo
+from pymsgraph.query import Q, Capabilities, QuerySet
 
-from .base import Model, ReadOnlyModel
+from .base import Model, ReadOnlyModel, TModel
 
 if TYPE_CHECKING:
     from pymsgraph.models.group import Group
@@ -206,44 +208,43 @@ class User(Model):
     @property
     def licenses(self): ...
 
-    # def save(self) -> bool:
-    # self._generated_password: str | None = None
+    def save(self) -> bool:
+        # self._generated_password: str | None = None
 
-    # if self.id is None:
-    #     if auto_generate_password and not password:
-    #         password = utils.generate_password(14)
-    #         self._generated_password = password
+        # if self.id is None:
+        #     if auto_generate_password and not password:
+        #         password = utils.generate_password(14)
+        #         self._generated_password = password
 
-    #     if not password:
-    #         raise ValueError(
-    #             "'password' is required when creating a user. Set auto_generate_password=True to let the system create a random password for this user."
-    #         )
+        #     if not password:
+        #         raise ValueError(
+        #             "'password' is required when creating a user. Set auto_generate_password=True to let the system create a random password for this user."
+        #         )
 
-    #     self._validate_for_create()
-    #     payload = self.to_graph(for_update=False)
-    #     payload.update(
-    #         PasswordProfile(
-    #             password=password,
-    #             force_change_password_next_sign_in=force_change_password_next_sign_in,
-    #         ).to_graph()
-    #     )
-    #     created = self._client.post(self.endpoint, json_body=payload)
-    #     hydrated = self.__class__.from_graph(created)
-    #     self._data = hydrated._data
-    #     self._dirty.clear()
-    #     return
+        #     self._validate_for_create()
+        #     payload = self.to_graph(for_update=False)
+        #     payload.update(
+        #         PasswordProfile(
+        #             password=password,
+        #             force_change_password_next_sign_in=force_change_password_next_sign_in,
+        #         ).to_graph()
+        #     )
+        #     created = self._client.post(self.endpoint, json_body=payload)
+        #     hydrated = self.__class__.from_graph(created)
+        #     self._data = hydrated._data
+        #     self._dirty.clear()
+        #     return
 
-    # if self.id is None:
-    #     raise ValueError(
-    #         "Cannot save User without an id. Create user via client.users.create(...)"
-    #     )
+        if self.id is None:
+            raise ValueError("User is not initialized or does not exist")
 
-    # payload = self.to_graph(for_update=True)
-    # if not payload:
-    #     return
+        payload = self.to_graph(for_update=True)
+        if not payload:
+            return False
 
-    # self._client.patch(self.endpoint, json_body=payload)
-    # self._dirty.clear()
+        self.client.patch(self.endpoint, json_body=payload)
+        self._dirty.clear()
+        return True
 
     def reset_password(
         self,
@@ -276,10 +277,10 @@ class User(Model):
             force_change_password_next_sign_in_with_mfa=force_change_password_next_sign_in_with_mfa,
         ).to_graph()
 
-        self._client.patch(self.endpoint, json_body=body)
+        self.client.patch(self.endpoint, json_body=body)
 
     def revoke_sign_in_sessions(self):
-        return self._client.post(f"{self.endpoint}/revokeSignInSessions")
+        return self.client.post(f"{self.endpoint}/revokeSignInSessions")
 
     def get_generated_password(self) -> str | None:
         """Return the auto-generated password (if any) and clear it immediately.
@@ -289,6 +290,19 @@ class User(Model):
         pwd = getattr(self, "_generated_password", None)
         self._generated_password = None
         return pwd
+
+    def delete(self, *, force: bool = False) -> None:
+        if not force:
+            raise RuntimeError(
+                "Refusing to delete User without confirmation. "
+                "Call delete(force=True) to proceed."
+            )
+
+        self.client.delete(self.endpoint)
+
+        # Local cleanup (object represents a deleted remote resource)
+        self._data.clear()
+        self._dirty.clear()
 
 
 class PasswordProfile(ReadOnlyModel):
@@ -396,3 +410,50 @@ class PasswordProfile(ReadOnlyModel):
 #     @property
 #     def endpoint(self) -> str:
 #         return f"{self._kwargs['user'].get_endpoint()}/assignLicense"
+
+
+class UserQuerySet(QuerySet[User]):
+    model: type[User] = User
+    endpoint: str = "/users"
+    capabilities: ClassVar[Capabilities] = Capabilities.read_write()
+
+    def create(
+        self,
+        *,
+        display_name: str,
+        user_principal_name: str,
+        mail_nickname: str,
+        account_enabled: bool = True,
+        password: str | None = None,
+        force_change_password_next_sign_in: bool = True,
+        auto_generate_password: bool = False,
+        **kwargs: Any,
+    ) -> "User":
+        if password is None:
+            if not auto_generate_password:
+                raise ValueError(
+                    "'password' is required when creasting a user. Set auto_generate_password=True to let the system create a random password for this user."
+                )
+            password = utils.generate_password(14)
+
+        obj = self._model(
+            display_name=display_name,
+            user_principal_name=user_principal_name,
+            mail_nickname=mail_nickname,
+            account_enabled=account_enabled,
+            qs=self,
+            **kwargs,
+        )
+        obj._validate_for_create()
+        payload = obj.to_graph(for_update=False)
+        payload.update(
+            PasswordProfile(
+                password=password,
+                force_change_password_next_sign_in=force_change_password_next_sign_in,
+            ).to_graph()
+        )
+        c = self._client
+        e = self._endpoint
+        obj.refresh_from_graph(c.post(e, json_body=payload))
+        # obj._configure(client=c, base_endpoint=e)
+        return obj

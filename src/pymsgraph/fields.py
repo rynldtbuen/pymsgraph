@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import asdict, is_dataclass
-from typing import TYPE_CHECKING, Any, Generic, Protocol, Self, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 if TYPE_CHECKING:
     from pymsgraph.models.base import Model
@@ -66,11 +66,16 @@ class Field:
         return py_val
 
     def __set__(self, obj: Model, value: Any) -> None:
-        # Normalize to python representation on assignment.
         py_val = self.to_python(value)
+        prev = obj._data.get(self.name, self.default)
         obj._data[self.name] = py_val
 
-        obj._dirty.add(self.name)
+        if getattr(obj, "_initializing", False):
+            return
+        if self.read_only:
+            raise AttributeError(f"{self.name} is read-only")
+        if prev != py_val:
+            obj._dirty.add(self.name)
 
 
 class CharField(Field):
@@ -116,7 +121,7 @@ class EmailField(CharField):
     - Useful validation (catch obvious mistakes)
     - Not RFC-perfect (Graph/Entra remains source-of-truth)
 
-    By default requires a single '@' and a '.' in the domain.
+    By default, requires a single '@' and a '.' in the domain.
     """
 
     def __init__(
@@ -150,11 +155,11 @@ class EmailField(CharField):
             raise ValueError(f"Invalid email address, '{self.name}'")
 
         if domain.startswith(".") or domain.endswith(".") or ".." in domain:
-            raise ValueError(f"Invalid dommain, '{self.name}'")
+            raise ValueError(f"Invalid domain, '{self.name}'")
 
         if len(local) < 4:
             raise ValueError(
-                f"Mail nickname should be atleast three characters long, '{self.name}'"
+                f"Mail nickname should be least three characters long, '{self.name}'"
             )
 
         return f"{local}@{domain.lower()}"

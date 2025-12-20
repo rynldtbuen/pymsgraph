@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 from pymsgraph.fields import CharField, Field
+from pymsgraph.query import QuerySet
 
 
 if TYPE_CHECKING:
@@ -65,7 +66,7 @@ class ReadOnlyModel(metaclass=ModelBase):
 
     def __init__(self, **kwargs: Any) -> None:
         self._data: dict[str, Any] = {}
-        self._graph_payload: dict[str, Any] = {}
+        self._graph_data: dict[str, Any] = {}
 
         for k, v in kwargs.items():
             setattr(self, k, v)
@@ -82,7 +83,7 @@ class ReadOnlyModel(metaclass=ModelBase):
                 continue
             obj._data[field.name] = field.to_python(value)
 
-        obj._graph_payload = payload
+        obj._graph_data = payload
         return obj
 
     def to_graph(self) -> dict[str, Any]:
@@ -109,46 +110,70 @@ class Model(metaclass=ModelBase):
     # common id field
     id = CharField(read_only=True)
 
-    def __init__(self, client: Client, *, base_endpoint: str, **kwargs: Any) -> None:
-        self._client = client
+    def __init__(
+        self,
+        *,
+        qs: QuerySet | None = None,
+        graph_data: dict[str, Any] | None = None,
+        **kwargs,
+    ):
+        self._initializing = True
+        self._qs = qs
         self._data: dict[str, Any] = {}
+        self._graph_data = graph_data or {}
         self._dirty: set[str] = set()
-        self._graph_payload: dict[str, Any] = {}
-        self._base_endpoint = base_endpoint
 
         # apply defaults
-        for fname, f in self._meta.fields.items():
-            if f.default is not None and fname not in kwargs:
-                self._data[fname] = f.default
+        for name, f in self._meta.fields.items():
+            if f.default is not None and name not in kwargs:
+                self._data[name] = f.default
 
-        for k, v in kwargs.items():
-            setattr(self, k, v)
+        # graph_data wins over kwargs
+        # hydrate from graph data via descriptors (still _initializing)
+        if graph_data:
+            for gname, value in graph_data.items():
+                field = self._meta.fields_by_graph.get(gname)
+                if field:
+                    setattr(self, field.name, value)
+        else:
+            # apply kwargs via descriptors (dirty suppressed because _initializing)
+            for k, v in kwargs.items():
+                setattr(self, k, v)
 
-    @classmethod
-    def from_graph(
-        cls: type[TModel],
-        client: Client,
-        base_endpoint: str,
-        *,
-        payload: dict[str, Any],
-    ) -> TModel:
-        obj = cls(client=client, base_endpoint=base_endpoint)
+        self._dirty.clear()
+        self._initializing = False
 
-        for gname, value in payload.items():
-            field = cls._meta.fields_by_graph.get(gname)
-            if not field:
-                continue
-            obj._data[field.name] = field.to_python(value)
+    # @classmethod
+    # def from_graph(
+    #     cls: type[TModel], data: dict[str, Any], qs: QuerySet | None = None
+    # ) -> TModel:
+    #     obj = cls(qs=qs)
+    #     obj._initializing = True  # avoid dirty tracking during hydration
+    #     for gname, value in data.items():
+    #         field = cls._meta.fields_by_graph.get(gname)
+    #         if not field:
+    #             continue
+    #         obj._data[field.name] = field.to_python(value)
 
-        obj._dirty.clear()
-        obj._graph_payload = payload
-        return obj
+    #     obj._dirty.clear()
+    #     obj._graph_data = data
+    #     obj._initializing = False
+    #     return obj
 
     @property
     def endpoint(self) -> str:
         if self.id is None:
             raise ValueError("Resource has not been initialized or does not exist")
-        return f"{self._base_endpoint}/{self.id}"
+        qs_endpoint = self._qs._endpoint if self._qs else None
+        if qs_endpoint:
+            return f"{qs_endpoint}/{self.id}"
+        raise ValueError("QuerySet endpoint is not configured for this model instance")
+
+    @property
+    def client(self) -> Client:
+        if self._qs is None:
+            raise ValueError("QuerySet is not configured for this model instance")
+        return self._qs._client
 
     def to_graph(self, *, for_update: bool) -> dict[str, Any]:
         out: dict[str, Any] = {}
@@ -169,13 +194,16 @@ class Model(metaclass=ModelBase):
         return out
 
     def save(self) -> bool:
-        client = self._client
+        if self.id is None:
+            raise RuntimeError(
+                "Cannot save a model that has not been initialized or created yet."
+            )
 
         payload = self.to_graph(for_update=True)
         if not payload:
             return False
 
-        client.patch(self.endpoint, json_body=payload)
+        self.client.patch(self.endpoint, json_body=payload)
         self._dirty.clear()
         return True
 
@@ -186,19 +214,16 @@ class Model(metaclass=ModelBase):
                 "Call delete(force=True) to proceed."
             )
 
-        self._client.delete(self.endpoint)
+        self.client.delete(self.endpoint)
 
         # Local cleanup (object represents a deleted remote resource)
         self._data.clear()
         self._dirty.clear()
 
-    def refresh_from_graph(self, payload: dict[str, Any]) -> None:
-        hydrated = self.__class__.from_graph(
-            self._client, self._base_endpoint, payload=payload
-        )
-        self._data = hydrated._data
+    def refresh_from_graph(self, data: dict[str, Any]) -> None:
+        self._data = self.__class__(data=data, qs=self._qs)._data
         self._dirty.clear()
-        self._graph_payload = payload
+        self._graph_data = data
 
     def _validate_for_create(self) -> None:
         missing: list[str] = []
