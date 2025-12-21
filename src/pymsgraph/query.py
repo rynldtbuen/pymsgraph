@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from http import client
-from pyexpat import model
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
 
 
@@ -227,6 +225,7 @@ class Capabilities:
 
 class QuerySet(Generic[TModel]):
     capabilities: ClassVar[Capabilities] = Capabilities.read_only()
+    search_field: ClassVar[str]
 
     def __init__(
         self,
@@ -250,7 +249,11 @@ class QuerySet(Generic[TModel]):
         self._next_link: str | None = None
         self._fetched: list[dict[str, Any]] = []
         self._objects: list[TModel] = []
-        self._count: int | None = None
+        self._count: int = 0
+
+    def _iter_objects(self, data: dict[str, Any]) -> Iterator[TModel]:
+        for item in data.get("value", []):
+            yield self._model(graph_data=item, qs=self)
 
     def __iter__(self) -> Iterator[TModel]:
         client = self._client
@@ -259,10 +262,9 @@ class QuerySet(Generic[TModel]):
                 self._endpoint, params=self._build_params(), headers=self._headers
             )
             self._next_link = data.get("@odata.nextLink")
-            self._count = data.get("@odata.count")
+            self._count = data.get("@odata.count", 0)
             self._changed = False
-            for item in data.get("value", []):
-                obj = self._model(graph_data=item, qs=self)
+            for obj in self._iter_objects(data):
                 self._objects.append(obj)
                 yield obj
         else:
@@ -296,7 +298,7 @@ class QuerySet(Generic[TModel]):
         data = self._client.get(path, headers=self._headers)
         self._data = data
         self._next_link = data.get("@odata.nextLink")
-        self._count = data.get("@odata.count")
+        # self._count = data.get("@odata.count", 0)
 
         for item in data.get("value", []):
             obj = self._model(graph_data=item, qs=self)
@@ -372,6 +374,20 @@ class QuerySet(Generic[TModel]):
 
         return self._clone(q=new_q)
 
+    def search(self, keyword: str) -> QuerySet[TModel]:
+        self._check_capability("search")
+        search_field = getattr(self._model, "search_field", None)
+        if search_field:
+            p = dict(self._params)
+            graph_resource_attr = self._model._meta.fields_by_graph.get(search_field)
+            if not graph_resource_attr:
+                raise ValueError(
+                    f"Field not exist in {self._model.__name__} property, '{search_field}'"
+                )
+            p["$search"] = f"{graph_resource_attr}:{keyword}"
+            return self._clone(params=p)
+        raise ValueError(f"Object {self._model.__name__} does not support search")
+
     def select(self, *fields: str) -> QuerySet[TModel]:
         self._check_capability("select")
         graph_fields = [self._model._meta.field_to_graph(f) for f in fields]
@@ -404,18 +420,16 @@ class QuerySet(Generic[TModel]):
         return self._clone(params=p)
 
     def count(self) -> int:
-        # Always ensure the first page is fetched so _objects is populated.
-        if self._changed:
-            list(self)
-
-        # If Graph returned @odata.count on the initial page, use it.
-        if self._count is not None:
+        # self._check_capability("count")
+        if self._count:
             return self._count
 
-        if not getattr(self.capabilities, "count", False):
-            return len(self._objects)
+        if self._changed:
+            self._params["$count"] = "true"
+            self.set_consistency_level_to_eventual()
+            list(self)
+            return self._count
 
-        # Fallback to the number of fetched objects (may be partial if paging not consumed).
         return len(self._objects)
 
     def first(self) -> TModel | None:
@@ -474,7 +488,18 @@ class QuerySet(Generic[TModel]):
                 return f"({inner})"
 
             field_name, value, lookup = node
-            gf = self._model._meta.field_to_graph(field_name)
+            meta = self._model._meta
+            gf = meta.field_to_graph(field_name)
+            # validate lookup support if model declares it
+
+            lookups = getattr(meta.fields.get(field_name), "supported_lookups", None)
+            if lookups:
+                # allowed = supported.get(field_name)
+                normalized = lookup or "exact"
+                if normalized not in lookups:
+                    raise ValueError(
+                        f"Lookup '{normalized}' is not supported for field '{field_name}'"
+                    )
             return compile_lookup(gf, lookup, value)
 
         return compile_node(q)
@@ -488,9 +513,27 @@ class QuerySet(Generic[TModel]):
             p["$filter"] = " and ".join(parts)
         return p
 
+    def set_consistency_level_to_eventual(self) -> "QuerySet":
+        self._headers["ConsistencyLevel"] = "eventual"
+        return self
+
     def _check_capability(self, name: str) -> None:
         if not getattr(self.capabilities, name, False):
             raise ValueError(f"{self.__class__.__name__} does not support {name}()")
+
+
+class BulkQuerySet:
+    def __init__(self, qs: QuerySet[TModel]) -> None:
+        self.qs = qs
+
+    @classmethod
+    def as_descriptor(cls) -> property:
+        def fget(obj: QuerySet[TModel], objtype=None) -> BulkQuerySet:
+            if obj is None:
+                return cls  # type: ignore
+            return BulkQuerySet(obj)
+
+        return property(fget)
 
 
 # class QuerySetBulkOperation:

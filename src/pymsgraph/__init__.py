@@ -1,3 +1,3 @@
-from .client import GraphClient
+from .client import Client
 
-__all__ = ["GraphClient"]
+__all__ = ["Client"]

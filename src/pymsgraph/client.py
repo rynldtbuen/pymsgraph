@@ -94,11 +94,11 @@ class Client:
         self,
         token_provider: TokenProvider,
         *,
-        http: httpx.Client | None = None,
         base_url: str = "https://graph.microsoft.com/v1.0",
         scopes: Sequence[str] | None = None,
         default_headers: Mapping[str, str] | None = None,
         timeout: float | None = 30.0,
+        http: httpx.Client | None = None,
         user_agent: str | None = None,
     ) -> None:
         self.token_provider = token_provider

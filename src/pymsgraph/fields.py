@@ -23,6 +23,7 @@ class Field:
         read_only: bool = False,
         dump: Callable[[Any], Any] | None = None,  # python -> json
         load: Callable[[Any], Any] | None = None,  # json -> python
+        supported_lookups: set | None = None,
     ) -> None:
         self.name: str = ""  # set by __set_name__
         self.graph_name: str | None = graph_name
@@ -31,6 +32,7 @@ class Field:
         self.read_only = read_only
         self.dump = dump
         self.load = load
+        self.supported_lookups = supported_lookups
 
     def __set_name__(self, owner: type[Model], name: str) -> None:
         self.name = name
@@ -91,6 +93,7 @@ class CharField(Field):
         max_length: int | None = None,
         dump: Callable[[Any], Any] | None = None,
         load: Callable[[Any], Any] | None = None,
+        supported_lookups: set | None = None,
     ) -> None:
         super().__init__(
             graph_name,
@@ -99,6 +102,7 @@ class CharField(Field):
             read_only=read_only,
             dump=dump,
             load=load,
+            supported_lookups=supported_lookups,
         )
         self.max_length = max_length
 
@@ -124,26 +128,27 @@ class EmailField(CharField):
     By default, requires a single '@' and a '.' in the domain.
     """
 
-    def __init__(
-        self,
-        graph_name: str | None = None,
-        *,
-        default: Any = None,
-        required: bool = False,
-        read_only: bool = False,
-        max_length: int | None = None,
-        dump: Callable[[Any], Any] | None = None,
-        load: Callable[[Any], Any] | None = None,
-    ) -> None:
-        super().__init__(
-            graph_name,
-            default=default,
-            required=required,
-            read_only=read_only,
-            max_length=max_length,
-            dump=dump,
-            load=load,
-        )
+    # def __init__(
+    #     self,
+    #     graph_name: str | None = None,
+    #     *,
+    #     default: Any = None,
+    #     required: bool = False,
+    #     read_only: bool = False,
+    #     max_length: int | None = None,
+    #     dump: Callable[[Any], Any] | None = None,
+    #     load: Callable[[Any], Any] | None = None,
+
+    # ) -> None:
+    #     super().__init__(
+    #         graph_name,
+    #         default=default,
+    #         required=required,
+    #         read_only=read_only,
+    #         max_length=max_length,
+    #         dump=dump,
+    #         load=load,
+    #     )
 
     def to_python(self, value: Any) -> str | None:
         s = super().to_python(value)
@@ -157,9 +162,9 @@ class EmailField(CharField):
         if domain.startswith(".") or domain.endswith(".") or ".." in domain:
             raise ValueError(f"Invalid domain, '{self.name}'")
 
-        if len(local) < 4:
+        if len(local) < 2:
             raise ValueError(
-                f"Mail nickname should be least three characters long, '{self.name}'"
+                f"Mail nickname should be least two characters long, '{self.name}'"
             )
 
         return f"{local}@{domain.lower()}"

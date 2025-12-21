@@ -64,27 +64,20 @@ class ReadOnlyModel(metaclass=ModelBase):
 
     _meta: ClassVar[Meta]
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(self, graph_data: dict[str, Any] | None = None, **kwargs: Any) -> None:
+        self._initializing = True
         self._data: dict[str, Any] = {}
-        self._graph_data: dict[str, Any] = {}
+        self._graph_data: dict[str, Any] = graph_data or {}
 
-        for k, v in kwargs.items():
-            setattr(self, k, v)
-
-    @classmethod
-    def from_graph(
-        cls: type[TReadOnlyModel], payload: dict[str, Any]
-    ) -> TReadOnlyModel:
-        obj = cls()
-
-        for gname, value in payload.items():
-            field = cls._meta.fields_by_graph.get(gname)
-            if not field:
-                continue
-            obj._data[field.name] = field.to_python(value)
-
-        obj._graph_data = payload
-        return obj
+        if graph_data:
+            for gname, value in graph_data.items():
+                field = self._meta.fields_by_graph.get(gname)
+                if field:
+                    setattr(self, field.name, value)
+        else:
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+        self._initializing = False
 
     def to_graph(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
@@ -221,7 +214,8 @@ class Model(metaclass=ModelBase):
         self._dirty.clear()
 
     def refresh_from_graph(self, data: dict[str, Any]) -> None:
-        self._data = self.__class__(data=data, qs=self._qs)._data
+        # Rehydrate using graph data without marking fields dirty.
+        self._data = self.__class__(graph_data=data, qs=self._qs)._data
         self._dirty.clear()
         self._graph_data = data
 
