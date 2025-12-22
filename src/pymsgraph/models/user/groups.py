@@ -1,7 +1,7 @@
 from typing import TYPE_CHECKING, Any, ClassVar, Iterator
 
 from pymsgraph import utils
-from pymsgraph.query import Capabilities, QuerySet
+from pymsgraph.query import BulkQuerySet, Capabilities, QuerySet
 
 if TYPE_CHECKING:
     from pymsgraph.models.group import Group
@@ -9,6 +9,16 @@ if TYPE_CHECKING:
 
 
 class UserGroupsQuerySet(QuerySet["Group"]):
+    """
+    User's groups
+
+    Usage:
+        user = client.users.get(id=...)
+        user.groups
+        user.groups.add(...)
+        user.groups.remove(...)
+    """
+
     capabilities: ClassVar[Capabilities] = Capabilities.read_only()
 
     @classmethod
@@ -37,7 +47,7 @@ class UserGroupsQuerySet(QuerySet["Group"]):
                 continue
             yield self._model(graph_data=item, qs=self)
 
-    def add(self, *groups: Any) -> None:
+    def add(self, *groups: "str | Group | QuerySet['Group']") -> None:
         """
         Add this user to one or more groups.
         """
@@ -69,7 +79,7 @@ class UserGroupsQuerySet(QuerySet["Group"]):
             resp = client.post("/$batch", json_body={"requests": requests})
             utils.raise_batch_errors(resp, action="add user to groups")
 
-    def remove(self, *groups: Any) -> None:
+    def remove(self, *groups: "str | Group | QuerySet['Group']") -> None:
         """
         Remove this user from one or more groups.
         """
@@ -94,3 +104,63 @@ class UserGroupsQuerySet(QuerySet["Group"]):
                 )
             resp = client.post("/$batch", json_body={"requests": requests})
             utils.raise_batch_errors(resp, action="remove user from groups")
+
+
+class BulkUserQuerySetGroups(BulkQuerySet):
+    """
+    User queryset's groups
+
+    Usage:
+        client.users.filter(...).groups.add(...)
+        client.users.filter(...).groups.remove(...)
+    """
+
+    def add(self, *groups: "str | Group | QuerySet['Group']") -> None:
+        """
+        Add all users in this queryset to one or many groups.
+        """
+        group_ids = utils.coerce_values(*groups, attr_names=("id",))
+        if not group_ids:
+            return
+
+        user_ids = self.get_qs_object_ids()
+        if not user_ids:
+            return
+
+        client = self._client
+
+        for gid in group_ids:
+            for chunk in utils.chunks(user_ids, 20):
+                binds = [f"{client.base_url}/directoryObjects/{uid}" for uid in chunk]
+                client.patch(
+                    f"{self._endpoint}/{gid}",
+                    json_body={"members@odata.bind": binds},
+                )
+
+    def remove(self, *groups: "str | Group | QuerySet['Group']") -> None:
+        """
+        Remove all users in this queryset from one or many groups.
+        """
+        group_ids = utils.coerce_values(*groups, attr_names=("id",))
+        if not group_ids:
+            return
+
+        user_ids = self.get_qs_object_ids()
+        if not user_ids:
+            return
+
+        client = self._client
+
+        for gid in group_ids:
+            for chunk in utils.chunks(user_ids, 20):
+                requests: list[dict[str, Any]] = []
+                for i, uid in enumerate(chunk, start=1):
+                    requests.append(
+                        {
+                            "id": str(i),
+                            "method": "DELETE",
+                            "url": f"{self._endpoint}/{gid}/members/{uid}/$ref",
+                        }
+                    )
+                batch_resp = client.post("/$batch", json_body={"requests": requests})
+                utils.raise_batch_errors(batch_resp, action="remove users from groups")

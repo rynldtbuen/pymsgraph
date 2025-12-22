@@ -452,17 +452,33 @@ class QuerySet(Generic[TModel]):
 
 
 class BulkQuerySet:
-    def __init__(self, qs: QuerySet[TModel]) -> None:
-        self.qs = qs
+    def __init__(self, qs: QuerySet[TModel], endpoint: str) -> None:
+        self._qs = qs
+        self._client = qs._client
+        self._model = qs._model
+        self._endpoint = endpoint
 
     @classmethod
-    def as_descriptor(cls) -> property:
+    def as_descriptor(cls, endpoint: str) -> property:
         def fget(obj: QuerySet[TModel], objtype=None) -> BulkQuerySet:
             if obj is None:
                 return cls  # type: ignore
-            return BulkQuerySet(obj)
+
+            return cls(obj, endpoint)
 
         return property(fget)
+
+    def get_qs_object_ids(self, attr: str = "id") -> list[str]:
+        ids: list[str] = []
+        seen: set[str] = set()
+
+        for item in self._qs.select(attr):
+            item_id = getattr(item, attr)  # Let it raise KeyError
+            if item_id not in seen:
+                seen.add(item_id)
+                ids.append(item_id)
+
+        return ids
 
 
 # class QuerySetBulkOperation:

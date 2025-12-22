@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from typing import Any, TYPE_CHECKING
 import platform
 import sys
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any
 
 import httpx
+
+from pymsgraph.models.user import UserQuerySet
 
 try:
     import importlib.metadata as importlib_metadata
@@ -13,8 +15,9 @@ except ImportError:  # pragma: no cover
     import importlib_metadata  # type: ignore
 
 if TYPE_CHECKING:
+    from pymsgraph.query import QuerySet, TModel
+
     from .auth import TokenProvider
-    from pymsgraph.query import TModel
 
 __all__ = ["Client"]
 
@@ -47,7 +50,9 @@ class ResourceDescriptor:
         self.model = model
         self._cache: dict[int, Any] = {}
 
-    def __get__(self, obj: "Client", objtype=None):
+    def __get__(
+        self, obj: "Client", objtype: type["Client"] | None = None
+    ) -> QuerySet[Any] | "ResourceDescriptor":
         if obj is None:
             return self
 
@@ -88,7 +93,7 @@ class ResourceDescriptor:
 
 class Client:
 
-    users = ResourceDescriptor("user.UserQuerySet")
+    users: UserQuerySet = ResourceDescriptor("user.UserQuerySet")  # type: ignore[assignment]
 
     def __init__(
         self,

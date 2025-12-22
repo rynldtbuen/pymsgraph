@@ -5,7 +5,7 @@ from typing import Any, ClassVar
 from pymsgraph import utils
 from pymsgraph.fields import BooleanField, CharField, EmailField
 from pymsgraph.models.user import compile_lookup
-from pymsgraph.models.user.groups import UserGroupsQuerySet
+from pymsgraph.models.user.groups import BulkUserQuerySetGroups, UserGroupsQuerySet
 from pymsgraph.models.user.licenses import UserLicensesQuerySet
 from pymsgraph.query import Capabilities, QuerySet
 
@@ -116,14 +116,13 @@ class User(Model):
         self._dirty.clear()
 
 
-class UserQuerySet(QuerySet[User]):
+class UserQuerySet(QuerySet["User"]):
     model: type[User] = User
     endpoint: str = "/users"
     capabilities: ClassVar[Capabilities] = Capabilities.read_write(search=True)
-
-    # groups = BulkUserGroupsQuerySet.as_descriptor()
-
     related_lookup = {"licenses": compile_lookup._licenses}
+
+    groups: BulkUserQuerySetGroups = BulkUserQuerySetGroups.as_descriptor(endpoint="/groups")  # type: ignore
 
     def create(
         self,
