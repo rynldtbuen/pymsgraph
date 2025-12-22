@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic, TypeVar
 
 
 if TYPE_CHECKING:
@@ -12,53 +12,54 @@ if TYPE_CHECKING:
 
 Lookup = tuple[str, Any, str]  # (field_name, value, lookup)
 
-_LOOKUP_TO_OP: dict[str, str] = {
-    "exact": "eq",
-    "ne": "ne",
-    "gt": "gt",
-    "gte": "ge",
-    "lt": "lt",
-    "lte": "le",
+
+PY_TO_ODATA_LITERAL: dict[str, Any] = {
+    "bool": lambda x: str(x).lower(),
+    "nonetype": "null",
+    "int": lambda x: str(x),
+    "float": lambda x: str(x),
+    "str": lambda x: "'" + x.replace("'", "''") + "'",
+}
+
+
+def in_lookup(field, value):
+    if not isinstance(value, Iterable) or isinstance(value, (str, bytes)):
+        raise TypeError("__in expects a non-string iterable")
+    parts = [f"{field} eq {odata_literal(v)}" for v in value]
+    return "(" + " or ".join(parts) + ")" if parts else "(false)"
+
+
+PY_LOOKUP_TO_ODATA_QUERY: dict[str, Any] = {
+    "exact": lambda gf, v,: f"{gf} eq {odata_literal(v)}",
+    "ne": lambda gf, v: f"{gf} ne {odata_literal(v)}",
+    "gt": lambda gf, v: f"{gf} gt {odata_literal(v)}",
+    "gte": lambda gf, v: f"{gf} ge {odata_literal(v)}",
+    "lt": lambda gf, v: f"{gf} lt {odata_literal(v)}",
+    "lte": lambda gf, v: f"{gf} le {odata_literal(v)}",
+    "contains": lambda gf, v: f"contains({gf}, {odata_literal(v)})",
+    "startswith": lambda gf, v: f"startswith({gf}, {odata_literal(v)})",
+    "endswith": lambda gf, v: f"endswith({gf}, {odata_literal(v)})",
+    "isnull": lambda gf, v: f"{gf} eq null" if v else f"{gf} ne null",
+    "in": in_lookup,
 }
 
 
 def odata_literal(value: Any) -> str:
-    if value is True:
-        return "true"
-    if value is False:
-        return "false"
-    if value is None:
-        return "null"
-    if isinstance(value, (int, float)):
-        return str(value)
-    if isinstance(value, str):
-        return "'" + value.replace("'", "''") + "'"
-    raise TypeError(f"Unsupported literal type: {type(value)!r}")
+    _type = type(value).__name__.lower()
+    try:
+        func = PY_TO_ODATA_LITERAL[_type]
+    except KeyError:
+        raise TypeError(f"Unsupported literal type: {type(value)!r}") from None
+    return func(value)
 
 
 def compile_lookup(graph_field: str, lookup: str, value: Any) -> str:
     lookup = lookup or "exact"
-
-    if lookup in _LOOKUP_TO_OP:
-        return f"{graph_field} {_LOOKUP_TO_OP[lookup]} {odata_literal(value)}"
-
-    if lookup == "contains":
-        return f"contains({graph_field}, {odata_literal(value)})"
-    if lookup == "startswith":
-        return f"startswith({graph_field}, {odata_literal(value)})"
-    if lookup == "endswith":
-        return f"endswith({graph_field}, {odata_literal(value)})"
-
-    if lookup == "isnull":
-        return f"{graph_field} eq null" if value else f"{graph_field} ne null"
-
-    if lookup == "in":
-        if not isinstance(value, Iterable) or isinstance(value, (str, bytes)):
-            raise TypeError("__in expects a non-string iterable")
-        parts = [f"{graph_field} eq {odata_literal(v)}" for v in value]
-        return "(" + " or ".join(parts) + ")" if parts else "(false)"
-
-    raise ValueError(f"Unsupported lookup: {lookup!r}")
+    try:
+        func = PY_LOOKUP_TO_ODATA_QUERY[lookup]
+    except:
+        raise ValueError(f"Unsupported lookup: {lookup!r}") from None
+    return func(graph_field, value)
 
 
 @dataclass(frozen=True)
@@ -89,88 +90,6 @@ type Node = Q | Lookup
 
 
 TModel = TypeVar("TModel", bound="Model")
-
-
-# class BaseQuerySet(Generic[TModel]):
-#     def __init__(
-#         self,
-#         model: type[TModel],
-#         *,
-#         q: Q | None = None,
-#         params: dict[str, Any] | None = None,
-#         headers: dict[str, Any] | None = None,
-#         **kwargs: Any,
-#     ) -> None:
-#         self.model = model
-#         self._q = q
-#         self._params = params or {}
-#         self._headers = headers or {}
-
-#         self._kwargs: dict[str, Any] = dict(kwargs)
-#         self._changed: bool = True
-#         self._data: dict[str, Any] = {}
-
-#     @property
-#     def endpoint(self):
-#         return self.model.endpoint
-
-#     def __iter__(self) -> Iterator[TModel]:
-#         if self._changed:
-#             client = self.model._get_client()
-#             data = client.get(
-#                 self.endpoint, params=self._build_params(), headers=self._headers
-#             )
-#             self._data = data
-#             self._changed = False
-#         else:
-#             data = self._data
-#         for item in data.get("value", []):
-#             yield self.model.from_graph(item)
-
-#     def only(self, *fields: str) -> BaseQuerySet[TModel]:
-#         graph_fields = [self.model._meta.field_to_graph(f) for f in fields]
-#         p = dict(self._params)
-#         p["$select"] = ",".join(graph_fields)
-#         return self._clone(params=p)
-
-#     def _clone(
-#         self,
-#         *,
-#         q: Q | None = None,
-#         params: dict[str, Any] | None = None,
-#         headers: dict[str, Any] | None = None,
-#     ) -> BaseQuerySet[TModel]:
-
-#         return self.__class__(
-#             self.model,
-#             q=q or self._q,
-#             params=dict(self._params) if params is None else params,
-#             headers=dict(self._headers) if headers is None else headers,
-#             **dict(self._kwargs),
-#         )
-
-#     def _compile_q(self, q: Q) -> str:
-#         def compile_node(node: Node) -> str:
-#             if isinstance(node, Q):
-#                 inner = f" {node.op.lower()} ".join(
-#                     compile_node(c) for c in node.children
-#                 )
-#                 return f"({inner})"
-
-#             field_name, value, lookup = node
-#             gf = self.model._meta.field_to_graph(field_name)
-#             return compile_lookup(gf, lookup, value)
-
-#         return compile_node(q)
-
-#     def _build_params(self) -> dict[str, Any]:
-#         p = dict(self._params)
-#         parts: list[str] = []
-#         if self._q is not None:
-#             parts.append(self._compile_q(self._q))
-#         if parts:
-#             p["$filter"] = " and ".join(parts)
-#         return p
 
 
 @dataclass(frozen=True)
@@ -226,6 +145,7 @@ class Capabilities:
 class QuerySet(Generic[TModel]):
     capabilities: ClassVar[Capabilities] = Capabilities.read_only()
     search_field: ClassVar[str]
+    related_lookup: ClassVar[dict[str, Callable]] = {}
 
     def __init__(
         self,
@@ -379,12 +299,13 @@ class QuerySet(Generic[TModel]):
         search_field = getattr(self._model, "search_field", None)
         if search_field:
             p = dict(self._params)
-            graph_resource_attr = self._model._meta.fields_by_graph.get(search_field)
-            if not graph_resource_attr:
+            graph_field = self._model._meta.field_to_graph(search_field)
+            print(graph_field)
+            if not graph_field:
                 raise ValueError(
                     f"Field not exist in {self._model.__name__} property, '{search_field}'"
                 )
-            p["$search"] = f"{graph_resource_attr}:{keyword}"
+            p["$search"] = f'"{graph_field}:{keyword}"'
             return self._clone(params=p)
         raise ValueError(f"Object {self._model.__name__} does not support search")
 
@@ -462,6 +383,10 @@ class QuerySet(Generic[TModel]):
         obj.refresh_from_graph(graph_data)
         return obj
 
+    def set_consistency_level_to_eventual(self) -> "QuerySet":
+        self._headers["ConsistencyLevel"] = "eventual"
+        return self
+
     def _clone(
         self,
         *,
@@ -489,6 +414,11 @@ class QuerySet(Generic[TModel]):
 
             field_name, value, lookup = node
             meta = self._model._meta
+            # print(field_name, value, lookup)
+            related_lookup = self.related_lookup.get(field_name)
+            if related_lookup is not None:
+                return related_lookup(lookup or "exact", value)
+
             gf = meta.field_to_graph(field_name)
             # validate lookup support if model declares it
 
@@ -513,13 +443,12 @@ class QuerySet(Generic[TModel]):
             p["$filter"] = " and ".join(parts)
         return p
 
-    def set_consistency_level_to_eventual(self) -> "QuerySet":
-        self._headers["ConsistencyLevel"] = "eventual"
-        return self
-
     def _check_capability(self, name: str) -> None:
         if not getattr(self.capabilities, name, False):
             raise ValueError(f"{self.__class__.__name__} does not support {name}()")
+
+    def _compile_related_lookup(self, lookup: str, value: Any) -> str | None:
+        return None
 
 
 class BulkQuerySet:

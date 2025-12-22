@@ -267,3 +267,33 @@ def test_user_groups_descriptor(make_client):
     assert g.id == "g1"
     assert g.display_name == "Group One"
     assert len(requests) == 1
+
+
+def test_user_queryset_filter_licenses_sku_id(user_qs):
+    qs = user_qs.filter(licenses__sku_id="cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46")
+    params = qs._build_params()
+    assert (
+        params["$filter"]
+        == "(assignedLicenses/any(u:u/skuId eq 'cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46'))"
+    )
+
+
+def test_user_queryset_filter_licenses_sku_id_with_lookup(user_qs):
+    qs = user_qs.filter(licenses__sku_id__exact="cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46")
+    params = qs._build_params()
+    assert (
+        params["$filter"]
+        == "(assignedLicenses/any(u:u/skuId eq 'cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46'))"
+    )
+
+
+def test_user_queryset_filter_licenses_isnull(user_qs):
+    qs = user_qs.filter(licenses__isnull=True)
+    params = qs._build_params()
+    assert params["$filter"] == "(assignedLicenses/$count eq 0)"
+
+
+def test_user_queryset_filter_licenses_is_not_null(user_qs):
+    qs = user_qs.filter(licenses__isnull=False)
+    params = qs._build_params()
+    assert params["$filter"] == "(assignedLicenses/$count ne 0)"
