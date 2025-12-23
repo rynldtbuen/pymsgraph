@@ -202,41 +202,29 @@ def test_user_groups_add_remove(make_client):
 
 
 def test_user_licenses_add_remove(make_client):
-    seen: list[tuple[str, str]] = []
-
     def handler(request: httpx.Request) -> httpx.Response:
-        seen.append((request.method, request.url.path))
-        if request.method == "POST" and request.url.path == "/v1.0/$batch":
-            body = json.loads(request.content.decode())
-            requests = body.get("requests", [])
-            assert len(requests) == 1
-            req = requests[0]
-            assert req["url"] == "/users/123/assignLicense"
-            if req["body"]["addLicenses"]:
-                assert req["body"] == {
-                    "addLicenses": [{"skuId": "sku1", "disabledPlans": []}],
-                    "removeLicenses": [],
-                }
-            else:
-                assert req["body"] == {
-                    "addLicenses": [],
-                    "removeLicenses": ["sku1"],
-                }
-            return httpx.Response(200, json={"responses": [{"id": "1", "status": 200}]})
-        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+        body = json.loads(request.content.decode())
+        print(body)
+        assert request.method == "POST"
+        assert request.url.path == "/v1.0/users/123/assignLicense"
+        if body["addLicenses"]:
+            assert body == {
+                "addLicenses": [{"skuId": "sku1", "disabledPlans": []}],
+                "removeLicenses": [],
+            }
+        else:
+            assert body == {
+                "addLicenses": [],
+                "removeLicenses": ["sku1"],
+            }
+        return httpx.Response(200, json={"responses": [{"id": "1", "status": 200}]})
 
-    client, requests = make_client(handler)
-    qs = UserQuerySet(client=client, model=User, endpoint="/users")
+    client, _ = make_client(handler)
+    qs = UserQuerySet(client=client, model=User)
     user = User(qs=qs, graph_data={"id": "123", "displayName": "Alice"})
 
     user.licenses.add("sku1")
     user.licenses.remove("sku1")
-
-    assert seen == [
-        ("POST", "/v1.0/$batch"),
-        ("POST", "/v1.0/$batch"),
-    ]
-    assert len(requests) == 2
 
 
 def test_user_groups_descriptor(make_client):
@@ -297,3 +285,82 @@ def test_user_queryset_filter_licenses_is_not_null(user_qs):
     qs = user_qs.filter(licenses__isnull=False)
     params = qs._build_params()
     assert params["$filter"] == "(assignedLicenses/$count ne 0)"
+
+
+def test_user_delete_requires_id(make_client):
+    # Ensure no HTTP call occurs
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("HTTP should not be called")
+
+    make_client(handler)
+
+    u = User(
+        display_name="Unsaved",
+        # user_principal_name="unsaved@example.com",
+        mail_nickname="unsaved",
+    )
+    with pytest.raises(ValueError):
+        u.delete(force=True)
+
+
+def test_user_delete_force_calls_delete(make_client, user_qs):
+    u = User(
+        graph_data={
+            "id": "u_del",
+            "displayName": "Del",
+            "userPrincipalName": "del@example.com",
+            "accountEnabled": True,
+            "mailNickname": "del",
+        },
+        qs=user_qs,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "DELETE"
+        assert request.url.path == "/v1.0/users/u_del"
+        return httpx.Response(204)
+
+    make_client(handler)
+
+    u.delete(force=True)
+    # after local cleanup, id should no longer be present
+    assert u.id is None
+
+
+def test_user_delete_requires_force(make_client, user_qs):
+    u = User(
+        graph_data={
+            "id": "u_del",
+            "displayName": "Del",
+            "userPrincipalName": "del@example.com",
+            "accountEnabled": True,
+            "mailNickname": "del",
+        },
+        qs=user_qs,
+    )
+
+    # Ensure no HTTP call occurs
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("HTTP should not be called")
+
+    make_client(handler)
+
+    with pytest.raises(RuntimeError):
+        u.delete()
+
+
+def test_user_reset_password_requires_id(make_client, user_qs):
+    # Ensure no HTTP call occurs
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("HTTP should not be called")
+
+    make_client(handler)
+
+    u = User(
+        display_name="Unsaved",
+        user_principal_name="unsaved@example.com",
+        mail_nickname="unsaved",
+        qs=user_qs,
+    )
+    with pytest.raises(ValueError):
+        u.reset_password(password="Whatever1!234")

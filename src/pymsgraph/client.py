@@ -7,7 +7,9 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from pymsgraph.models.subscribed_sku import SubscribedSku
 from pymsgraph.models.user import UserQuerySet
+from pymsgraph import utils
 
 try:
     import importlib.metadata as importlib_metadata
@@ -40,15 +42,16 @@ class ResourceDescriptor:
 
     def __init__(
         self,
-        qs_path: str | None = None,
-        *,
-        endpoint: str | None = None,
-        model: type[TModel] | None = None,
+        queryset_path: str | None = None,
+        model: type[TModel] | str | None = None,
+        # *,
+        # endpoint: str | None = None,
     ):
-        self.qs_path = qs_path
-        self.endpoint = endpoint
+        self.queryset_path = queryset_path
         self.model = model
-        self._cache: dict[int, Any] = {}
+        # self.endpoint = endpoint
+        # self.model = model
+        # self._cache: dict[int, Any] = {}
 
     def __get__(
         self, obj: "Client", objtype: type["Client"] | None = None
@@ -59,34 +62,29 @@ class ResourceDescriptor:
         cache = getattr(obj, "_qs_cache", None)
         if cache is None:
             cache = obj._qs_cache = {}  # type: ignore
-        key = (self.qs_path, self.endpoint, self.model)
+        key = self.queryset_path
         if key in cache:
             return cache[key]
 
-        if self.qs_path is not None:
-            import importlib
-
-            module_name, _, cls_name = self.qs_path.rpartition(".")
-            if not module_name or not cls_name:
-                raise ImportError(f"Invalid qs_path, '{self.qs_path}'")
-
-            mod = importlib.import_module(f"pymsgraph.models.{module_name}")
-            qs_cls = getattr(mod, cls_name)
-        else:
-            from pymsgraph.query import QuerySet
-
-            qs_cls = QuerySet
-
-        e = self.endpoint or getattr(qs_cls, "endpoint", None)
-        if e is None:
-            raise ValueError(
-                "Endpoint must be specified in descriptor or QuerySet class"
+        if self.queryset_path is not None:
+            queryset_class: type[QuerySet] = utils.get_queryset_class(
+                self.queryset_path
             )
-        m = self.model or getattr(qs_cls, "model", None)
-        if m is None:
-            raise ValueError("Model must be specified in descriptor or QuerySet class")
+        else:
+            queryset_class = QuerySet
 
-        qs = qs_cls(client=obj, model=m, endpoint=e)
+        # e = self.endpoint or getattr(qs_cls, "endpoint", None)
+        # if e is None:
+        #     raise ValueError(
+        #         "Endpoint must be specified in descriptor or QuerySet class"
+        #     )
+        model = self.model or getattr(queryset_class, "model", None)
+        if model is None:
+            raise ValueError(
+                "Model must be pass when intializing a ResourceDescriptor or defining when subclassing a QuerySet"
+            )
+
+        qs = queryset_class(client=obj, model=model)
         cache[key] = qs
         return qs
 
@@ -94,6 +92,7 @@ class ResourceDescriptor:
 class Client:
 
     users: UserQuerySet = ResourceDescriptor("user.UserQuerySet")  # type: ignore[assignment]
+    subscribed_skus: SubscribedSku = ResourceDescriptor("subscribed_sku.SubscribedSkuQuerySet")  # type: ignore
 
     def __init__(
         self,

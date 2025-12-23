@@ -1,30 +1,40 @@
-from dataclasses import dataclass
-from typing import Any
+from typing import ClassVar
 from pymsgraph.fields import CharField, IntegerField, ObjectField
-from pymsgraph.models.base import Model
+from pymsgraph.models.base import EndpointDescriptor, Model
+from pymsgraph.query import Capabilities, QuerySet
 
 
-# class LicenseUnitsDetail:
-#     enabled: int
-#     locked_out: int
-#     suspended: int
-#     warning: int
+class LicenseUnitsDetail(Model):
+    """
+    Graph licenseUnitsDetail resource type
 
-#     @classmethod
-#     def from_graph(cls, payload: dict[str, Any]) -> "LicenseUnitsDetail":
-#         return cls(
-#             enabled=int(payload.get("enabled", 0) or 0),
-#             locked_out=int(payload.get("lockedOut", 0) or 0),
-#             suspended=int(payload.get("suspended", 0) or 0),
-#             warning=int(payload.get("warning", 0) or 0),
-#         )
+    https://learn.microsoft.com/en-us/graph/api/resources/licenseunitsdetail?view=graph-rest-1.0
+    """
 
-#     @classmethod
-#     def as_descriptor(cls):
-#         return ObjectField(cls)
+    is_read_only = True
+
+    enabled = IntegerField()
+    locked_out = IntegerField()
+    suspended = IntegerField()
+    warning = IntegerField()
+
+    @classmethod
+    def as_descriptor(cls):
+        return ObjectField(cls)
+
+    def __repr__(self):
+        return f"<LicenseUnitsDetail: enabled={self.enabled}, locked_out={self.locked_out}, suspended={self.suspended}, warning={self.warning}>"
 
 
 class ServicePlanInfo(Model):
+    """
+    Graph servicePlanInfo resource type
+
+    https://learn.microsoft.com/en-us/graph/api/resources/serviceplaninfo?view=graph-rest-1.0
+    """
+
+    is_read_only = True
+
     applies_to = CharField(read_only=True)
     provisioning_status = CharField(read_only=True)
     id = CharField(read_only=True, graph_name="servicePlanId")
@@ -34,13 +44,33 @@ class ServicePlanInfo(Model):
     def as_descriptor(cls):
         return ObjectField(cls, many=True)
 
+    def __repr__(self):
+        return f"<ServicePlanInfo: {self.name}>"
+
 
 class SubscribedSku(Model):
-    # https://learn.microsoft.com/en-us/graph/api/subscribedsku-list?view=graph-rest-1.0&tabs=http
+    """
+    Graph subscribedSku resource type
+
+    https://learn.microsoft.com/en-us/graph/api/subscribedsku-list?view=graph-rest-1.0&tabs=http
+    """
+
+    is_read_only = True
+
     sku_id = CharField()  # skuId
     sku_part_number = CharField()  # skuPartNumber
     capability_status = CharField()  # capabilityStatus
     consumed_units = IntegerField()  # consumedUnits (int)
     applies_to = CharField()  # appliesTo (often "User")
-    # prepaid_units = LicenseUnitsDetail.as_descriptor()
+    prepaid_units = LicenseUnitsDetail.as_descriptor()
     service_plans = ServicePlanInfo.as_descriptor()
+
+    endpoint = EndpointDescriptor("/subscribedSkus")
+
+    def __repr__(self):
+        return f"<SubscribedSku: {self.sku_id}>"
+
+
+class SubscribedSkuQuerySet(QuerySet[SubscribedSku]):
+    model: type[SubscribedSku] = SubscribedSku
+    capabilities: ClassVar[Capabilities] = Capabilities.read_only()

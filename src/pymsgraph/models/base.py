@@ -4,14 +4,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 from pymsgraph.fields import CharField, Field
-from pymsgraph.query import QuerySet
 
 
 if TYPE_CHECKING:
     from pymsgraph.client import Client
+    from pymsgraph.query import QuerySet
 
 TModel = TypeVar("TModel", bound="Model")
-TReadOnlyModel = TypeVar("TReadOnlyModel", bound="ReadOnlyModel")
 
 
 @dataclass(frozen=True)
@@ -57,40 +56,18 @@ class ModelBase(type):
         return cls
 
 
-class ReadOnlyModel(metaclass=ModelBase):
-    """
-    Base model for read-only Graph resources
-    """
+class EndpointDescriptor:
+    def __init__(self, endpoint: str):
+        self.endpoint = endpoint
 
-    _meta: ClassVar[Meta]
-
-    def __init__(self, graph_data: dict[str, Any] | None = None, **kwargs: Any) -> None:
-        self._initializing = True
-        self._data: dict[str, Any] = {}
-        self._graph_data: dict[str, Any] = graph_data or {}
-
-        if graph_data:
-            for gname, value in graph_data.items():
-                field = self._meta.fields_by_graph.get(gname)
-                if field:
-                    setattr(self, field.name, value)
-        else:
-            for k, v in kwargs.items():
-                setattr(self, k, v)
-        self._initializing = False
-
-    def to_graph(self) -> dict[str, Any]:
-        out: dict[str, Any] = {}
-
-        for py_name, field in self._meta.fields.items():
-            val = self._data.get(py_name, field.default)
-            if val is None:
-                continue
-
-            assert field.graph_name is not None
-            out[field.graph_name] = field.to_graph(val)
-
-        return out
+    def __get__(self, obj, objtype=None) -> str:
+        if obj is None:
+            return self.endpoint
+        if not obj.id:
+            raise ValueError(
+                f"Resource {type(obj)} has not been initialized or does not exist"
+            )
+        return f"{self.endpoint}/{obj.id}"
 
 
 class Model(metaclass=ModelBase):
@@ -99,8 +76,9 @@ class Model(metaclass=ModelBase):
     """
 
     _meta: ClassVar[Meta]
+    is_read_only: ClassVar[bool] = False
 
-    # common id field
+    endpoint: EndpointDescriptor
     id = CharField(read_only=True)
 
     def __init__(
@@ -136,31 +114,18 @@ class Model(metaclass=ModelBase):
         self._dirty.clear()
         self._initializing = False
 
-    # @classmethod
-    # def from_graph(
-    #     cls: type[TModel], data: dict[str, Any], qs: QuerySet | None = None
-    # ) -> TModel:
-    #     obj = cls(qs=qs)
-    #     obj._initializing = True  # avoid dirty tracking during hydration
-    #     for gname, value in data.items():
-    #         field = cls._meta.fields_by_graph.get(gname)
-    #         if not field:
-    #             continue
-    #         obj._data[field.name] = field.to_python(value)
+    @classmethod
+    def as_queryset(cls):
+        pass
 
-    #     obj._dirty.clear()
-    #     obj._graph_data = data
-    #     obj._initializing = False
-    #     return obj
-
-    @property
-    def endpoint(self) -> str:
-        if self.id is None:
-            raise ValueError("Resource has not been initialized or does not exist")
-        qs_endpoint = self._qs._endpoint if self._qs else None
-        if qs_endpoint:
-            return f"{qs_endpoint}/{self.id}"
-        raise ValueError("QuerySet endpoint is not configured for this model instance")
+    # @property
+    # def endpoint(self) -> str:
+    #     if self.id is None:
+    #         raise ValueError("Resource has not been initialized or does not exist")
+    #     qs_endpoint = self._qs._endpoint if self._qs else None
+    #     if qs_endpoint:
+    #         return f"{qs_endpoint}/{self.id}"
+    #     raise ValueError("QuerySet endpoint is not configured for this model instance")
 
     @property
     def client(self) -> Client:
@@ -168,7 +133,7 @@ class Model(metaclass=ModelBase):
             raise ValueError("QuerySet is not configured for this model instance")
         return self._qs._client
 
-    def to_graph(self, *, for_update: bool) -> dict[str, Any]:
+    def to_graph(self, *, for_update: bool) -> dict[str, Any]:  # type: ignore
         out: dict[str, Any] = {}
 
         for py_name, field in self._meta.fields.items():
@@ -187,6 +152,9 @@ class Model(metaclass=ModelBase):
         return out
 
     def save(self) -> bool:
+        if self.is_read_only:
+            raise RuntimeError(f"Model '{self.__class__.__name__}' is read-only.")
+
         if self.id is None:
             raise RuntimeError(
                 "Cannot save a model that has not been initialized or created yet."
@@ -201,6 +169,8 @@ class Model(metaclass=ModelBase):
         return True
 
     def delete(self, *, force: bool = False) -> None:
+        if self.is_read_only:
+            raise RuntimeError(f"Model '{self.__class__.__name__}' is read-only.")
         if not force:
             raise RuntimeError(
                 "Refusing to delete User without confirmation. "

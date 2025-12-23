@@ -4,13 +4,10 @@ from collections.abc import Callable
 from dataclasses import asdict, is_dataclass
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
+from pymsgraph.utils import snake_to_camel
+
 if TYPE_CHECKING:
     from pymsgraph.models.base import Model
-
-
-def snake_to_camel(name: str) -> str:
-    parts = name.split("_")
-    return parts[0] + "".join(p[:1].upper() + p[1:] for p in parts[1:])
 
 
 class Field:

@@ -5,8 +5,7 @@ from typing import TYPE_CHECKING, Any
 # from pymsgraph import utils
 from pymsgraph.fields import BooleanField, CharField, Field
 
-# from pymsgraph.manager import BaseManager
-from pymsgraph.models.base import Model
+from pymsgraph.models.base import EndpointDescriptor, Model
 
 # from pymsgraph.query import QuerySet
 
@@ -25,6 +24,8 @@ class Group(Model):
     description = CharField()
     group_types = Field()  # graph: groupTypes (list[str])
     visibility = CharField()
+
+    endpoint = EndpointDescriptor("/groups")
 
 
 #     @property

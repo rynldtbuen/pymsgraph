@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import importlib
+import re
 import secrets
 import string
-from collections.abc import Iterable as AbcIterable
-from typing import Any, Callable, Iterable, Iterator, TypeVar
+from collections.abc import Iterable, Iterator
+from typing import TYPE_CHECKING, Any, TypeVar
 
-from pymsgraph.query import QuerySet
+if TYPE_CHECKING:
+    from pymsgraph.models.base import TModel, Model
+    from pymsgraph.query import QuerySet
 
 
 def generate_password(length: int = 12) -> str:
@@ -47,58 +51,160 @@ def generate_password(length: int = 12) -> str:
     return "".join(chars)
 
 
-def chunks(items: list[str], size: int) -> Iterable[list[str]]:
-    for i in range(0, len(items), size):
-        yield items[i : i + size]
+# def chunks(items: list[str], size: int) -> Iterable[list[str]]:
+#     for i in range(0, len(items), size):
+#         yield items[i : i + size]
 
 
-def coerce_ids(*args: Any) -> list[str]:
+_CAMEL_1 = re.compile(r"(.)([A-Z][a-z]+)")
+_CAMEL_2 = re.compile(r"([a-z0-9])([A-Z])")
+
+
+def camel_to_snake(s: str) -> str:
     """
-    Flatten *args of:
-      - "user-id" strings
-      - User objects
-      - QuerySet[User] / iterables of the above
-    into a deduped list of directoryObject ids.
+    Convert camelCase / PascalCase to snake_case.
+
+    Examples:
+        "displayName" -> "display_name"
+        "UserPrincipalName" -> "user_principal_name"
+        "SKUId" -> "sku_id"
+        "servicePlanId2" -> "service_plan_id2"
     """
+    s = s.strip()
+    if not s:
+        return s
 
-    def _dedupe_keep_order(items: Iterable[str]) -> list[str]:
-        seen: set[str] = set()
-        out: list[str] = []
-        for x in items:
-            if x not in seen:
-                seen.add(x)
-                out.append(x)
-        return out
+    s = s.replace("-", "_").replace(" ", "_")
+    s = _CAMEL_1.sub(r"\1_\2", s)
+    s = _CAMEL_2.sub(r"\1_\2", s)
+    return s.lower()
 
-    ids: list[str] = []
 
-    def add_one(x: Any) -> None:
-        if x is None:
+def snake_to_camel(name: str) -> str:
+    parts = name.split("_")
+    return parts[0] + "".join(p[:1].upper() + p[1:] for p in parts[1:])
+
+
+def get_model_class(model_name: str):
+    module_name = camel_to_snake(model_name)
+    mod = importlib.import_module(f"pymsgraph.models.{module_name}")
+    return getattr(mod, model_name)
+
+
+def get_queryset_class(queryset_path: str):
+    module_name, _, cls_name = queryset_path.rpartition(".")
+    if not module_name or not cls_name:
+        raise ImportError(f"Invalid qs_path, '{queryset_path}'")
+
+    mod = importlib.import_module(f"pymsgraph.models.{module_name}")
+    return getattr(mod, cls_name)
+
+
+T = TypeVar("T")
+
+
+def chunks(iterable: Iterable[T], size: int = 2) -> Iterator[list[T]]:
+    if size <= 2:
+        raise ValueError("Size must be > 2")
+
+    batch: list[T] = []
+    for item in iterable:
+        batch.append(item)
+        if len(batch) == size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
+
+
+def coerce_objects(
+    *args: str | TModel | Iterable[str] | Iterable[TModel] | QuerySet[TModel],
+    model: type[TModel] | str,  # type: ignore
+    key: str = "id",
+) -> Iterator[TModel]:
+    def _is_iterable_but_not_str(x: Any) -> bool:
+        return isinstance(x, Iterable) and not isinstance(
+            x, (str, bytes, bytearray, dict)
+        )
+
+    def _iter_flatten(
+        *args: str | TModel | Iterable[str] | Iterable[TModel] | QuerySet[TModel],
+    ) -> Iterator[TModel]:
+        for arg in args:
+            if isinstance(arg, str):
+                yield model(**{key: arg})  # type: ignore
+            elif isinstance(arg, Model):
+                yield arg
+            elif _is_iterable_but_not_str(arg):
+                yield from _iter_flatten(*arg)
+            elif isinstance(arg, QuerySet):
+                yield from arg
             return
 
-        # string id
-        if isinstance(x, str):
-            ids.append(x)
-            return
+    from pymsgraph.models.base import Model
+    from pymsgraph.query import QuerySet
 
-        # QuerySet or any other iterable (but not strings)
-        if isinstance(x, QuerySet):
-            for item in x:
-                add_one(item)
-            return
+    if isinstance(model, str):
+        model: type[TModel] = get_model_class(model)
 
-        # assume User-like model instance
-        # (your User has get_directory_object_id(), which resolves id if needed)
-        if hasattr(x, "get_id"):
-            ids.append(x.get_id())  # type: ignore
-            return
+    seen: set = set()
 
-        raise TypeError(f"Unsupported member type: {type(x)!r}")
+    for obj in _iter_flatten(*args):
+        try:
+            val = getattr(obj, key)
+        except AttributeError:
+            continue
+        if val not in seen:
+            yield obj
 
-    for arg in args:
-        add_one(arg)
 
-    return _dedupe_keep_order(ids)
+# def coerce_ids(*args: Any) -> list[str]:
+#     """
+#     Flatten *args of:
+#       - "user-id" strings
+#       - User objects
+#       - QuerySet[User] / iterables of the above
+#     into a deduped list of directoryObject ids.
+#     """
+
+#     def _dedupe_keep_order(items: Iterable[str]) -> list[str]:
+#         seen: set[str] = set()
+#         out: list[str] = []
+#         for x in items:
+#             if x not in seen:
+#                 seen.add(x)
+#                 out.append(x)
+#         return out
+
+#     ids: list[str] = []
+
+#     def add_one(x: Any) -> None:
+#         if x is None:
+#             return
+
+#         # string id
+#         if isinstance(x, str):
+#             ids.append(x)
+#             return
+
+#         # QuerySet or any other iterable (but not strings)
+#         if isinstance(x, QuerySet):
+#             for item in x:
+#                 add_one(item)
+#             return
+
+#         # assume User-like model instance
+#         # (your User has get_directory_object_id(), which resolves id if needed)
+#         if hasattr(x, "get_id"):
+#             ids.append(x.get_id())  # type: ignore
+#             return
+
+#         raise TypeError(f"Unsupported member type: {type(x)!r}")
+
+#     for arg in args:
+#         add_one(arg)
+
+#     return _dedupe_keep_order(ids)
 
 
 def raise_batch_errors(batch_payload: dict[str, Any], *, action: str) -> None:
@@ -110,78 +216,71 @@ def raise_batch_errors(batch_payload: dict[str, Any], *, action: str) -> None:
             raise RuntimeError(f"Batch {action} failed (status={status}): {body}")
 
 
-T = TypeVar("T")
+# T = TypeVar("T")
 
 
-def coerce_values(
-    *args: Any,
-    resolver: Callable[[Any], T] | None = None,
-    attr_names: tuple[str, ...] = (),
-    allow_str: bool = True,
-) -> list[T]:
-    """
-    Generic: flatten args -> resolve each item -> dedupe_keep_order.
+# def coerce_values(
+#     *args: Any,
+#     resolver: Callable[[Any], T] | None = None,
+#     attr_names: tuple[str, ...] = (),
+#     allow_str: bool = True,
+# ) -> list[T]:
 
-    - resolver: custom extraction function
-    - attr_names: fallbacks for objects (e.g. ("sku_id","skuId","id"))
-    - allow_str: if True and T is str-like, pass strings through
-    """
+#     def _dedupe_keep_order(items: Iterable[T]) -> list[T]:
+#         seen: set[T] = set()
+#         out: list[T] = []
+#         for x in items:
+#             if x not in seen:
+#                 seen.add(x)
+#                 out.append(x)
+#         return out
 
-    def _dedupe_keep_order(items: AbcIterable[T]) -> list[T]:
-        seen: set[T] = set()
-        out: list[T] = []
-        for x in items:
-            if x not in seen:
-                seen.add(x)
-                out.append(x)
-        return out
+#     def _is_iterable_but_not_str(x: Any) -> bool:
+#         return isinstance(x, Iterable) and not isinstance(
+#             x, (str, bytes, bytearray, dict)
+#         )
 
-    def _is_iterable_but_not_str(x: Any) -> bool:
-        return isinstance(x, AbcIterable) and not isinstance(
-            x, (str, bytes, bytearray, dict)
-        )
+#     def _flatten_args(*args: Any) -> Iterator[Any]:
+#         """Flatten QuerySets and iterables (lists/tuples/sets/etc) but not strings/dicts."""
 
-    def _flatten_args(*args: Any) -> Iterator[Any]:
-        """Flatten QuerySets and iterables (lists/tuples/sets/etc) but not strings/dicts."""
+#         for x in args:
+#             if x is None:
+#                 continue
 
-        for x in args:
-            if x is None:
-                continue
+#             if isinstance(x, QuerySet):
+#                 for item in x:
+#                     yield item
+#                 continue
 
-            if isinstance(x, QuerySet):
-                for item in x:
-                    yield item
-                continue
+#             if _is_iterable_but_not_str(x):
+#                 for item in x:
+#                     yield item
+#                 continue
 
-            if _is_iterable_but_not_str(x):
-                for item in x:
-                    yield item
-                continue
+#             yield x
 
-            yield x
+#     out: list[T] = []
 
-    out: list[T] = []
+#     for x in _flatten_args(*args):
+#         if allow_str and isinstance(x, str):
+#             out.append(x)  # type: ignore[arg-type]
+#             continue
 
-    for x in _flatten_args(*args):
-        if allow_str and isinstance(x, str):
-            out.append(x)  # type: ignore[arg-type]
-            continue
+#         if resolver is not None:
+#             out.append(resolver(x))
+#             continue
 
-        if resolver is not None:
-            out.append(resolver(x))
-            continue
+#         # attr-based extraction fallback
+#         got = False
+#         for name in attr_names:
+#             if hasattr(x, name):
+#                 out.append(getattr(x, name))
+#                 got = True
+#                 break
 
-        # attr-based extraction fallback
-        got = False
-        for name in attr_names:
-            if hasattr(x, name):
-                out.append(getattr(x, name))
-                got = True
-                break
+#         if got:
+#             continue
 
-        if got:
-            continue
+#         raise TypeError(f"Unsupported value type: {type(x)!r}")
 
-        raise TypeError(f"Unsupported value type: {type(x)!r}")
-
-    return _dedupe_keep_order(out)
+#     return _dedupe_keep_order(out)

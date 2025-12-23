@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic
 
+
+from pymsgraph.models.base import TModel
+from pymsgraph.utils import get_model_class
 
 if TYPE_CHECKING:
     from pymsgraph.client import Client
-    from pymsgraph.models.base import Model
 
 
 Lookup = tuple[str, Any, str]  # (field_name, value, lookup)
@@ -89,9 +91,6 @@ class Q:
 type Node = Q | Lookup
 
 
-TModel = TypeVar("TModel", bound="Model")
-
-
 @dataclass(frozen=True)
 class Capabilities:
     filter: bool
@@ -150,16 +149,18 @@ class QuerySet(Generic[TModel]):
     def __init__(
         self,
         client: Client,
-        model: type[TModel],
-        endpoint: str,
+        model: type[TModel] | str,  # type: ignore
         *,
+        endpoint: str | None = None,
         q: Q | None = None,
         params: dict[str, Any] | None = None,
         headers: dict[str, Any] | None = None,
     ) -> None:
+        if isinstance(model, str):
+            model: type[TModel] = get_model_class(model)
         self._client = client
-        self._model = model
-        self._endpoint = endpoint
+        self._model: type[TModel] = model
+        self._endpoint = endpoint or model.endpoint
         self._q = q
         self._params = params or {}
         self._headers = headers or {}
@@ -398,7 +399,7 @@ class QuerySet(Generic[TModel]):
         return self.__class__(
             self._client,
             self._model,
-            self._endpoint,
+            endpoint=self._endpoint,
             q=q or self._q,
             params=dict(self._params) if params is None else params,
             headers=dict(self._headers) if headers is None else headers,
@@ -447,16 +448,13 @@ class QuerySet(Generic[TModel]):
         if not getattr(self.capabilities, name, False):
             raise ValueError(f"{self.__class__.__name__} does not support {name}()")
 
-    def _compile_related_lookup(self, lookup: str, value: Any) -> str | None:
-        return None
-
 
 class BulkQuerySet:
-    def __init__(self, qs: QuerySet[TModel], endpoint: str) -> None:
+    def __init__(self, qs: QuerySet[TModel], endpoint: str | None = None) -> None:
         self._qs = qs
         self._client = qs._client
-        self._model = qs._model
-        self._endpoint = endpoint
+        # self._model = qs._model
+        # self._endpoint = endpoint or self._qs._endpoint
 
     @classmethod
     def as_descriptor(cls, endpoint: str) -> property:
@@ -467,47 +465,3 @@ class BulkQuerySet:
             return cls(obj, endpoint)
 
         return property(fget)
-
-    def get_qs_object_ids(self, attr: str = "id") -> list[str]:
-        ids: list[str] = []
-        seen: set[str] = set()
-
-        for item in self._qs.select(attr):
-            item_id = getattr(item, attr)  # Let it raise KeyError
-            if item_id not in seen:
-                seen.add(item_id)
-                ids.append(item_id)
-
-        return ids
-
-
-# class QuerySetBulkOperation:
-
-#     def __init__(self, qs):
-#         self.qs = qs
-
-#     def get_ids(self, attr="id") -> list[str]:
-#         ids: list[str] = []
-#         seen: set[str] = set()
-
-#         for item in self.qs.only(attr):
-#             item_id = getattr(item, attr)  # Let it raise KeyError
-#             if item_id not in seen:
-#                 seen.add(item_id)
-#                 ids.append(item_id)
-
-#         return ids
-
-#     @classmethod
-#     def as_descriptor(cls):
-#         return QuerySetDescriptor(cls)
-
-
-# class QuerySetDescriptor:
-#     def __init__(self, klass: type["QuerySetBulkOperation"]):
-#         self.klass = klass
-
-#     def __get__(self, obj: QuerySet, objtype=None) -> QuerySetBulkOperation:
-#         if obj is None:
-#             return self
-#         return self.klass(obj)

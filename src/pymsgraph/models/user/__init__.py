@@ -5,16 +5,22 @@ from typing import Any, ClassVar
 from pymsgraph import utils
 from pymsgraph.fields import BooleanField, CharField, EmailField
 from pymsgraph.models.user import compile_lookup
-from pymsgraph.models.user.groups import BulkUserQuerySetGroups, UserGroupsQuerySet
-from pymsgraph.models.user.licenses import UserLicensesQuerySet
+from pymsgraph.models.user.groups import GroupsBulkQuerySet, GroupsQuerySet
+from pymsgraph.models.user.licenses import LicensesQuerySet
 from pymsgraph.query import Capabilities, QuerySet
 
-from ..base import Model, ReadOnlyModel
+from ..base import EndpointDescriptor, Model
 
 __all__ = ["UserQuerySet"]
 
 
 class User(Model):
+    """
+    Graph user resource type.
+
+    https://learn.microsoft.com/en-us/graph/api/resources/user?view=graph-rest-1.0
+    """
+
     display_name = CharField(
         required=True,
         supported_lookups={"exact", "ne", "gte", "lte", "in", "startswith", "isnull"},
@@ -35,15 +41,16 @@ class User(Model):
     city = CharField(max_length=128, supported_lookups={"exact", "in", "startswith"})
 
     search_field = "display_name"
+    endpoint = EndpointDescriptor("/users")
 
-    groups = UserGroupsQuerySet.as_descriptor()
-    licenses = UserLicensesQuerySet.as_descriptor()
+    groups = GroupsQuerySet.as_descriptor()
+    licenses = LicensesQuerySet.as_descriptor()
 
     @property
     def direct_reports(self): ...
 
     def __repr__(self):
-        return f"<User: {self.display_name}"
+        return f"<User: {self.display_name}>"
 
     def save(self) -> bool:
         if self.id is None:
@@ -118,11 +125,10 @@ class User(Model):
 
 class UserQuerySet(QuerySet["User"]):
     model: type[User] = User
-    endpoint: str = "/users"
     capabilities: ClassVar[Capabilities] = Capabilities.read_write(search=True)
     related_lookup = {"licenses": compile_lookup._licenses}
 
-    groups: BulkUserQuerySetGroups = BulkUserQuerySetGroups.as_descriptor(endpoint="/groups")  # type: ignore
+    groups: GroupsBulkQuerySet = GroupsBulkQuerySet.as_descriptor(endpoint="/groups")  # type: ignore
 
     def create(
         self,
@@ -165,10 +171,11 @@ class UserQuerySet(QuerySet["User"]):
         return obj
 
 
-class PasswordProfile(ReadOnlyModel):
+class PasswordProfile(Model):
+    is_read_only = True
     password = CharField(read_only=True)
     force_change_password_next_sign_in = BooleanField(default=True)
     force_change_password_next_sign_in_with_mfa = BooleanField(read_only=True)
 
-    def to_graph(self) -> dict[str, Any]:
-        return {"passwordProfile": super().to_graph()}
+    def to_graph(self, *, for_update: bool = False) -> dict[str, Any]:
+        return {"passwordProfile": super().to_graph(for_update=False)}
