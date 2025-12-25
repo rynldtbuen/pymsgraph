@@ -7,9 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from pymsgraph.models.subscribed_sku import SubscribedSku
-from pymsgraph.models.user import UserQuerySet
-from pymsgraph import utils
+from pymsgraph.models import query
 
 try:
     import importlib.metadata as importlib_metadata
@@ -17,8 +15,6 @@ except ImportError:  # pragma: no cover
     import importlib_metadata  # type: ignore
 
 if TYPE_CHECKING:
-    from pymsgraph.query import QuerySet, TModel
-
     from .auth import TokenProvider
 
 __all__ = ["Client"]
@@ -35,68 +31,68 @@ def _default_user_agent() -> str:
     return f"pymsgraph/{version} (python {py_ver}; {os_name})"
 
 
-class ResourceDescriptor:
-    """
-    Simple descriptor that binds a QuerySet to a Client instance.
-    """
+# TQS = TypeVar("TQS", bound=QuerySet)
 
-    def __init__(
-        self,
-        queryset_path: str | None = None,
-        model: type[TModel] | str | None = None,
-        # *,
-        # endpoint: str | None = None,
-    ):
-        self.queryset_path = queryset_path
-        self.model = model
-        # self.endpoint = endpoint
-        # self.model = model
-        # self._cache: dict[int, Any] = {}
 
-    def __get__(
-        self, obj: "Client", objtype: type["Client"] | None = None
-    ) -> QuerySet[Any] | "ResourceDescriptor":
-        if obj is None:
-            return self
+# class ResourceDescriptor(Generic[TQS]):
+#     """
+#     Simple descriptor that binds a QuerySet to a Client instance.
+#     """
 
-        cache = getattr(obj, "_qs_cache", None)
-        if cache is None:
-            cache = obj._qs_cache = {}  # type: ignore
-        key = self.queryset_path
-        if key in cache:
-            return cache[key]
+#     def __init__(
+#         self,
+#         queryset: str | type[QuerySet] | None = None,
+#         model: type[TModel] | str | None = None,
+#         # *,
+#         # endpoint: str | None = None,
+#     ):
 
-        if self.queryset_path is not None:
-            queryset_class: type[QuerySet] = utils.get_queryset_class(
-                self.queryset_path
-            )
-        else:
-            queryset_class = QuerySet
+#         self.queryset_path = queryset_path
+#         self.model = model
+#         # self.endpoint = endpoint
+#         # self.model = model
+#         # self._cache: dict[int, Any] = {}
 
-        # e = self.endpoint or getattr(qs_cls, "endpoint", None)
-        # if e is None:
-        #     raise ValueError(
-        #         "Endpoint must be specified in descriptor or QuerySet class"
-        #     )
-        model = self.model or getattr(queryset_class, "model", None)
-        if model is None:
-            raise ValueError(
-                "Model must be pass when intializing a ResourceDescriptor or defining when subclassing a QuerySet"
-            )
+#     def __get__(
+#         self, obj: "Client", objtype: type["Client"] | None = None
+#     ) -> QuerySet | ResourceDescriptor:
+#         if obj is None:
+#             return self
 
-        qs = queryset_class(client=obj, model=model)
-        cache[key] = qs
-        return qs
+#         cache = getattr(obj, "_qs_cache", None)
+#         if cache is None:
+#             cache = obj._qs_cache = {}  # type: ignore
+#         key = self.queryset_path
+#         if key in cache:
+#             return cache[key]
+
+#         if self.queryset_path is not None:
+#             queryset_class: type[QuerySet] = utils.get_queryset_class(
+#                 self.queryset_path
+#             )
+#         else:
+#             queryset_class = QuerySet
+
+#         model = self.model or getattr(queryset_class, "model", None)
+#         if model is None:
+#             raise ValueError(
+#                 "Model must be pass when intializing a ResourceDescriptor or defining when subclassing a QuerySet"
+#             )
+
+#         qs = queryset_class(client=obj, model=model)
+#         cache[key] = qs
+#         return qs
 
 
 class Client:
 
-    users: UserQuerySet = ResourceDescriptor("user.UserQuerySet")  # type: ignore[assignment]
-    subscribed_skus: SubscribedSku = ResourceDescriptor("subscribed_sku.SubscribedSkuQuerySet")  # type: ignore
+    # groups = QuerySetDescriptor("group.GroupQuerySet")
+    # users = QuerySetDescriptor("group.UserQuerySet")
+    # subscribed_skus = QuerySetDescriptor("subscribed_sku.SubscribedSkuQuerySet")
 
     def __init__(
         self,
-        token_provider: TokenProvider,
+        token_provider: "TokenProvider",
         *,
         base_url: str = "https://graph.microsoft.com/v1.0",
         scopes: Sequence[str] | None = None,
@@ -232,3 +228,15 @@ class Client:
 
     def __exit__(self, exc_type, exc, tb) -> None:
         self.close()
+
+    @property
+    def groups(self) -> query.GroupQuerySet:
+        return query.GroupQuerySet(self)
+
+    @property
+    def users(self) -> query.UserQuerySet:
+        return query.UserQuerySet(self)
+
+    @property
+    def subscribed_sku(self) -> query.SubscribedSkuQuerySet:
+        return query.SubscribedSkuQuerySet(self)

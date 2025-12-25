@@ -114,10 +114,6 @@ class Model(metaclass=ModelBase):
         self._dirty.clear()
         self._initializing = False
 
-    @classmethod
-    def as_queryset(cls):
-        pass
-
     # @property
     # def endpoint(self) -> str:
     #     if self.id is None:

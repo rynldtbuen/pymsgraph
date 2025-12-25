@@ -1,5 +1,5 @@
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any, ClassVar, TypeAlias
+from typing import Any, ClassVar, TypeAlias
 
 from pymsgraph import utils
 from pymsgraph.fields import CharField
@@ -7,13 +7,10 @@ from pymsgraph.models.base import Model
 from pymsgraph.query import BulkQuerySet, Capabilities, QuerySet
 from pymsgraph.models.subscribed_sku import ServicePlanInfo
 
-if TYPE_CHECKING:
-    from pymsgraph.models.user import User
-
 
 class LicenseDetails(Model):
     """
-    Graph licenseDetails resource type.
+    Graph licenseDetails  resource type.
     """
 
     is_read_only = True
@@ -45,34 +42,15 @@ class LicensesQuerySet(QuerySet["LicenseDetails"]):
         User.licenses.remove(...)
     """
 
-    capabilities: ClassVar[Capabilities] = Capabilities.read_only()
-
-    @classmethod
-    def as_descriptor(cls) -> property:
-        def fget(obj: "User", objtype=None) -> LicensesQuerySet:
-            if obj is None:
-                return cls  # type: ignore
-            if obj.id is None:
-                raise ValueError("User is not initialized or does not exist")
-            qs = LicensesQuerySet(
-                obj.client,
-                LicenseDetails,
-                endpoint=f"{obj.endpoint}/licenseDetails",
-            )
-            qs._user = obj  # type: ignore[attr-defined]
-            return qs
-
-        return property(fget=fget)
+    model_class = LicenseDetails
+    capabilities = Capabilities.read_only()
 
     def add(self, *args: arg_types) -> None:
         """
         Add license/s to this user.
         """
 
-        user = getattr(self, "_user", None)
-        if not user:
-            raise ValueError("User is not configured for this queryset")
-
+        user = self._get_object()
         objects: list[LicenseDetails] = list(
             utils.coerce_objects(*args, model=LicenseDetails, key="sku_id")
         )
@@ -94,10 +72,7 @@ class LicensesQuerySet(QuerySet["LicenseDetails"]):
         Remove license/s from this user.
         """
 
-        user = getattr(self, "_user", None)
-        if not user:
-            raise ValueError("User is not configured for this queryset")
-
+        user = self._get_object()
         objects: list[LicenseDetails] = list(
             utils.coerce_objects(*args, model=LicenseDetails, key="sku_id")
         )

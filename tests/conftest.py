@@ -1,3 +1,4 @@
+from functools import partial
 import json
 import pytest
 import httpx
@@ -63,4 +64,4 @@ def user_qs(make_client):
         return httpx.Response(200, json={"value": []})
 
     client, _ = make_client(handler)
-    return UserQuerySet(client=client, model=User, endpoint="/users")
+    return UserQuerySet(client)

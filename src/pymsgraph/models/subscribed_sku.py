@@ -72,5 +72,5 @@ class SubscribedSku(Model):
 
 
 class SubscribedSkuQuerySet(QuerySet[SubscribedSku]):
-    model: type[SubscribedSku] = SubscribedSku
-    capabilities: ClassVar[Capabilities] = Capabilities.read_only()
+    model_class = SubscribedSku
+    capabilities = Capabilities.read_only()

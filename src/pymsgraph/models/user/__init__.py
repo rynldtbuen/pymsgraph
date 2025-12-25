@@ -4,12 +4,11 @@ from typing import Any, ClassVar
 
 from pymsgraph import utils
 from pymsgraph.fields import BooleanField, CharField, EmailField
-from pymsgraph.models.user import compile_lookup
-from pymsgraph.models.user.groups import GroupsBulkQuerySet, GroupsQuerySet
-from pymsgraph.models.user.licenses import LicensesQuerySet
+from pymsgraph.models.base import EndpointDescriptor, Model
 from pymsgraph.query import Capabilities, QuerySet
 
-from ..base import EndpointDescriptor, Model
+from . import groups, licenses, compile_lookup
+
 
 __all__ = ["UserQuerySet"]
 
@@ -43,8 +42,19 @@ class User(Model):
     search_field = "display_name"
     endpoint = EndpointDescriptor("/users")
 
-    groups = GroupsQuerySet.as_descriptor()
-    licenses = LicensesQuerySet.as_descriptor()
+    @property
+    def groups(self) -> groups.GroupsQuerySet:
+        qs = groups.GroupsQuerySet(self.client, endpoint=f"{self.endpoint}/memberOf")
+        qs._obj = self
+        return qs
+
+    @property
+    def licenses(self) -> licenses.LicensesQuerySet:
+        qs = licenses.LicensesQuerySet(
+            self.client, endpoint=f"{self.endpoint}/licenseDetails"
+        )
+        qs._obj = self
+        return qs
 
     @property
     def direct_reports(self): ...
@@ -124,11 +134,17 @@ class User(Model):
 
 
 class UserQuerySet(QuerySet["User"]):
-    model: type[User] = User
-    capabilities: ClassVar[Capabilities] = Capabilities.read_write(search=True)
+    model_class = User
+    capabilities = Capabilities.read_write(search=True)
     related_lookup = {"licenses": compile_lookup._licenses}
 
-    groups: GroupsBulkQuerySet = GroupsBulkQuerySet.as_descriptor(endpoint="/groups")  # type: ignore
+    @property
+    def groups(self) -> groups.GroupsBulkQuerySet:
+        return groups.GroupsBulkQuerySet(self)
+
+    @property
+    def licenses(self) -> licenses.LicensesBulkQuerySet:
+        return licenses.LicensesBulkQuerySet(self)
 
     def create(
         self,
@@ -149,7 +165,7 @@ class UserQuerySet(QuerySet["User"]):
                 )
             password = utils.generate_password(14)
 
-        obj = self._model(
+        obj = self.model_class(
             display_name=display_name,
             user_principal_name=user_principal_name,
             mail_nickname=mail_nickname,
@@ -166,7 +182,7 @@ class UserQuerySet(QuerySet["User"]):
             ).to_graph()
         )
         c = self._client
-        e = self._endpoint
+        e = self.endpoint
         obj.refresh_from_graph(c.post(e, json_body=payload))
         return obj
 

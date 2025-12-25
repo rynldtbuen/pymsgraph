@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any, ClassVar
 
 # from pymsgraph import utils
 from pymsgraph.fields import BooleanField, CharField, Field
-
 from pymsgraph.models.base import EndpointDescriptor, Model
-
-# from pymsgraph.query import QuerySet
-
-# if TYPE_CHECKING:
-#     from .user import User
+from pymsgraph.models.group import compile_lookup
+from pymsgraph.models.group.members import MembersQuerySet
+from pymsgraph.query import Capabilities, QuerySet
 
 
 class Group(Model):
@@ -27,20 +24,76 @@ class Group(Model):
 
     endpoint = EndpointDescriptor("/groups")
 
+    @property
+    def group_type(self) -> str:
+        """
+        Classify the group based on Graph flags:
+          - "microsoft365": groupTypes contains "Unified" (M365 group)
+          - "mail_enabled_security": mailEnabled and securityEnabled
+          - "security": securityEnabled only
+          - "distribution": mailEnabled only (and not Unified)
+          - "unknown": fallback when flags are inconclusive
+        """
+        gtypes = {*(self.group_types or [])}
+        has_unified = "Unified" in gtypes
+        mail = bool(self.mail_enabled)
+        security = bool(self.security_enabled)
 
-#     @property
-#     def members(self):
-#         try:
-#             return self._members  # type: ignore
-#         except AttributeError:
-#             from .user import User
+        if has_unified:
+            return "microsoft365"
+        if mail and security:
+            return "mail_enabled_security"
+        if security and not mail:
+            return "security"
+        if mail and not security:
+            return "distribution"
+        return "unknown"
 
-#             members = BaseManager.from_queryset(_MembersQuerySet)(User, group=self)
-#             self._members = members
-#             return members
+    @property
+    def members(self) -> MembersQuerySet:
+        qs = MembersQuerySet(self.client, endpoint=f"{self.endpoint}/members")
+        qs._obj = self
+        return qs
+
+    def __repr__(self) -> str:
+        return f"<Group: {self.display_name}, type={self.group_type}"
 
 
-# class _MembersQuerySet(QuerySet["User"]):
+class GroupQuerySet(QuerySet["Group"]):
+    model_class = Group
+    capabilities = Capabilities.read_write(search=True)
+
+    related_lookup = {"group_types": compile_lookup._group_types}
+    search_field = "display_namme"
+
+    def create(
+        self,
+        *,
+        display_name: str,
+        mail_enabled: bool,
+        mail_nickname: str,
+        security_enabled: bool,
+        **kwargs: Any,
+    ) -> "Group":
+        obj = self.model_class(
+            display_name=display_name,
+            mail_enabled=mail_enabled,
+            mail_nickname=mail_nickname,
+            security_enabled=security_enabled,
+            qs=self,
+            **kwargs,
+        )
+        obj._validate_for_create()
+        payload = obj.to_graph(for_update=False)
+        graph_data = self._client.post(self.endpoint, json_body=payload)
+        obj.refresh_from_graph(graph_data)
+        return obj
+
+    @property
+    def unified(self):
+        return self.filter(group_types="Unified")
+
+
 #     @property
 #     def endpoint(self) -> str:
 #         return f"{self._kwargs['group'].get_endpoint()}/members"

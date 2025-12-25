@@ -1,4 +1,5 @@
 import json
+from typing import Any
 import httpx
 import pytest
 
@@ -26,7 +27,7 @@ def test_user_queryset_create(make_client):
         )
 
     client, requests = make_client(handler)
-    qs = UserQuerySet(client=client, model=User, endpoint="/users")
+    qs = UserQuerySet(client)
 
     user = qs.create(
         display_name="Alice",
@@ -51,7 +52,7 @@ def test_user_save_patches_dirty_fields(make_client):
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
     client, requests = make_client(handler)
-    qs = UserQuerySet(client=client, model=User, endpoint="/users")
+    qs = UserQuerySet(client)
 
     user = User(qs=qs, graph_data={"id": "123", "displayName": "Alice"})
     assert user._dirty == set()
@@ -122,7 +123,7 @@ def test_user_queryset_count_uses_odata_count(make_client):
         )
 
     client, _ = make_client(handler)
-    qs = UserQuerySet(client=client, model=User, endpoint="/users")
+    qs = UserQuerySet(client)
     assert qs.count() == 42
     # Cached objects should also be hydrated
     assert len(list(qs)) == 2
@@ -143,7 +144,7 @@ def test_user_queryset_get_by_id(make_client):
         )
 
     client, _ = make_client(handler)
-    qs = UserQuerySet(client=client, model=User, endpoint="/users")
+    qs = UserQuerySet(client)
     user = qs.get(id="abc")
     assert user is not None
     assert user.id == "abc"
@@ -155,22 +156,21 @@ def test_user_groups_add_remove(make_client):
     seen: list[tuple[str, str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
         seen.append((request.method, request.url.path))
         if request.method == "POST" and request.url.path == "/v1.0/$batch":
             body = json.loads(request.content.decode())
             requests = body.get("requests", [])
             first_method = requests[0]["method"] if requests else None
-            if first_method == "PATCH":
+            if first_method == "POST":
                 assert requests == [
                     {
                         "id": "1",
-                        "method": "PATCH",
-                        "url": "/groups/g1",
+                        "method": "POST",
+                        "url": "/groups/g1/members/$ref",
                         "headers": {"Content-Type": "application/json"},
                         "body": {
-                            "members@odata.bind": [
-                                "https://graph.microsoft.com/v1.0/directoryObjects/123"
-                            ]
+                            "@odata.id": "https://graph.microsoft.com/v1.0/directoryObjects/123"
                         },
                     }
                 ]
@@ -188,7 +188,7 @@ def test_user_groups_add_remove(make_client):
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
     client, requests = make_client(handler)
-    qs = UserQuerySet(client=client, model=User, endpoint="/users")
+    qs = UserQuerySet(client)
     user = User(qs=qs, graph_data={"id": "123", "displayName": "Alice"})
 
     user.groups.add("g1")
@@ -198,6 +198,49 @@ def test_user_groups_add_remove(make_client):
         ("POST", "/v1.0/$batch"),
         ("POST", "/v1.0/$batch"),
     ]
+    assert len(requests) == 2
+
+
+def test_user_groups_add_remove_multiple(make_client):
+    seen: list[list[dict[str, Any]]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path == "/v1.0/$batch":
+            body = json.loads(request.content.decode())
+            seen.append(body.get("requests", []))
+            return httpx.Response(200, json={"responses": [{"id": "1", "status": 204}]})
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    client, requests = make_client(handler)
+    qs = UserQuerySet(client)
+    user = User(qs=qs, graph_data={"id": "123", "displayName": "Alice"})
+
+    user.groups.add("g1", "g2")
+    user.groups.remove("g1", "g2")
+
+    # Two batch calls: add then remove
+    assert len(seen) == 2
+    add_requests, remove_requests = seen
+
+    # Add batch: two POSTs to /groups/{gid}/members/$ref with correct body
+    assert {req["method"] for req in add_requests} == {"POST"}
+    assert {req["url"] for req in add_requests} == {
+        "/groups/g1/members/$ref",
+        "/groups/g2/members/$ref",
+    }
+    for req in add_requests:
+        assert req.get("headers", {}).get("Content-Type") == "application/json"
+        assert req.get("body") == {
+            "@odata.id": "https://graph.microsoft.com/v1.0/directoryObjects/123"
+        }
+
+    # Remove batch: two DELETEs to /groups/{gid}/members/{uid}/$ref
+    assert {req["method"] for req in remove_requests} == {"DELETE"}
+    assert {req["url"] for req in remove_requests} == {
+        "/groups/g1/members/123/$ref",
+        "/groups/g2/members/123/$ref",
+    }
+
     assert len(requests) == 2
 
 
@@ -220,7 +263,7 @@ def test_user_licenses_add_remove(make_client):
         return httpx.Response(200, json={"responses": [{"id": "1", "status": 200}]})
 
     client, _ = make_client(handler)
-    qs = UserQuerySet(client=client, model=User)
+    qs = UserQuerySet(client)
     user = User(qs=qs, graph_data={"id": "123", "displayName": "Alice"})
 
     user.licenses.add("sku1")
@@ -245,7 +288,7 @@ def test_user_groups_descriptor(make_client):
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
     client, requests = make_client(handler)
-    qs = UserQuerySet(client=client, model=User, endpoint="/users")
+    qs = UserQuerySet(client)
     user = User(qs=qs, graph_data={"id": "123", "displayName": "Alice"})
 
     groups_qs = user.groups

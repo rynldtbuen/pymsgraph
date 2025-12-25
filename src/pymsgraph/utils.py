@@ -85,7 +85,7 @@ def snake_to_camel(name: str) -> str:
     return parts[0] + "".join(p[:1].upper() + p[1:] for p in parts[1:])
 
 
-def get_model_class(model_name: str):
+def get_model_class(model_name: str) -> type[Model]:
     module_name = camel_to_snake(model_name)
     mod = importlib.import_module(f"pymsgraph.models.{module_name}")
     return getattr(mod, model_name)
@@ -139,13 +139,14 @@ def coerce_objects(
                 yield from _iter_flatten(*arg)
             elif isinstance(arg, QuerySet):
                 yield from arg
-            return
+            else:
+                continue
 
     from pymsgraph.models.base import Model
     from pymsgraph.query import QuerySet
 
     if isinstance(model, str):
-        model: type[TModel] = get_model_class(model)
+        model: type[Model] = get_model_class(model)
 
     seen: set = set()
 
