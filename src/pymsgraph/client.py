@@ -240,3 +240,7 @@ class Client:
     @property
     def subscribed_sku(self) -> query.SubscribedSkuQuerySet:
         return query.SubscribedSkuQuerySet(self)
+
+    @property
+    def sites(self) -> query.SiteQuerySet:
+        return query.SiteQuerySet(self)

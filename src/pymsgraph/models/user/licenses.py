@@ -52,7 +52,7 @@ class LicensesQuerySet(QuerySet["LicenseDetails"]):
 
         user = self._get_object()
         objects: list[LicenseDetails] = list(
-            utils.coerce_objects(*args, model=LicenseDetails, key="sku_id")
+            utils.coerce_objects(*args, model_class=self.model_class, key="sku_id")
         )
         if not objects:
             return
@@ -74,7 +74,7 @@ class LicensesQuerySet(QuerySet["LicenseDetails"]):
 
         user = self._get_object()
         objects: list[LicenseDetails] = list(
-            utils.coerce_objects(*args, model=LicenseDetails, key="sku_id")
+            utils.coerce_objects(*args, model_class=self.model_class, key="sku_id")
         )
         if not objects:
             return
@@ -103,7 +103,7 @@ class LicensesBulkQuerySet(BulkQuerySet):
         """
 
         objects: list[LicenseDetails] = list(
-            utils.coerce_objects(*args, model=LicenseDetails, key="sku_id")
+            utils.coerce_objects(*args, model_class=LicenseDetails, key="sku_id")
         )
         if not objects:
             return
@@ -138,7 +138,7 @@ class LicensesBulkQuerySet(BulkQuerySet):
         """
 
         objects: list[LicenseDetails] = list(
-            utils.coerce_objects(*args, model=LicenseDetails, key="sku_id")
+            utils.coerce_objects(*args, model_class=LicenseDetails, key="sku_id")
         )
         if not objects:
             return

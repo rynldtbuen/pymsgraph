@@ -52,9 +52,9 @@ def test_user_save_patches_dirty_fields(make_client):
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
     client, requests = make_client(handler)
-    qs = UserQuerySet(client)
+    # qs = UserQuerySet(client)
 
-    user = User(qs=qs, graph_data={"id": "123", "displayName": "Alice"})
+    user = User(graph_data={"id": "123", "displayName": "Alice"}, client=client)
     assert user._dirty == set()
 
     user.job_title = "Engineer"
@@ -188,8 +188,8 @@ def test_user_groups_add_remove(make_client):
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
     client, requests = make_client(handler)
-    qs = UserQuerySet(client)
-    user = User(qs=qs, graph_data={"id": "123", "displayName": "Alice"})
+    # qs = UserQuerySet(client)
+    user = User(graph_data={"id": "123", "displayName": "Alice"}, client=client)
 
     user.groups.add("g1")
     user.groups.remove("g1")
@@ -212,8 +212,8 @@ def test_user_groups_add_remove_multiple(make_client):
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
     client, requests = make_client(handler)
-    qs = UserQuerySet(client)
-    user = User(qs=qs, graph_data={"id": "123", "displayName": "Alice"})
+    # qs = UserQuerySet(client)
+    user = User(graph_data={"id": "123", "displayName": "Alice"}, client=client)
 
     user.groups.add("g1", "g2")
     user.groups.remove("g1", "g2")
@@ -263,8 +263,8 @@ def test_user_licenses_add_remove(make_client):
         return httpx.Response(200, json={"responses": [{"id": "1", "status": 200}]})
 
     client, _ = make_client(handler)
-    qs = UserQuerySet(client)
-    user = User(qs=qs, graph_data={"id": "123", "displayName": "Alice"})
+    # qs = UserQuerySet(client)
+    user = User(client=client, graph_data={"id": "123", "displayName": "Alice"})
 
     user.licenses.add("sku1")
     user.licenses.remove("sku1")
@@ -288,8 +288,8 @@ def test_user_groups_descriptor(make_client):
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
     client, requests = make_client(handler)
-    qs = UserQuerySet(client)
-    user = User(qs=qs, graph_data={"id": "123", "displayName": "Alice"})
+    # qs = UserQuerySet(client)
+    user = User(graph_data={"id": "123", "displayName": "Alice"}, client=client)
 
     groups_qs = user.groups
     groups = list(groups_qs)
@@ -346,7 +346,13 @@ def test_user_delete_requires_id(make_client):
         u.delete(force=True)
 
 
-def test_user_delete_force_calls_delete(make_client, user_qs):
+def test_user_delete_force_calls_delete(make_client):
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "DELETE"
+        assert request.url.path == "/v1.0/users/u_del"
+        return httpx.Response(204)
+
+    client, _ = make_client(handler)
     u = User(
         graph_data={
             "id": "u_del",
@@ -355,15 +361,8 @@ def test_user_delete_force_calls_delete(make_client, user_qs):
             "accountEnabled": True,
             "mailNickname": "del",
         },
-        qs=user_qs,
+        client=client,
     )
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.method == "DELETE"
-        assert request.url.path == "/v1.0/users/u_del"
-        return httpx.Response(204)
-
-    make_client(handler)
 
     u.delete(force=True)
     # after local cleanup, id should no longer be present

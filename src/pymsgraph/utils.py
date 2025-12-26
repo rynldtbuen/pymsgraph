@@ -119,7 +119,7 @@ def chunks(iterable: Iterable[T], size: int = 2) -> Iterator[list[T]]:
 
 def coerce_objects(
     *args: str | TModel | Iterable[str] | Iterable[TModel] | QuerySet[TModel],
-    model: type[TModel] | str,  # type: ignore
+    model_class: type[TModel] | str,  # pyright: ignore[reportRedeclaration]
     key: str = "id",
 ) -> Iterator[TModel]:
     def _is_iterable_but_not_str(x: Any) -> bool:
@@ -132,7 +132,7 @@ def coerce_objects(
     ) -> Iterator[TModel]:
         for arg in args:
             if isinstance(arg, str):
-                yield model(**{key: arg})  # type: ignore
+                yield model_class(**{key: arg})  # type: ignore
             elif isinstance(arg, Model):
                 yield arg
             elif _is_iterable_but_not_str(arg):
@@ -145,10 +145,10 @@ def coerce_objects(
     from pymsgraph.models.base import Model
     from pymsgraph.query import QuerySet
 
-    if isinstance(model, str):
-        model: type[Model] = get_model_class(model)
+    if isinstance(model_class, str):
+        model_class: type[Model] = get_model_class(model_class)
 
-    seen: set = set()
+    seen: set[str] = set()
 
     for obj in _iter_flatten(*args):
         try:
@@ -157,6 +157,7 @@ def coerce_objects(
             continue
         if val not in seen:
             yield obj
+        seen.add(val)
 
 
 # def coerce_ids(*args: Any) -> list[str]:

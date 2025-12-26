@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import Any
 
-# from pymsgraph import utils
 from pymsgraph.fields import BooleanField, CharField, Field
-from pymsgraph.models.base import EndpointDescriptor, Model
-from pymsgraph.models.group import compile_lookup
-from pymsgraph.models.group.members import MembersQuerySet
+from pymsgraph.models.base import Model
 from pymsgraph.query import Capabilities, QuerySet
+
+from . import compile_lookup, members, owners
 
 
 class Group(Model):
@@ -22,7 +21,7 @@ class Group(Model):
     group_types = Field()  # graph: groupTypes (list[str])
     visibility = CharField()
 
-    endpoint = EndpointDescriptor("/groups")
+    endpoint = "/groups"
 
     @property
     def group_type(self) -> str:
@@ -50,8 +49,14 @@ class Group(Model):
         return "unknown"
 
     @property
-    def members(self) -> MembersQuerySet:
-        qs = MembersQuerySet(self.client, endpoint=f"{self.endpoint}/members")
+    def members(self) -> members.MembersQuerySet:
+        qs = members.MembersQuerySet(self.client, endpoint=f"{self.endpoint}/members")
+        qs._obj = self
+        return qs
+
+    @property
+    def owners(self) -> owners.OwnersQuerySet:
+        qs = owners.OwnersQuerySet(self.client, endpoint=f"{self.endpoint}/owners")
         qs._obj = self
         return qs
 
@@ -64,25 +69,10 @@ class GroupQuerySet(QuerySet["Group"]):
     capabilities = Capabilities.read_write(search=True)
 
     related_lookup = {"group_types": compile_lookup._group_types}
-    search_field = "display_namme"
+    search_field = "display_name"
 
-    def create(
-        self,
-        *,
-        display_name: str,
-        mail_enabled: bool,
-        mail_nickname: str,
-        security_enabled: bool,
-        **kwargs: Any,
-    ) -> "Group":
-        obj = self.model_class(
-            display_name=display_name,
-            mail_enabled=mail_enabled,
-            mail_nickname=mail_nickname,
-            security_enabled=security_enabled,
-            qs=self,
-            **kwargs,
-        )
+    def create(self, **kwargs: Any) -> "Group":
+        obj = self.model_class(client=self._client, **kwargs)
         obj._validate_for_create()
         payload = obj.to_graph(for_update=False)
         graph_data = self._client.post(self.endpoint, json_body=payload)

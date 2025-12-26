@@ -40,7 +40,7 @@ class User(Model):
     city = CharField(max_length=128, supported_lookups={"exact", "in", "startswith"})
 
     search_field = "display_name"
-    endpoint = EndpointDescriptor("/users")
+    endpoint = "/users"
 
     @property
     def groups(self) -> groups.GroupsQuerySet:

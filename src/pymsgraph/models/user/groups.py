@@ -30,9 +30,9 @@ class GroupsQuerySet(QuerySet["Group"]):
         """
 
         user = self._get_object()
-        objects: tuple["Group", ...] = tuple(utils.coerce_objects(*args, model="Group"))
-        if not objects:
-            return
+        objects: tuple["Group", ...] = tuple(
+            utils.coerce_objects(*args, model_class=self.model_class)
+        )
 
         client = self._client
         for groups in utils.chunks(objects, 20):
@@ -58,9 +58,7 @@ class GroupsQuerySet(QuerySet["Group"]):
         """
 
         user = self._get_object()
-        objects: tuple["Group", ...] = tuple(utils.coerce_objects(*args, model="Group"))
-        if not objects:
-            return
+        objects = utils.coerce_objects(*args, model_class=self.model_class)
 
         client = self._client
         for groups in utils.chunks(objects, 20):
@@ -98,10 +96,7 @@ class GroupsBulkQuerySet(BulkQuerySet):
         Add group/s to users in this queryset.
         """
 
-        objects: tuple["Group", ...] = tuple(utils.coerce_objects(*args, model="Group"))
-        if not objects:
-            return
-
+        objects = utils.coerce_objects(*args, model_class="Group")
         client = self._client
 
         for group in objects:
@@ -116,10 +111,7 @@ class GroupsBulkQuerySet(BulkQuerySet):
         """
         Remove group/s from users in this queryset.
         """
-        objects: tuple["Group", ...] = tuple(utils.coerce_objects(*args, model="Group"))
-        if not objects:
-            return
-
+        objects = utils.coerce_objects(*args, model_class="Group")
         client = self._client
 
         for group in objects:

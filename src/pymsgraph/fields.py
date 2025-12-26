@@ -110,7 +110,7 @@ class CharField(Field):
             raise TypeError(f"{self.name} must be str (got {type(value).__name__})")
         if self.max_length is not None and len(value) > self.max_length:
             raise ValueError(f"{self.name} exceeds max_length={self.max_length}")
-        return " ".join([i.strip() for i in value.split(" ")])
+        return " ".join([i.strip() for i in value.strip().split(" ")])
 
 
 class EmailField(CharField):

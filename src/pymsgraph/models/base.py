@@ -27,6 +27,21 @@ class Meta:
         return f.graph_name
 
 
+class EndpointDescriptor:
+    def __init__(self, endpoint: str | None = None):
+        self.endpoint = endpoint
+
+    def __get__(self, obj: Model, objtype=None) -> str | None:
+        if obj is None:
+            return self.endpoint
+        relative_endpoint = obj.id or obj._relative_endpoint
+        if relative_endpoint is None:
+            raise ValueError(
+                f"Resource {type(obj)} has not been initialized or does not exist"
+            )
+        return f"{self.endpoint}/{relative_endpoint}"
+
+
 class ModelBase(type):
     """Metaclass thats collects Field descriptors from class definitions"""
 
@@ -52,22 +67,9 @@ class ModelBase(type):
                 by_graph[f.graph_name] = f
 
         setattr(cls, "_meta", Meta(fields=fields, fields_by_graph=by_graph))
+        setattr(cls, "endpoint", EndpointDescriptor(attrs.get("endpoint")))
 
         return cls
-
-
-class EndpointDescriptor:
-    def __init__(self, endpoint: str):
-        self.endpoint = endpoint
-
-    def __get__(self, obj, objtype=None) -> str:
-        if obj is None:
-            return self.endpoint
-        if not obj.id:
-            raise ValueError(
-                f"Resource {type(obj)} has not been initialized or does not exist"
-            )
-        return f"{self.endpoint}/{obj.id}"
 
 
 class Model(metaclass=ModelBase):
@@ -78,18 +80,20 @@ class Model(metaclass=ModelBase):
     _meta: ClassVar[Meta]
     is_read_only: ClassVar[bool] = False
 
-    endpoint: EndpointDescriptor
+    endpoint: ClassVar[str]
     id = CharField(read_only=True)
 
     def __init__(
         self,
         *,
-        qs: QuerySet | None = None,
+        qs: "QuerySet | None" = None,
+        client: "Client | None" = None,
         graph_data: dict[str, Any] | None = None,
         **kwargs,
     ):
         self._initializing = True
         self._qs = qs
+        self._client = client
         self._data: dict[str, Any] = {}
         self._graph_data = graph_data or {}
         self._dirty: set[str] = set()
@@ -114,20 +118,11 @@ class Model(metaclass=ModelBase):
         self._dirty.clear()
         self._initializing = False
 
-    # @property
-    # def endpoint(self) -> str:
-    #     if self.id is None:
-    #         raise ValueError("Resource has not been initialized or does not exist")
-    #     qs_endpoint = self._qs._endpoint if self._qs else None
-    #     if qs_endpoint:
-    #         return f"{qs_endpoint}/{self.id}"
-    #     raise ValueError("QuerySet endpoint is not configured for this model instance")
-
     @property
     def client(self) -> Client:
-        if self._qs is None:
+        if (c := self._client) is None:
             raise ValueError("QuerySet is not configured for this model instance")
-        return self._qs._client
+        return c
 
     def to_graph(self, *, for_update: bool) -> dict[str, Any]:  # type: ignore
         out: dict[str, Any] = {}
@@ -196,3 +191,7 @@ class Model(metaclass=ModelBase):
                     missing.append(py_name)
         if missing:
             raise ValueError(f"Missing required fields: {', '.join(missing)}")
+
+    @property
+    def _relative_endpoint(self) -> str | None:
+        return None

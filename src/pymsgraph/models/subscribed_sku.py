@@ -1,6 +1,6 @@
 from typing import ClassVar
 from pymsgraph.fields import CharField, IntegerField, ObjectField
-from pymsgraph.models.base import EndpointDescriptor, Model
+from pymsgraph.models.base import Model
 from pymsgraph.query import Capabilities, QuerySet
 
 
@@ -65,7 +65,7 @@ class SubscribedSku(Model):
     prepaid_units = LicenseUnitsDetail.as_descriptor()
     service_plans = ServicePlanInfo.as_descriptor()
 
-    endpoint = EndpointDescriptor("/subscribedSkus")
+    endpoint = "/subscribedSkus"
 
     def __repr__(self):
         return f"<SubscribedSku: {self.sku_id}>"
