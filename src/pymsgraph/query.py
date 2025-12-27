@@ -169,11 +169,14 @@ class EndpointDescriptor:
         if obj is None:
             return self.endpoint
         ep = self.endpoint
+        mc_ep = obj.model_class.endpoint
         if parent_ep := getattr(obj._parent, "endpoint", None):
             if ep:
                 return f"{parent_ep}{ep}"
+            if mc_ep:
+                return f"{parent_ep}{mc_ep}"
             return parent_ep
-        if mc_ep := obj.model_class.endpoint:
+        if mc_ep:
             if ep:
                 return f"{mc_ep}{ep}"
             return mc_ep

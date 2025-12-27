@@ -18,6 +18,7 @@ class List(Model):
     web_url = CharField(read_only=True)
 
     is_read_only = True
+    endpoint = "/lists"
 
     def __repr__(self) -> str:  # pragma: no cover - trivial
         return f"<List: {self.display_name or self.name}>"

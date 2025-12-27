@@ -35,8 +35,7 @@ class Site(Model):
 
     @property
     def lists(self) -> ListQuerySet:
-        qs = ListQuerySet(self._client, parent=self)
-        return qs
+        return ListQuerySet(parent=self)
 
     def __repr__(self) -> str:
         return f"<Site: {self.display_name or self.name}>"
@@ -47,11 +46,9 @@ class SiteQuerySet(QuerySet[Site]):
     capabilities = Capabilities.read_only(search=True)
 
     def search(self, keyword: str) -> "QuerySet[Site]":
-        params = dict(self._params)
-        params["search"] = f'"{keyword}"'
-        headers = dict(self._headers)
-        headers.setdefault("ConsistencyLevel", "eventual")
-        return self._clone(params=params, headers=headers)
+        self._params["search"] = f'"{keyword}"'
+        self._headers.setdefault("ConsistencyLevel", "eventual")
+        return self._make_clone()
 
     def get(
         self,
@@ -68,19 +65,18 @@ class SiteQuerySet(QuerySet[Site]):
             data = self._client.get(
                 f"{self.endpoint}/{id}", params=self._params, headers=self._headers
             )
-            return self.model_class(graph_data=data, client=self._client)
+        else:
+            # path resolution: /sites/{hostname}:{server-relative-path}
+            p = (path or "").strip()
+            if not p.startswith("/"):
+                p = "/" + p
+            data = self._client.get(
+                f"{self.endpoint}/{self._get_hostname()}:{p}",
+                params=self._params,
+                headers=self._headers,
+            )
 
-        # path resolution: /sites/{hostname}:{server-relative-path}
-        p = (path or "").strip()
-        if not p.startswith("/"):
-            p = "/" + p
-        data = self._client.get(
-            f"{self.endpoint}/{self._get_hostname()}:{p}",
-            params=self._params,
-            headers=self._headers,
-        )
-
-        return self.model_class(graph_data=data, client=self._client)
+        return self.model_class(graph_data=data, parent=self)
 
     def _get_hostname(self) -> str:
         """Resolve and cache the SharePoint hostname (e.g. contoso.sharepoint.com)."""
