@@ -1,5 +1,6 @@
 from functools import partial
 import json
+from typing import Any, Callable, TypeAlias
 import pytest
 import httpx
 
@@ -17,13 +18,18 @@ def fake_token_provider() -> FakeTokenProvider:
     return FakeTokenProvider()
 
 
+Handler: TypeAlias = Callable[[httpx.Request], httpx.Response]
+CapturedRequest: TypeAlias = list[dict[str, Any]]
+MakeClient: TypeAlias = Callable[[Handler], tuple[Client, CapturedRequest]]
+
+
 @pytest.fixture
-def make_client(fake_token_provider):
+def make_client(fake_token_provider: Any) -> MakeClient:
     """
     Build a Client with a provided httpx.MockTransport handler.
     """
 
-    def _make(handler) -> tuple[Client, list[dict]]:
+    def _make(handler: Handler) -> tuple[Client, CapturedRequest]:
         requests: list[dict] = []
 
         def _handler(request: httpx.Request) -> httpx.Response:

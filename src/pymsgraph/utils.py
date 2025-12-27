@@ -5,7 +5,7 @@ import re
 import secrets
 import string
 from collections.abc import Iterable, Iterator
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 if TYPE_CHECKING:
     from pymsgraph.models.base import TModel, Model
@@ -119,7 +119,7 @@ def chunks(iterable: Iterable[T], size: int = 2) -> Iterator[list[T]]:
 
 def coerce_objects(
     *args: str | TModel | Iterable[str] | Iterable[TModel] | QuerySet[TModel],
-    model_class: type[TModel] | str,  # pyright: ignore[reportRedeclaration]
+    queryset: QuerySet[TModel],  # pyright: ignore[reportRedeclaration]
     key: str = "id",
 ) -> Iterator[TModel]:
     def _is_iterable_but_not_str(x: Any) -> bool:
@@ -132,7 +132,7 @@ def coerce_objects(
     ) -> Iterator[TModel]:
         for arg in args:
             if isinstance(arg, str):
-                yield model_class(**{key: arg})  # type: ignore
+                yield queryset.make(**{key: arg})
             elif isinstance(arg, Model):
                 yield arg
             elif _is_iterable_but_not_str(arg):
@@ -145,8 +145,8 @@ def coerce_objects(
     from pymsgraph.models.base import Model
     from pymsgraph.query import QuerySet
 
-    if isinstance(model_class, str):
-        model_class: type[Model] = get_model_class(model_class)
+    # if isinstance(model_class, str):
+    #     model_class: type[TModel] = cast(type[TModel], get_model_class(model_class))
 
     seen: set[str] = set()
 

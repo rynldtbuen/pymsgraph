@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import Any
 
 from pymsgraph import utils
 from pymsgraph.fields import BooleanField, CharField, EmailField
-from pymsgraph.models.base import EndpointDescriptor, Model
+from pymsgraph.models.base import Model
 from pymsgraph.query import Capabilities, QuerySet
 
 from . import groups, licenses, compile_lookup
@@ -44,17 +44,11 @@ class User(Model):
 
     @property
     def groups(self) -> groups.GroupsQuerySet:
-        qs = groups.GroupsQuerySet(self.client, endpoint=f"{self.endpoint}/memberOf")
-        qs._obj = self
-        return qs
+        return groups.GroupsQuerySet(parent=self)
 
     @property
     def licenses(self) -> licenses.LicensesQuerySet:
-        qs = licenses.LicensesQuerySet(
-            self.client, endpoint=f"{self.endpoint}/licenseDetails"
-        )
-        qs._obj = self
-        return qs
+        return licenses.LicensesQuerySet(parent=self)
 
     @property
     def direct_reports(self): ...
@@ -70,7 +64,7 @@ class User(Model):
         if not payload:
             return False
 
-        self.client.patch(self.endpoint, json_body=payload)
+        self._client.patch(self.endpoint, json_body=payload)
         self._dirty.clear()
         return True
 
@@ -105,10 +99,10 @@ class User(Model):
             force_change_password_next_sign_in_with_mfa=force_change_password_next_sign_in_with_mfa,
         ).to_graph()
 
-        self.client.patch(self.endpoint, json_body=body)
+        self._client.patch(self.endpoint, json_body=body)
 
     def revoke_sign_in_sessions(self):
-        return self.client.post(f"{self.endpoint}/revokeSignInSessions")
+        return self._client.post(f"{self.endpoint}/revokeSignInSessions")
 
     def get_generated_password(self) -> str | None:
         """Return the auto-generated password (if any) and clear it immediately.
@@ -126,7 +120,7 @@ class User(Model):
                 "Call delete(force=True) to proceed."
             )
 
-        self.client.delete(self.endpoint)
+        self._client.delete(self.endpoint)
 
         # Local cleanup (object represents a deleted remote resource)
         self._data.clear()
@@ -170,7 +164,7 @@ class UserQuerySet(QuerySet["User"]):
             user_principal_name=user_principal_name,
             mail_nickname=mail_nickname,
             account_enabled=account_enabled,
-            qs=self,
+            parent=self,
             **kwargs,
         )
         obj._validate_for_create()
@@ -181,9 +175,7 @@ class UserQuerySet(QuerySet["User"]):
                 force_change_password_next_sign_in=force_change_password_next_sign_in,
             ).to_graph()
         )
-        c = self._client
-        e = self.endpoint
-        obj.refresh_from_graph(c.post(e, json_body=payload))
+        obj.refresh_from_graph(self._client.post(self.endpoint, json_body=payload))
         return obj
 
 

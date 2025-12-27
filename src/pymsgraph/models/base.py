@@ -1,13 +1,10 @@
-from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 from pymsgraph.fields import CharField, Field
 
-
 if TYPE_CHECKING:
-    from pymsgraph.client import Client
+    from pymsgraph.models.base import Model
     from pymsgraph.query import QuerySet
 
 TModel = TypeVar("TModel", bound="Model")
@@ -31,15 +28,20 @@ class EndpointDescriptor:
     def __init__(self, endpoint: str | None = None):
         self.endpoint = endpoint
 
-    def __get__(self, obj: Model, objtype=None) -> str | None:
+    def __get__(self, obj: "Model", objtype=None) -> str | None:
         if obj is None:
             return self.endpoint
-        relative_endpoint = obj.id or obj._relative_endpoint
-        if relative_endpoint is None:
+
+        relative_ep = obj._relative_endpoint or obj.id
+        if relative_ep is None:
             raise ValueError(
                 f"Resource {type(obj)} has not been initialized or does not exist"
             )
-        return f"{self.endpoint}/{relative_endpoint}"
+        if ep := getattr(obj._parent, "endpoint", None):
+            return f"{ep}/{relative_ep}"
+        if ep := self.endpoint:
+            return f"{ep}/{relative_ep}"
+        raise RuntimeError(f"No endpoint found.")
 
 
 class ModelBase(type):
@@ -77,7 +79,7 @@ class Model(metaclass=ModelBase):
     Base model for Graph resources
     """
 
-    _meta: ClassVar[Meta]
+    _meta: ClassVar["Meta"]
     is_read_only: ClassVar[bool] = False
 
     endpoint: ClassVar[str]
@@ -86,14 +88,12 @@ class Model(metaclass=ModelBase):
     def __init__(
         self,
         *,
-        qs: "QuerySet | None" = None,
-        client: "Client | None" = None,
         graph_data: dict[str, Any] | None = None,
+        parent: TModel | "QuerySet[TModel]" | None = None,
         **kwargs,
     ):
         self._initializing = True
-        self._qs = qs
-        self._client = client
+        self._parent = parent
         self._data: dict[str, Any] = {}
         self._graph_data = graph_data or {}
         self._dirty: set[str] = set()
@@ -117,12 +117,6 @@ class Model(metaclass=ModelBase):
 
         self._dirty.clear()
         self._initializing = False
-
-    @property
-    def client(self) -> Client:
-        if (c := self._client) is None:
-            raise ValueError("QuerySet is not configured for this model instance")
-        return c
 
     def to_graph(self, *, for_update: bool) -> dict[str, Any]:  # type: ignore
         out: dict[str, Any] = {}
@@ -155,7 +149,7 @@ class Model(metaclass=ModelBase):
         if not payload:
             return False
 
-        self.client.patch(self.endpoint, json_body=payload)
+        self._client.patch(self.endpoint, json_body=payload)
         self._dirty.clear()
         return True
 
@@ -168,7 +162,7 @@ class Model(metaclass=ModelBase):
                 "Call delete(force=True) to proceed."
             )
 
-        self.client.delete(self.endpoint)
+        self._client.delete(self.endpoint)
 
         # Local cleanup (object represents a deleted remote resource)
         self._data.clear()
@@ -176,7 +170,7 @@ class Model(metaclass=ModelBase):
 
     def refresh_from_graph(self, data: dict[str, Any]) -> None:
         # Rehydrate using graph data without marking fields dirty.
-        self._data = self.__class__(graph_data=data, qs=self._qs)._data
+        self._data = self.__class__(graph_data=data, parent=self._parent)._data
         self._dirty.clear()
         self._graph_data = data
 
@@ -191,6 +185,12 @@ class Model(metaclass=ModelBase):
                     missing.append(py_name)
         if missing:
             raise ValueError(f"Missing required fields: {', '.join(missing)}")
+
+    @property
+    def _client(self):
+        if c := getattr(self._parent, "_client", None):
+            return c
+        raise RuntimeError("No client found.")
 
     @property
     def _relative_endpoint(self) -> str | None:

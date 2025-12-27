@@ -1,10 +1,11 @@
 from collections.abc import Iterable, Iterator
-from typing import TYPE_CHECKING, Any, ClassVar, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 from pymsgraph import utils
 from pymsgraph.query import BulkQuerySet, Capabilities, QuerySet
 
 if TYPE_CHECKING:
+    from pymsgraph.models.user import User
     from pymsgraph.models.group import Group
 
 arg_types: TypeAlias = "str | Group | Iterable[str] | Iterable[Group] | QuerySet[Group]"
@@ -21,7 +22,7 @@ class GroupsQuerySet(QuerySet["Group"]):
     """
 
     model_class = "Group"  # type: ignore
-
+    endpoint = "/memberOf"
     capabilities = Capabilities.read_only()
 
     def add(self, *args: arg_types) -> None:
@@ -29,27 +30,23 @@ class GroupsQuerySet(QuerySet["Group"]):
         Add group/s to this user.
         """
 
-        user = self._get_object()
-        objects: tuple["Group", ...] = tuple(
-            utils.coerce_objects(*args, model_class=self.model_class)
-        )
+        c = self._client
+        u: "User" = getattr(self, "_parent")
+        objects = utils.coerce_objects(*args, queryset=c.groups)
 
-        client = self._client
         for groups in utils.chunks(objects, 20):
             requests: list[dict[str, Any]] = []
-            for index, group in enumerate(groups, start=1):
+            for i, g in enumerate(groups, start=1):
                 requests.append(
                     {
-                        "id": str(index),
+                        "id": str(i),
                         "method": "POST",
-                        "url": f"{group.endpoint}/members/$ref",
+                        "url": f"{g.members.endpoint}/$ref",
                         "headers": {"Content-Type": "application/json"},
-                        "body": {
-                            "@odata.id": f"{client.base_url}/directoryObjects/{user.id}"
-                        },
+                        "body": {"@odata.id": f"{c.base_url}/directoryObjects/{u.id}"},
                     }
                 )
-            resp = client.post("/$batch", json_body={"requests": requests})
+            resp = c.post("/$batch", json_body={"requests": requests})
             utils.raise_batch_errors(resp, action="add user to groups")
 
     def remove(self, *args: arg_types) -> None:
@@ -57,21 +54,21 @@ class GroupsQuerySet(QuerySet["Group"]):
         Remove group/s from this user.
         """
 
-        user = self._get_object()
-        objects = utils.coerce_objects(*args, model_class=self.model_class)
+        c = self._client
+        u: User = getattr(self, "_parent")
+        objects = utils.coerce_objects(*args, queryset=c.groups)
 
-        client = self._client
         for groups in utils.chunks(objects, 20):
             requests: list[dict[str, Any]] = []
-            for index, group in enumerate(groups, start=1):
+            for i, g in enumerate(groups, start=1):
                 requests.append(
                     {
-                        "id": str(index),
+                        "id": str(i),
                         "method": "DELETE",
-                        "url": f"{group.endpoint}/members/{user.id}/$ref",
+                        "url": f"{g.members.endpoint}/{u.id}/$ref",
                     }
                 )
-            resp = client.post("/$batch", json_body={"requests": requests})
+            resp = c.post("/$batch", json_body={"requests": requests})
             utils.raise_batch_errors(resp, action="remove user from groups")
 
     def _iter_objects(self, data: dict[str, Any]) -> Iterator["Group"]:
@@ -96,13 +93,13 @@ class GroupsBulkQuerySet(BulkQuerySet):
         Add group/s to users in this queryset.
         """
 
-        objects = utils.coerce_objects(*args, model_class="Group")
-        client = self._client
+        c = self._client
+        objects = utils.coerce_objects(*args, queryset=c.groups)
 
         for group in objects:
-            for users in utils.chunks(self._qs.select("id"), 20):
-                binds = [f"{client.base_url}/directoryObjects/{u.id}" for u in users]
-                client.patch(
+            for users in utils.chunks(self._queryset.select("id"), 20):
+                binds = [f"{c.base_url}/directoryObjects/{u.id}" for u in users]
+                c.patch(
                     group.endpoint,
                     json_body={"members@odata.bind": binds},
                 )
@@ -111,21 +108,21 @@ class GroupsBulkQuerySet(BulkQuerySet):
         """
         Remove group/s from users in this queryset.
         """
-        objects = utils.coerce_objects(*args, model_class="Group")
-        client = self._client
+        c = self._client
+        objects = utils.coerce_objects(*args, queryset=c.groups)
 
         for group in objects:
-            for users in utils.chunks(self._qs.select("id"), 20):
+            for users in utils.chunks(self._queryset.select("id"), 20):
                 requests: list[dict[str, Any]] = []
-                for index, user in enumerate(users, start=1):
+                for i, u in enumerate(users, start=1):
                     requests.append(
                         {
-                            "id": str(index),
+                            "id": str(i),
                             "method": "DELETE",
-                            "url": f"{group.endpoint}/members/{user.id}/$ref",
+                            "url": f"{group.members.endpoint}/{u.id}/$ref",
                         }
                     )
-                batch_resp = client.post("/$batch", json_body={"requests": requests})
+                batch_resp = c.post("/$batch", json_body={"requests": requests})
                 utils.raise_batch_errors(
                     batch_resp, action="remove users in queryset from groups"
                 )

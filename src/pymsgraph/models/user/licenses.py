@@ -1,11 +1,14 @@
 from collections.abc import Iterable
-from typing import Any, ClassVar, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 from pymsgraph import utils
 from pymsgraph.fields import CharField
 from pymsgraph.models.base import Model
 from pymsgraph.query import BulkQuerySet, Capabilities, QuerySet
 from pymsgraph.models.subscribed_sku import ServicePlanInfo
+
+if TYPE_CHECKING:
+    from pymsgraph.models.user import User
 
 
 class LicenseDetails(Model):
@@ -44,21 +47,21 @@ class LicensesQuerySet(QuerySet["LicenseDetails"]):
 
     model_class = LicenseDetails
     capabilities = Capabilities.read_only()
+    endpoint = "/assignLicense"
 
     def add(self, *args: arg_types) -> None:
         """
         Add license/s to this user.
         """
 
-        user = self._get_object()
         objects: list[LicenseDetails] = list(
-            utils.coerce_objects(*args, model_class=self.model_class, key="sku_id")
+            utils.coerce_objects(*args, queryset=self, key="sku_id")
         )
         if not objects:
             return
 
         self._client.post(
-            f"{user.endpoint}/assignLicense",
+            self.endpoint,
             json_body={
                 "addLicenses": [
                     {"skuId": obj.sku_id, "disabledPlans": []} for obj in objects
@@ -72,15 +75,14 @@ class LicensesQuerySet(QuerySet["LicenseDetails"]):
         Remove license/s from this user.
         """
 
-        user = self._get_object()
         objects: list[LicenseDetails] = list(
-            utils.coerce_objects(*args, model_class=self.model_class, key="sku_id")
+            utils.coerce_objects(*args, queryset=self, key="sku_id")
         )
         if not objects:
             return
 
         self._client.post(
-            f"{user.endpoint}/assignLicense",
+            self.endpoint,
             json_body={
                 "addLicenses": [],
                 "removeLicenses": [obj.sku_id for obj in objects],
@@ -102,22 +104,22 @@ class LicensesBulkQuerySet(BulkQuerySet):
         Add licenses to all users in this queryset.
         """
 
+        client = self._client
         objects: list[LicenseDetails] = list(
-            utils.coerce_objects(*args, model_class=LicenseDetails, key="sku_id")
+            utils.coerce_objects(*args, queryset=LicensesQuerySet(), key="sku_id")
         )
         if not objects:
             return
 
-        client = self._client
-
-        for users in utils.chunks(self._qs.select("id"), 20):
+        for users in utils.chunks(self._queryset.select("id"), 20):
             requests: list[dict[str, Any]] = []
-            for index, user in enumerate(users, start=1):
+            for i, u in enumerate(users, start=1):
+                u = cast(User, u)
                 requests.append(
                     {
-                        "id": str(index),
+                        "id": str(i),
                         "method": "POST",
-                        "url": f"{user.endpoint}/assignLicense",
+                        "url": u.licenses.endpoint,
                         "headers": {"Content-Type": "application/json"},
                         "body": {
                             "addLicenses": [
@@ -138,21 +140,22 @@ class LicensesBulkQuerySet(BulkQuerySet):
         """
 
         objects: list[LicenseDetails] = list(
-            utils.coerce_objects(*args, model_class=LicenseDetails, key="sku_id")
+            utils.coerce_objects(*args, queryset=LicensesQuerySet(), key="sku_id")
         )
         if not objects:
             return
 
         client = self._client
 
-        for users in utils.chunks(self._qs.select("id"), 20):
+        for users in utils.chunks(self._queryset.select("id"), 20):
             requests: list[dict[str, Any]] = []
-            for index, user in enumerate(users, start=1):
+            for i, u in enumerate(users, start=1):
+                u = cast("User", u)
                 requests.append(
                     {
-                        "id": str(index),
+                        "id": str(i),
                         "method": "POST",
-                        "url": f"{user.endpoint}/assignLicense",
+                        "url": u.licenses.endpoint,
                         "headers": {"Content-Type": "application/json"},
                         "body": {
                             "addLicenses": [],

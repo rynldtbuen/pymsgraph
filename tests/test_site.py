@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from pymsgraph.models.site import SiteQuerySet
+from pymsgraph.models.site import ListQuerySet, SiteQuerySet
 
 
 def test_site_get_by_id(make_client):
@@ -84,3 +84,35 @@ def test_site_search_sets_params_and_headers(make_client):
     assert searched is not qs
     assert searched._params.get("search") == '"teams"'
     assert searched._headers.get("ConsistencyLevel") == "eventual"
+
+
+def test_site_lists_descriptor(make_client):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/lists"):
+            return httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {"id": "l1", "displayName": "List 1"},
+                        {"id": "l2", "displayName": "List 2"},
+                    ]
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "id": "site-id",
+                "displayName": "Demo Site",
+                "webUrl": "https://contoso.sharepoint.com/sites/demo",
+            },
+        )
+
+    client, _ = make_client(handler)
+    site = SiteQuerySet(client).get(id="site-id")
+
+    lists_qs = site.lists
+    assert isinstance(lists_qs, ListQuerySet)
+    assert lists_qs._endpoint.endswith("/sites/site-id/lists")
+
+    names = [lst.display_name for lst in lists_qs]
+    assert names == ["List 1", "List 2"]

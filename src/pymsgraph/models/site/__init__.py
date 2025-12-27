@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import Any
 
-from pymsgraph.client import Client
 from pymsgraph.fields import BooleanField, CharField, DateTimeField
 from pymsgraph.models.base import Model
 from pymsgraph.query import Capabilities, QuerySet
+from .list import ListQuerySet
 
-__all__ = ["Site", "SiteQuerySet"]
+__all__ = ["Site", "SiteQuerySet", "ListQuerySet"]
 
 
 class Site(Model):
@@ -32,6 +32,11 @@ class Site(Model):
     is_read_only = True
     endpoint = "/sites"
     search_field = "display_name"
+
+    @property
+    def lists(self) -> ListQuerySet:
+        qs = ListQuerySet(self._client, parent=self)
+        return qs
 
     def __repr__(self) -> str:
         return f"<Site: {self.display_name or self.name}>"

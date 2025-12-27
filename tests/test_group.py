@@ -1,25 +1,23 @@
 from __future__ import annotations
 import json
+from typing import TYPE_CHECKING
 
 import httpx
 import pytest
 
-from pymsgraph.models.group import Group, GroupQuerySet
-from pymsgraph.models.user import User
-
 from pymsgraph.query import Q
-from tests.conftest import make_client
 from tests.utils import read_json
 
+if TYPE_CHECKING:
+    from .conftest import MakeClient
 
-def test_create(make_client):
 
+def test_create(make_client: "MakeClient"):
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
         assert request.url.path == "/v1.0/groups"
 
-        body = json.loads(request.content.decode())
-        # assert body == expected_body
+        body = read_json(request)
 
         # normalization
         assert body["displayName"] == "My Security Group"
@@ -30,9 +28,8 @@ def test_create(make_client):
 
         return httpx.Response(201, json={"id": "g_123", **body})
 
-    client, _ = make_client(handler)
-    qs = GroupQuerySet(client)
-    g = qs.create(
+    c, _ = make_client(handler)
+    g = c.groups.create(
         display_name="  My Security Group  ",
         mail_enabled=False,
         mail_nickname="mysecuritygroup",
@@ -43,7 +40,7 @@ def test_create(make_client):
     assert g.display_name == "My Security Group"
 
 
-def test_update_patches_only_dirty_fields(make_client):
+def test_update_patches_only_dirty_fields(make_client: "MakeClient"):
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "PATCH"
@@ -51,16 +48,15 @@ def test_update_patches_only_dirty_fields(make_client):
         assert read_json(request) == expected_body
         return httpx.Response(204)
 
-    client, _ = make_client(handler)
-    g = Group(
-        graph_data={
+    c, _ = make_client(handler)
+    g = c.groups.make_from_graph(
+        {
             "id": "g_1",
             "displayName": "Old Name",
             "mailEnabled": False,
             "mailNickname": "old",
             "securityEnabled": True,
-        },
-        client=client,
+        }
     )
 
     g.display_name = "New Name"
@@ -69,15 +65,16 @@ def test_update_patches_only_dirty_fields(make_client):
     g.save()
 
 
-def test_create_missing_required_field(make_client):
+def test_create_missing_required_field(make_client: "MakeClient"):
     # Ensure no HTTP call occurs
     def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        print(request)
         raise AssertionError("HTTP should not be called")
 
-    client, _ = make_client(handler)
-    qs = GroupQuerySet(client)
+    c, _ = make_client(handler)
+
     with pytest.raises(ValueError):
-        qs.create(
+        c.groups.create(
             display_name="Missing flags",
             mail_nickname="x",
             # mail_enabled missing
@@ -85,7 +82,7 @@ def test_create_missing_required_field(make_client):
         )
 
 
-def test_queryset_filter(make_client):
+def test_queryset_filter(make_client: "MakeClient"):
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"
@@ -106,11 +103,10 @@ def test_queryset_filter(make_client):
             },
         )
 
-    client, _ = make_client(handler)
+    c, _ = make_client(handler)
 
     qs = (
-        GroupQuerySet(client)
-        .filter(mail_enabled=False)
+        c.groups.filter(mail_enabled=False)
         .select("display_name", "mail_nickname")
         .order_by("display_name")
     )
@@ -122,21 +118,21 @@ def test_queryset_filter(make_client):
     assert objs[0].display_name == "A"
 
 
-def test_queryset_q_or(make_client):
+def test_queryset_q_or(make_client: "MakeClient"):
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert dict(request.url.params) == expected_params_str
         return httpx.Response(200, json={"value": []})
 
-    client, _ = make_client(handler)
+    c, _ = make_client(handler)
     q = Q(display_name__startswith="A") | Q(display_name__startswith="B")
-    qs = GroupQuerySet(client).filter(q, security_enabled=True)
+    qs = c.groups.filter(q, security_enabled=True)
     expected_params = qs._build_params()
     expected_params_str = {k: str(v) for k, v in expected_params.items()}
     list(qs)
 
 
-def test_add_members_with_dup(make_client):
+def test_add_members_with_dup(make_client: "MakeClient"):
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "PATCH"
@@ -160,25 +156,24 @@ def test_add_members_with_dup(make_client):
         return httpx.Response(204)
 
     calls: list[dict] = []
-    client, _ = make_client(handler)
+    c, _ = make_client(handler)
 
-    g = Group(
-        graph_data={
+    g = c.groups.make_from_graph(
+        {
             "id": "g_1",
             "displayName": "G",
             "mailEnabled": False,
             "mailNickname": "g",
             "securityEnabled": True,
         },
-        client=client,
     )
-    u2 = User(graph_data={"id": "u_2"}, client=client)
+    u2 = c.users.make_from_graph({"id": "u_2"})
 
     g.members.add("u_1", u2, "u_1", "u_2")
     assert len(calls) == 1
 
 
-def test_add_members_chunks_by_20(make_client):
+def test_add_members_chunks_by_20(make_client: "MakeClient"):
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "PATCH"
@@ -194,17 +189,16 @@ def test_add_members_chunks_by_20(make_client):
         seen_chunks.append(got_ids)
         return httpx.Response(204)
 
-    client, _ = make_client(handler)
+    c, _ = make_client(handler)
 
-    g = Group(
-        graph_data={
+    g = c.groups.make_from_graph(
+        {
             "id": "g_1",
             "displayName": "G",
             "mailEnabled": False,
             "mailNickname": "g",
             "securityEnabled": True,
-        },
-        client=client,
+        }
     )
 
     user_ids = [
@@ -219,7 +213,7 @@ def test_add_members_chunks_by_20(make_client):
     assert seen_chunks[1] == user_ids[20:]
 
 
-def test_remove_members(make_client):
+def test_remove_members(make_client: "MakeClient"):
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
         assert request.url.path == "/v1.0/$batch"
@@ -247,17 +241,16 @@ def test_remove_members(make_client):
             json={"responses": [{"id": r["id"], "status": 204} for r in reqs]},
         )
 
-    client, _ = make_client(handler)
+    c, _ = make_client(handler)
 
-    g = Group(
-        graph_data={
+    g = c.groups.make_from_graph(
+        {
             "id": "g_1",
             "displayName": "G",
             "mailEnabled": False,
             "mailNickname": "g",
             "securityEnabled": True,
         },
-        client=client,
     )
 
     user_ids = ["u_1", "u_2", "u_3"]
@@ -267,7 +260,7 @@ def test_remove_members(make_client):
     assert "body" in received
 
 
-def test_remove_members_raises_on_batch_error(make_client):
+def test_remove_members_raises_on_batch_error(make_client: "MakeClient"):
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
         assert request.url.path == "/v1.0/$batch"
@@ -285,24 +278,23 @@ def test_remove_members_raises_on_batch_error(make_client):
             },
         )
 
-    client, _ = make_client(handler)
+    c, _ = make_client(handler)
 
-    g = Group(
-        graph_data={
+    g = c.groups.make_from_graph(
+        {
             "id": "g_1",
             "displayName": "G",
             "mailEnabled": False,
             "mailNickname": "g",
             "securityEnabled": True,
         },
-        client=client,
     )
 
     with pytest.raises(RuntimeError, match=r"remove user/s from this groups"):
         g.members.remove("u_1", "u_2")  # type: ignore
 
 
-def test_owners_add_remove(make_client):
+def test_owners_add_remove(make_client: "MakeClient"):
     seen: list[list[dict]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -312,16 +304,15 @@ def test_owners_add_remove(make_client):
         seen.append(body.get("requests", []))
         return httpx.Response(200, json={"responses": [{"id": "1", "status": 204}]})
 
-    client, requests = make_client(handler)
-    g = Group(
-        graph_data={
+    c, r = make_client(handler)
+    g = c.groups.make_from_graph(
+        {
             "id": "g_1",
             "displayName": "G",
             "mailEnabled": False,
             "mailNickname": "g",
             "securityEnabled": True,
         },
-        client=client,
     )
 
     g.owners.add("u1", "u2")  # type: ignore
@@ -339,8 +330,7 @@ def test_owners_add_remove(make_client):
     odata_ids = {r.get("body", {}).get("@odata.id") for r in add_reqs}
     assert all(r["method"] == "POST" for r in add_reqs)
     assert all(
-        r.get("headers", {}).get("Content-Type") == "application/json"
-        for r in add_reqs
+        r.get("headers", {}).get("Content-Type") == "application/json" for r in add_reqs
     )
     assert odata_ids == {
         "https://graph.microsoft.com/v1.0/directoryObjects/u1",
@@ -354,4 +344,4 @@ def test_owners_add_remove(make_client):
     }
     assert {r["method"] for r in remove_reqs} == {"DELETE"}
 
-    assert len(requests) == 2
+    assert len(r) == 2

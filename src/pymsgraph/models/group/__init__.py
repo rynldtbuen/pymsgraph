@@ -50,14 +50,12 @@ class Group(Model):
 
     @property
     def members(self) -> members.MembersQuerySet:
-        qs = members.MembersQuerySet(self.client, endpoint=f"{self.endpoint}/members")
-        qs._obj = self
+        qs = members.MembersQuerySet(self._client, parent=self)
         return qs
 
     @property
     def owners(self) -> owners.OwnersQuerySet:
-        qs = owners.OwnersQuerySet(self.client, endpoint=f"{self.endpoint}/owners")
-        qs._obj = self
+        qs = owners.OwnersQuerySet(self._client, parent=self)
         return qs
 
     def __repr__(self) -> str:
@@ -70,14 +68,6 @@ class GroupQuerySet(QuerySet["Group"]):
 
     related_lookup = {"group_types": compile_lookup._group_types}
     search_field = "display_name"
-
-    def create(self, **kwargs: Any) -> "Group":
-        obj = self.model_class(client=self._client, **kwargs)
-        obj._validate_for_create()
-        payload = obj.to_graph(for_update=False)
-        graph_data = self._client.post(self.endpoint, json_body=payload)
-        obj.refresh_from_graph(graph_data)
-        return obj
 
     @property
     def unified(self):

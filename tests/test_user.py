@@ -1,12 +1,15 @@
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 import httpx
 import pytest
 
-from pymsgraph.models.user import User, UserQuerySet
+
+if TYPE_CHECKING:
+    from pymsgraph.client import Client
+    from tests.conftest import MakeClient
 
 
-def test_user_queryset_create(make_client):
+def test_user_queryset_create(make_client: "MakeClient"):
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
         assert request.url.path == "/v1.0/users"
@@ -26,9 +29,8 @@ def test_user_queryset_create(make_client):
             },
         )
 
-    client, requests = make_client(handler)
-    qs = UserQuerySet(client)
-
+    c, r = make_client(handler)
+    qs = c.users
     user = qs.create(
         display_name="Alice",
         user_principal_name="alice@example.com",
@@ -40,10 +42,11 @@ def test_user_queryset_create(make_client):
     assert user.display_name == "Alice"
     assert user.user_principal_name == "alice@example.com"
     assert user._dirty == set()
-    assert len(requests) == 1
+    assert len(r) == 1
+    assert user._parent is qs
 
 
-def test_user_save_patches_dirty_fields(make_client):
+def test_user_save_patches_dirty_fields(make_client: "MakeClient"):
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "PATCH" and request.url.path.endswith("/users/123"):
             body = json.loads(request.content.decode())
@@ -51,10 +54,9 @@ def test_user_save_patches_dirty_fields(make_client):
             return httpx.Response(204, json={})
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
-    client, requests = make_client(handler)
-    # qs = UserQuerySet(client)
-
-    user = User(graph_data={"id": "123", "displayName": "Alice"}, client=client)
+    c, r = make_client(handler)
+    qs = c.users
+    user = qs.make_from_graph({"id": "123", "displayName": "Alice"})
     assert user._dirty == set()
 
     user.job_title = "Engineer"
@@ -63,7 +65,8 @@ def test_user_save_patches_dirty_fields(make_client):
     saved = user.save()
     assert saved is True
     assert user._dirty == set()
-    assert len(requests) == 1
+    assert len(r) == 1
+    assert user._parent is qs
 
 
 def test_user_queryset_select_builds_select(user_qs):
@@ -110,7 +113,7 @@ def test_user_queryset_top_sets_limit(user_qs):
     assert params["$top"] == 5
 
 
-def test_user_queryset_count_uses_odata_count(make_client):
+def test_user_queryset_count_uses_odata_count(make_client: "MakeClient"):
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"
         assert request.url.path == "/v1.0/users"
@@ -122,14 +125,14 @@ def test_user_queryset_count_uses_odata_count(make_client):
             },
         )
 
-    client, _ = make_client(handler)
-    qs = UserQuerySet(client)
+    c, _ = make_client(handler)
+    qs = c.users
     assert qs.count() == 42
     # Cached objects should also be hydrated
     assert len(list(qs)) == 2
 
 
-def test_user_queryset_get_by_id(make_client):
+def test_user_queryset_get_by_id(make_client: "MakeClient"):
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"
         assert request.url.path == "/v1.0/users/abc"
@@ -143,16 +146,17 @@ def test_user_queryset_get_by_id(make_client):
             },
         )
 
-    client, _ = make_client(handler)
-    qs = UserQuerySet(client)
+    c, _ = make_client(handler)
+    qs = c.users
     user = qs.get(id="abc")
     assert user is not None
     assert user.id == "abc"
     assert user.display_name == "Bob"
     assert user.user_principal_name == "bob@example.com"
+    assert user._parent is qs
 
 
-def test_user_groups_add_remove(make_client):
+def test_user_groups_add_remove(make_client: "MakeClient"):
     seen: list[tuple[str, str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -187,10 +191,8 @@ def test_user_groups_add_remove(make_client):
             return httpx.Response(200, json={"responses": [{"id": "1", "status": 204}]})
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
-    client, requests = make_client(handler)
-    # qs = UserQuerySet(client)
-    user = User(graph_data={"id": "123", "displayName": "Alice"}, client=client)
-
+    c, r = make_client(handler)
+    user = c.users.make_from_graph({"id": "123", "displayName": "Alice"})
     user.groups.add("g1")
     user.groups.remove("g1")
 
@@ -198,10 +200,10 @@ def test_user_groups_add_remove(make_client):
         ("POST", "/v1.0/$batch"),
         ("POST", "/v1.0/$batch"),
     ]
-    assert len(requests) == 2
+    assert len(r) == 2
 
 
-def test_user_groups_add_remove_multiple(make_client):
+def test_user_groups_add_remove_multiple(make_client: "MakeClient"):
     seen: list[list[dict[str, Any]]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -211,10 +213,8 @@ def test_user_groups_add_remove_multiple(make_client):
             return httpx.Response(200, json={"responses": [{"id": "1", "status": 204}]})
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
-    client, requests = make_client(handler)
-    # qs = UserQuerySet(client)
-    user = User(graph_data={"id": "123", "displayName": "Alice"}, client=client)
-
+    c, r = make_client(handler)
+    user = c.users.make_from_graph({"id": "123", "displayName": "Alice"})
     user.groups.add("g1", "g2")
     user.groups.remove("g1", "g2")
 
@@ -241,13 +241,12 @@ def test_user_groups_add_remove_multiple(make_client):
         "/groups/g2/members/123/$ref",
     }
 
-    assert len(requests) == 2
+    assert len(r) == 2
 
 
-def test_user_licenses_add_remove(make_client):
+def test_user_licenses_add_remove(make_client: "MakeClient"):
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content.decode())
-        print(body)
         assert request.method == "POST"
         assert request.url.path == "/v1.0/users/123/assignLicense"
         if body["addLicenses"]:
@@ -262,16 +261,16 @@ def test_user_licenses_add_remove(make_client):
             }
         return httpx.Response(200, json={"responses": [{"id": "1", "status": 200}]})
 
-    client, _ = make_client(handler)
-    # qs = UserQuerySet(client)
-    user = User(client=client, graph_data={"id": "123", "displayName": "Alice"})
-
+    c, _ = make_client(handler)
+    user = c.users.make_from_graph({"id": "123", "displayName": "Alice"})
     user.licenses.add("sku1")
     user.licenses.remove("sku1")
 
 
-def test_user_groups_descriptor(make_client):
+def test_user_groups_descriptor(make_client: "MakeClient"):
     def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/v1.0/users/123/memberOf"
         if request.method == "GET" and request.url.path == "/v1.0/users/123/memberOf":
             return httpx.Response(
                 200,
@@ -287,17 +286,16 @@ def test_user_groups_descriptor(make_client):
             )
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
-    client, requests = make_client(handler)
+    c, r = make_client(handler)
     # qs = UserQuerySet(client)
-    user = User(graph_data={"id": "123", "displayName": "Alice"}, client=client)
-
-    groups_qs = user.groups
-    groups = list(groups_qs)
+    user = c.users.make_from_graph({"id": "123", "displayName": "Alice"})
+    user_groups_qs = user.groups
+    groups = list(user_groups_qs)
     assert len(groups) == 1
     g = groups[0]
     assert g.id == "g1"
     assert g.display_name == "Group One"
-    assert len(requests) == 1
+    assert len(r) == 1
 
 
 def test_user_queryset_filter_licenses_sku_id(user_qs):
@@ -330,79 +328,73 @@ def test_user_queryset_filter_licenses_is_not_null(user_qs):
     assert params["$filter"] == "(assignedLicenses/$count ne 0)"
 
 
-def test_user_delete_requires_id(make_client):
+def test_user_delete_requires_id(make_client: "MakeClient"):
     # Ensure no HTTP call occurs
     def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
         raise AssertionError("HTTP should not be called")
 
-    make_client(handler)
-
-    u = User(
+    c, _ = make_client(handler)
+    user = c.users.make(
         display_name="Unsaved",
         # user_principal_name="unsaved@example.com",
         mail_nickname="unsaved",
     )
     with pytest.raises(ValueError):
-        u.delete(force=True)
+        user.delete(force=True)
 
 
-def test_user_delete_force_calls_delete(make_client):
+def test_user_delete_force_calls_delete(make_client: "MakeClient"):
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "DELETE"
         assert request.url.path == "/v1.0/users/u_del"
         return httpx.Response(204)
 
-    client, _ = make_client(handler)
-    u = User(
-        graph_data={
+    c, _ = make_client(handler)
+    user = c.users.make_from_graph(
+        {
             "id": "u_del",
             "displayName": "Del",
             "userPrincipalName": "del@example.com",
             "accountEnabled": True,
             "mailNickname": "del",
-        },
-        client=client,
+        }
     )
 
-    u.delete(force=True)
+    user.delete(force=True)
     # after local cleanup, id should no longer be present
-    assert u.id is None
+    assert user.id is None
 
 
-def test_user_delete_requires_force(make_client, user_qs):
-    u = User(
-        graph_data={
+def test_user_delete_requires_force(make_client: "MakeClient"):
+    # Ensure no HTTP call occurs
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("HTTP should not be called")
+
+    c, _ = make_client(handler)
+    user = c.users.make_from_graph(
+        {
             "id": "u_del",
             "displayName": "Del",
             "userPrincipalName": "del@example.com",
             "accountEnabled": True,
             "mailNickname": "del",
-        },
-        qs=user_qs,
+        }
     )
-
-    # Ensure no HTTP call occurs
-    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
-        raise AssertionError("HTTP should not be called")
-
-    make_client(handler)
-
     with pytest.raises(RuntimeError):
-        u.delete()
+        user.delete()
 
 
-def test_user_reset_password_requires_id(make_client, user_qs):
+def test_user_reset_password_requires_id(make_client: "MakeClient"):
     # Ensure no HTTP call occurs
     def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
         raise AssertionError("HTTP should not be called")
 
-    make_client(handler)
+    c, _ = make_client(handler)
 
-    u = User(
+    user = c.users.make(
         display_name="Unsaved",
         user_principal_name="unsaved@example.com",
         mail_nickname="unsaved",
-        qs=user_qs,
     )
     with pytest.raises(ValueError):
-        u.reset_password(password="Whatever1!234")
+        user.reset_password(password="Whatever1!234")

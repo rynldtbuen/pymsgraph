@@ -21,6 +21,7 @@ class MembersQuerySet(QuerySet["User"]):
     """
 
     model_class = "User"  # type: ignore
+    endpoint = "/members"
     capabilities = Capabilities.read_only()
 
     def add(self, *args: arg_types) -> None:
@@ -28,14 +29,13 @@ class MembersQuerySet(QuerySet["User"]):
         Add user/s to this group.
         """
 
-        group = self._get_object()
-        objects = utils.coerce_objects(*args, model_class=self.model_class)
-
-        client = self._client
+        c = self._client
+        objects = utils.coerce_objects(*args, queryset=c.users)
+        assert self._parent is not None
         for users in utils.chunks(objects, 20):
-            binds = [f"{client.base_url}/directoryObjects/{u.id}" for u in users]
-            client.patch(
-                group.endpoint,
+            binds = [f"{c.base_url}/directoryObjects/{u.id}" for u in users]
+            c.patch(
+                self._parent.endpoint,
                 json_body={"members@odata.bind": binds},
             )
 
@@ -44,10 +44,9 @@ class MembersQuerySet(QuerySet["User"]):
         Remove user/s from this group.
         """
 
-        group = self._get_object()
-        objects = utils.coerce_objects(*args, model_class=self.model_class)
+        c = self._client
+        objects = utils.coerce_objects(*args, queryset=c.users)
 
-        client = self._client
         for users in utils.chunks(objects, 20):
             requests: list[dict[str, Any]] = []
             for index, user in enumerate(users, start=1):
@@ -55,8 +54,8 @@ class MembersQuerySet(QuerySet["User"]):
                     {
                         "id": str(index),
                         "method": "DELETE",
-                        "url": f"{group.endpoint}/members/{user.id}/$ref",
+                        "url": f"{self.endpoint}/{user.id}/$ref",
                     }
                 )
-            resp = client.post("/$batch", json_body={"requests": requests})
+            resp = c.post("/$batch", json_body={"requests": requests})
             utils.raise_batch_errors(resp, action="remove user/s from this groups")

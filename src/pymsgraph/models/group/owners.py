@@ -14,15 +14,15 @@ arg_types: TypeAlias = "str | User | Iterable[str] | Iterable[User] | QuerySet[U
 class OwnersQuerySet(QuerySet["User"]):
     model_class = "User"  # pyright: ignore[reportAssignmentType]
     capabilities = Capabilities.read_only()
+    endpoint = "/owners"
 
     def add(self, *args: arg_types) -> None:
         """
         Add one or more owners to this group.
         """
-        group = self._get_object()
-        objects = utils.coerce_objects(*args, model_class=self.model_class)
+        c = self._client
+        objects = utils.coerce_objects(*args, queryset=c.users)
 
-        client = self._client
         for users in utils.chunks(objects, 20):
             requests: list[dict[str, Any]] = []
             for idx, user in enumerate(users, start=1):
@@ -30,24 +30,23 @@ class OwnersQuerySet(QuerySet["User"]):
                     {
                         "id": str(idx),
                         "method": "POST",
-                        "url": f"{group.endpoint}/owners/$ref",
+                        "url": f"{self.endpoint}/$ref",
                         "headers": {"Content-Type": "application/json"},
                         "body": {
-                            "@odata.id": f"{client.base_url}/directoryObjects/{user.id}"
+                            "@odata.id": f"{c.base_url}/directoryObjects/{user.id}"
                         },
                     }
                 )
-            resp = client.post("/$batch", json_body={"requests": requests})
+            resp = c.post("/$batch", json_body={"requests": requests})
             utils.raise_batch_errors(resp, action="add owners")
 
     def remove(self, *args: arg_types) -> None:
         """
         Remove one or more owners from this group.
         """
-        group = self._get_object()
-        objects = utils.coerce_objects(*args, model_class=self.model_class)
+        c = self._client
+        objects = utils.coerce_objects(*args, queryset=c.users)
 
-        client = self._client
         for users in utils.chunks(objects, 20):
             requests: list[dict[str, Any]] = []
             for index, user in enumerate(users, start=1):
@@ -55,8 +54,8 @@ class OwnersQuerySet(QuerySet["User"]):
                     {
                         "id": str(index),
                         "method": "DELETE",
-                        "url": f"{group.endpoint}/owners/{user.id}/$ref",
+                        "url": f"{self.endpoint}/{user.id}/$ref",
                     }
                 )
-            resp = client.post("/$batch", json_body={"requests": requests})
+            resp = c.post("/$batch", json_body={"requests": requests})
             utils.raise_batch_errors(resp, action="remove owners")

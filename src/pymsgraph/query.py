@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+from collections import namedtuple
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic
-
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic, cast
 
 from pymsgraph.models.base import Model, TModel
 from pymsgraph.utils import get_model_class
@@ -148,14 +148,16 @@ class ModelDescriptor:
     def __get__(self, obj: QuerySet[TModel], objtype=None) -> type[Model]:
         if obj is None:
             return self.model_class
+
         if isinstance(self.model_class, str):
             return get_model_class(self.model_class)
-        # model_class: type[Model] | None = self.model_class
+
         model_class = obj._model_class or self.model_class
         if model_class is None:
             raise RuntimeError(
                 "Model class must set in the QuerySet class or passing it when initializing a QuerySet"
             )
+
         return model_class
 
 
@@ -166,12 +168,18 @@ class EndpointDescriptor:
     def __get__(self, obj: QuerySet[TModel], objtype=None) -> str:
         if obj is None:
             return self.endpoint
-        endpoint = obj._endpoint or obj.model_class.endpoint or self.endpoint
-        if endpoint is None:
-            raise RuntimeError(
-                "Model class must set in the QuerySet class or passing it when initializing a QuerySet"
-            )
-        return endpoint
+        ep = self.endpoint
+        if parent_ep := getattr(obj._parent, "endpoint", None):
+            if ep:
+                return f"{parent_ep}{ep}"
+            return parent_ep
+        if mc_ep := obj.model_class.endpoint:
+            if ep:
+                return f"{mc_ep}{ep}"
+            return mc_ep
+        if ep:
+            return ep
+        raise RuntimeError("No endpoint found.")
 
 
 class QuerySetBase(type):
@@ -180,7 +188,7 @@ class QuerySetBase(type):
 
         for base in bases:
             if base.__name__ == "QuerySet":
-                base._queryset_class[name] = cls
+                # base._queryset_class[name] = cls
 
                 setattr(cls, "model_class", ModelDescriptor(attrs.get("model_class")))
                 setattr(cls, "endpoint", EndpointDescriptor(attrs.get("endpoint")))
@@ -188,6 +196,10 @@ class QuerySetBase(type):
         # print(name, bases, attrs)
 
         return cls
+
+
+class Collection:
+    pass
 
 
 class QuerySet(Generic[TModel], metaclass=QuerySetBase):
@@ -198,26 +210,26 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
     model_class: type[TModel]
     endpoint: ClassVar[str]
 
-    _queryset_class: dict[str, type["QuerySet[Any]"]] = {}
+    # _queryset_class: dict[str, type["QuerySet[Any]"]] = {}
 
     def __init__(
         self,
-        client: Client,
+        client: "Client | None" = None,
         *,
-        model_class: type[Model] | str | None = None,  # type: ignore
-        endpoint: str | None = None,
+        model_class: type[TModel] | str | None = None,  # type: ignore
+        parent: Model | QuerySet[Any] | None = None,
         q: Q | None = None,
         params: dict[str, Any] | None = None,
         headers: dict[str, Any] | None = None,
     ) -> None:
-        self._client = client
         if isinstance(model_class, str):
-            model_class = get_model_class(model_class)
+            model_class = cast(type[TModel], get_model_class(model_class))
         self._model_class = model_class
-        self._endpoint = endpoint
+        self._c = client
         self._q = q
-        self._params = params or {}
-        self._headers = headers or {}
+        self._params = dict(params) if params else {}
+        self._headers = dict(headers) if headers else {}
+        self._parent = parent
 
         self._changed: bool = True
         self._data: dict[str, Any] = {}
@@ -225,11 +237,6 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
         self._fetched: list[dict[str, Any]] = []
         self._objects: list[TModel] = []
         self._count: int = 0
-        self._obj: Model | None = None
-
-    @classmethod
-    def get_queryset_class(cls, name: str):
-        return cls._queryset_class.get(name)
 
     def __iter__(self) -> Iterator[TModel]:
         client = self._client
@@ -276,10 +283,12 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
         self._next_link = data.get("@odata.nextLink")
         # self._count = data.get("@odata.count", 0)
 
-        for item in data.get("value", []):
-            obj = self.model_class(graph_data=item, qs=self)
+        for obj in self._iter_objects(data.get("value", [])):
             self._objects.append(obj)
             yield obj
+        # for item in :
+        #     obj = self.model_class(graph_data=item, parent=self)
+        #     yield obj
 
     def has_next_objects(self) -> bool:
         """
@@ -333,7 +342,7 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
     #         p["$top"] = str(new_top)
     #     # else: leave $top unset (don’t force it)
 
-    #     return self._clone(params=p)
+    #     return self._make_clone(params=p)
 
     def filter(self, *q: Q, **lookups: Any) -> QuerySet[TModel]:
         self._check_capability("filter")
@@ -348,35 +357,35 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
             kw_q = Q(**lookups)
             new_q = kw_q if new_q is None else (new_q & kw_q)
 
-        return self._clone(q=new_q)
+        return self._make_clone(q=new_q)
 
     def search(self, keyword: str) -> QuerySet[TModel]:
         self._check_capability("search")
         search_field = getattr(self.model_class, "search_field", None)
         if search_field:
-            p = dict(self._params)
+            # p = self._params
             graph_field = self.model_class._meta.field_to_graph(search_field)
             print(graph_field)
             if not graph_field:
                 raise ValueError(
                     f"Field not exist in {self.model_class.__name__} property, '{search_field}'"
                 )
-            p["$search"] = f'"{graph_field}:{keyword}"'
-            return self._clone(params=p)
+            self._params["$search"] = f'"{graph_field}:{keyword}"'
+            return self._make_clone()
         raise ValueError(f"Object {self.model_class.__name__} does not support search")
 
     def select(self, *fields: str) -> QuerySet[TModel]:
         self._check_capability("select")
         graph_fields = [self.model_class._meta.field_to_graph(f) for f in fields]
-        p = dict(self._params)
-        p["$select"] = ",".join(graph_fields)
-        return self._clone(params=p)
+        # p = dict(self._params)
+        self._params["$select"] = ",".join(graph_fields)
+        return self._make_clone()
 
     # def select_related(self, *fields: str) -> QuerySet[TModel]:
     #     graph_fields = [self.model._meta.field_to_graph(f) for f in fields]
     #     p = dict(self._params)
     #     p["$select"] = ",".join(graph_fields)
-    #     return self._clone(params=p)
+    #     return self._make_clone(params=p)
 
     def order_by(self, *fields: str) -> QuerySet[TModel]:
         self._check_capability("order_by")
@@ -386,15 +395,15 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
             py_name = item[1:] if desc else item
             gf = self.model_class._meta.field_to_graph(py_name)
             parts.append(f"{gf} desc" if desc else gf)
-        p = dict(self._params)
-        p["$orderby"] = ",".join(parts)
-        return self._clone(params=p)
+        # p = dict(self._params)
+        self._params["$orderby"] = ",".join(parts)
+        return self._make_clone()
 
     def top(self, n: int) -> QuerySet[TModel]:
         self._check_capability("top")
-        p = dict(self._params)
-        p["$top"] = int(n)
-        return self._clone(params=p)
+        # p = dict(self._params)
+        self._params["$top"] = int(n)
+        return self._make_clone()
 
     def count(self) -> int:
         # self._check_capability("count")
@@ -422,7 +431,7 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
                 f"{self.endpoint}/{id}", params=self._params, headers=self._headers
             )
             if data:
-                return self.model_class(graph_data=data, qs=self)
+                return self.make_from_graph(data)
             return None
         objs = list(self.filter(**lookups).top(2))
         if not objs:
@@ -433,7 +442,9 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
 
     def create(self, **kwargs: Any) -> TModel:
         self._check_capability("create")
-        obj = self.model_class(qs=self, **kwargs)
+        obj = self.model_class(**kwargs, parent=self)
+        obj._validate_for_create()
+        obj = self.model_class(client=self._client, **kwargs)
         payload = obj.to_graph(for_update=False)
         graph_data = self._client.post(self.endpoint, json_body=payload)
         obj.refresh_from_graph(graph_data)
@@ -443,21 +454,14 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
         self._headers["ConsistencyLevel"] = "eventual"
         return self
 
-    def _clone(
-        self,
-        *,
-        q: Q | None = None,
-        params: dict[str, Any] | None = None,
-        headers: dict[str, Any] | None = None,
-    ) -> QuerySet[TModel]:
-
+    def _make_clone(self, *, q: Q | None = None) -> QuerySet[TModel]:
         return self.__class__(
-            self._client,
+            client=self._c,
             model_class=self.model_class,
-            endpoint=self.endpoint,
+            parent=self._parent,
             q=q or self._q,
-            params=dict(self._params) if params is None else params,
-            headers=dict(self._headers) if headers is None else headers,
+            params=self._params,
+            headers=self._headers,
         )
 
     def _compile_q(self, q: Q) -> str:
@@ -505,7 +509,7 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
 
     def _iter_objects(self, data: dict[str, Any]) -> Iterator[TModel]:
         for item in data.get("value", []):
-            yield self.model_class(graph_data=item, qs=self)
+            yield self.model_class(graph_data=item, parent=self)
 
     def _get_object(self) -> Model:
         obj = getattr(self, "_obj", None)
@@ -513,9 +517,21 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
             raise ValueError("No object found for this queryset.")
         return obj
 
+    @property
+    def _client(self) -> "Client":
+        if c := self._c or getattr(self._parent, "_client", None):
+            return c
+        raise RuntimeError("No client found.")
+
+    def make_from_graph(self, data: dict[str, Any]):
+        return self.model_class(graph_data=data, parent=self)
+
+    def make(self, **kwargs: Any):
+        return self.model_class(**kwargs, parent=self)
+
 
 class BulkQuerySet:
-    def __init__(self, qs: QuerySet[TModel], endpoint: str | None = None) -> None:
-        self._qs = qs
-        self._client = qs._client
-        self._endpoint = endpoint or self._qs._endpoint
+    def __init__(self, queryset: QuerySet[TModel], endpoint: str | None = None) -> None:
+        self._queryset = queryset
+        self._client = queryset._client
+        self._endpoint = endpoint or self._queryset.endpoint
