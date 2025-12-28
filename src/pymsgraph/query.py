@@ -187,11 +187,14 @@ class EndpointDescriptor:
 class QuerySetBase(type):
     def __new__(mcls, name: str, bases: tuple[type, ...], attrs: dict[str, Any]):
         cls = super().__new__(mcls, name, bases, attrs)
-
-        for base in bases:
-            if base.__name__ == "QuerySet":
-                setattr(cls, "model_class", ModelDescriptor(attrs.get("model_class")))
-                setattr(cls, "endpoint", EndpointDescriptor(attrs.get("endpoint")))
+        setattr(
+            cls,
+            "model_class",
+            ModelDescriptor(
+                attrs.get("model_class") or getattr(cls, "model_class", None)
+            ),
+        )
+        setattr(cls, "endpoint", EndpointDescriptor(attrs.get("endpoint")))
         return cls
 
 

@@ -188,6 +188,40 @@ class Client:
         data = self._json_or_none(resp)
         return data or {}
 
+    def put(
+        self,
+        path: str,
+        *,
+        content: bytes | str | None = None,
+        params: Mapping[str, Any] | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> dict[str, Any]:
+        body = content.encode() if isinstance(content, str) else content
+        resp = self.http.put(
+            self._url(path),
+            params=params,
+            content=body,
+            headers=self._headers(headers),
+        )
+        self._raise_for_status(resp)
+        data = self._json_or_none(resp)
+        return data or {}
+
+    def get_content(
+        self,
+        path: str,
+        *,
+        params: Mapping[str, Any] | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> bytes:
+        resp = self.http.get(
+            self._url(path),
+            params=params,
+            headers=self._headers(headers),
+        )
+        self._raise_for_status(resp)
+        return resp.content
+
     def patch(
         self,
         path: str,
@@ -240,6 +274,10 @@ class Client:
     @property
     def subscribed_sku(self) -> query.SubscribedSkuQuerySet:
         return query.SubscribedSkuQuerySet(self)
+
+    @property
+    def drives(self) -> query.DriveQuerySet:
+        return query.DriveQuerySet(self)
 
     @property
     def sites(self) -> query.SiteQuerySet:

@@ -3,19 +3,21 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import quote
 
-from pymsgraph.fields import BooleanField, CharField, DateTimeField
+from pymsgraph.fields import BooleanField, CharField, DateTimeField, Field
 from pymsgraph.models.base import Model
 from pymsgraph.query import Capabilities, QuerySet
-from .list import ListQuerySet, ListItem, ListItemsQuerySet, FieldValueSet
+from pymsgraph.models import drive
 
-__all__ = [
-    "Site",
-    "SiteQuerySet",
-    "ListQuerySet",
-    "ListItem",
-    "ListItemsQuerySet",
-    "FieldValueSet",
-]
+from .list import ListQuerySet
+
+__all__ = ["SiteQuerySet"]
+
+
+class Drive(drive.Drive):
+    endpoint = "/drive"
+
+    def _has_identity(self) -> bool:
+        return False
 
 
 class Site(Model):
@@ -33,9 +35,9 @@ class Site(Model):
     web_url = CharField(read_only=True)
 
     # Complex properties (dicts)
-    # root = Field()  # root
-    # sharepoint_ids = Field()  # sharepointIds
-    # site_collection = Field()  # siteCollection
+    root = Field()  # root
+    sharepoint_ids = Field()  # sharepointIds
+    site_collection = Field()  # siteCollection
 
     is_read_only = True
     endpoint = "/sites"
@@ -44,6 +46,10 @@ class Site(Model):
     @property
     def lists(self) -> ListQuerySet:
         return ListQuerySet(parent=self)
+
+    @property
+    def drive(self):
+        return Drive(parent=self)
 
     def __repr__(self) -> str:
         return f"<Site: {self.display_name or self.name}>"
