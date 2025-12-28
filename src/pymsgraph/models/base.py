@@ -31,16 +31,18 @@ class EndpointDescriptor:
     def __get__(self, obj: "Model", objtype=None) -> str | None:
         if obj is None:
             return self.endpoint
-
+        model_class_endpoint = self.endpoint
         relative_ep = obj._relative_endpoint or obj.id
-        if relative_ep is None:
+        if relative_ep is None and obj._has_identity():
             raise ValueError(
                 f"Resource {type(obj)} has not been initialized or does not exist"
             )
-        if ep := getattr(obj._parent, "endpoint", None):
-            return f"{ep}/{relative_ep}"
-        if ep := self.endpoint:
-            return f"{ep}/{relative_ep}"
+        if parent_ep := getattr(obj._parent, "endpoint", None):
+            if not relative_ep:
+                return f"{parent_ep}{model_class_endpoint}"
+            return f"{parent_ep}/{relative_ep}"
+        if model_class_endpoint:
+            return f"{model_class_endpoint}/{relative_ep}"
         raise RuntimeError(f"No endpoint found.")
 
 
@@ -173,6 +175,9 @@ class Model(metaclass=ModelBase):
         self._data = self.__class__(graph_data=data, parent=self._parent)._data
         self._dirty.clear()
         self._graph_data = data
+
+    def _has_identity(self) -> bool:
+        return True
 
     def _validate_for_create(self) -> None:
         missing: list[str] = []

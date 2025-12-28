@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import namedtuple
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic, cast
@@ -113,7 +112,7 @@ class Capabilities:
         count: bool = True,
         top: bool = True,
         first: bool = True,
-        expand: bool = False,
+        expand: bool = True,
         select: bool = True,
         create: bool = True,
         get: bool = True,
@@ -131,7 +130,7 @@ class Capabilities:
         count: bool = False,
         top: bool = False,
         first: bool = False,
-        expand: bool = False,
+        expand: bool = True,
         select: bool = True,
         create: bool = False,
         get: bool = False,
@@ -191,13 +190,8 @@ class QuerySetBase(type):
 
         for base in bases:
             if base.__name__ == "QuerySet":
-                # base._queryset_class[name] = cls
-
                 setattr(cls, "model_class", ModelDescriptor(attrs.get("model_class")))
                 setattr(cls, "endpoint", EndpointDescriptor(attrs.get("endpoint")))
-
-        # print(name, bases, attrs)
-
         return cls
 
 
@@ -212,8 +206,6 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
     related_lookup: ClassVar[dict[str, Callable]] = {}
     model_class: type[TModel]
     endpoint: ClassVar[str]
-
-    # _queryset_class: dict[str, type["QuerySet[Any]"]] = {}
 
     def __init__(
         self,
@@ -377,8 +369,24 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
             return self._make_clone()
         raise ValueError(f"Object {self.model_class.__name__} does not support search")
 
+    def expand(
+        self, field: str, *, select: Iterable[str] | None = None
+    ) -> QuerySet[TModel]:
+        self._check_capability("expand")
+        if select is not None:
+            val = f"{field}(select={','.join(select)})"
+        else:
+            val = field
+        current_val = self._params.get("$expand")
+        if current_val:
+            val = f"{current_val},{val}"
+        self._params["$expand"] = val
+        return self._make_clone()
+
     def select(self, *fields: str) -> QuerySet[TModel]:
         self._check_capability("select")
+        if not fields:
+            return self
         graph_fields = [self.model_class._meta.field_to_graph(f) for f in fields]
         # p = dict(self._params)
         self._params["$select"] = ",".join(graph_fields)
@@ -427,20 +435,24 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
             return obj
         return None
 
-    def get(self, *, id: str | None = None, **lookups: Any) -> TModel | None:
+    def get(self, *, id: str | None = None, **lookups: Any) -> TModel:
         self._check_capability("get")
         if id:
             data = self._client.get(
                 f"{self.endpoint}/{id}", params=self._params, headers=self._headers
             )
             if data:
-                return self.make_from_graph(data)
-            return None
+                return self.model_class(graph_data=data, parent=self)
+            raise RuntimeError(f"No resource ({self.model_class.__name__}) found, {id}")
+        if not lookups:
+            raise ValueError(f"{type(self)}.get requires id= or filters")
         objs = list(self.filter(**lookups).top(2))
         if not objs:
-            raise LookupError("DoesNotExist")
+            raise RuntimeError(f"No resource ({self.model_class.__name__}) found, {id}")
         if len(objs) > 1:
-            raise LookupError("MultipleObjectsReturned")
+            raise RuntimeError(
+                f"Multiple resources found. Use filter method instead, {lookups} "
+            )
         return objs[0]
 
     def create(self, **kwargs: Any) -> TModel:

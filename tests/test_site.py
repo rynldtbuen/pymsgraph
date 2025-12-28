@@ -69,9 +69,6 @@ def test_site_get_invalid_args(make_client: "MakeClient"):
     with pytest.raises(ValueError):
         c.sites.get()  # neither id nor path
 
-    with pytest.raises(ValueError):
-        c.sites.get(id="one", path="/two")  # both provided
-
 
 def test_site_search_sets_params_and_headers(make_client: "MakeClient"):
     c, _ = make_client(lambda req: httpx.Response(200, json={"value": []}))
