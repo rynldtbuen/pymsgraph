@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
+import csv
+import json
+from pathlib import Path
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic, cast
 
@@ -263,6 +266,12 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
                 break
             yield from iter_next_objects
 
+    def has_next_link(self) -> bool:
+        """
+        Return True if there is a nextLink available to fetch more items.
+        """
+        return self._next_link is not None
+
     # def __getitem__(self, key: slice | int) -> "QuerySet[TModel]":
     #     if isinstance(key, int):
     #         # Optional: Django-style would execute and return an item.
@@ -360,15 +369,8 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
         if not fields:
             return self
         graph_fields = [self.model_class._meta.field_to_graph(f) for f in fields]
-        # p = dict(self._params)
         self._params["$select"] = ",".join(graph_fields)
         return self._make_clone()
-
-    # def select_related(self, *fields: str) -> QuerySet[TModel]:
-    #     graph_fields = [self.model._meta.field_to_graph(f) for f in fields]
-    #     p = dict(self._params)
-    #     p["$select"] = ",".join(graph_fields)
-    #     return self._make_clone(params=p)
 
     def order_by(self, *fields: str) -> QuerySet[TModel]:
         self._check_capability("order_by")
@@ -378,7 +380,6 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
             py_name = item[1:] if desc else item
             gf = self.model_class._meta.field_to_graph(py_name)
             parts.append(f"{gf} desc" if desc else gf)
-        # p = dict(self._params)
         self._params["$orderby"] = ",".join(parts)
         return self._make_clone()
 
@@ -400,6 +401,40 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
             return self._count
 
         return len(self._objects)
+
+    def to_csv(
+        self,
+        path: str | Path,
+        *,
+        fields: Iterable[str] | None = None,
+        include_header: bool = True,
+        use_graph_names: bool = False,
+    ) -> None:
+        """
+        Export query results to a CSV file.
+
+        `fields` are model field names. If `use_graph_names` is True, CSV headers
+        use Graph names instead of Python field names.
+        """
+        field_names = list(fields) if fields else list(self.model_class._meta.fields)
+        headers = [
+            self.model_class._meta.field_to_graph(f) if use_graph_names else f
+            for f in field_names
+        ]
+
+        out_path = Path(path)
+        with out_path.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            if include_header:
+                writer.writerow(headers)
+            for obj in self.all():
+                row = []
+                for f_name in field_names:
+                    val = getattr(obj, f_name, None)
+                    if isinstance(val, (dict, list)):
+                        val = json.dumps(val, ensure_ascii=True)
+                    row.append(val)
+                writer.writerow(row)
 
     def first(self) -> TModel | None:
         self._check_capability("first")
@@ -441,6 +476,12 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
         self._headers["ConsistencyLevel"] = "eventual"
         return self
 
+    def make_from_graph(self, data: dict[str, Any]):
+        return self.model_class(graph_data=data, parent=self)
+
+    def make(self, **kwargs: Any):
+        return self.model_class(**kwargs, parent=self)
+
     def _make_clone(self, *, q: Q | None = None) -> QuerySet[TModel]:
         return self.__class__(
             client=self._c,
@@ -477,6 +518,7 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
                     raise ValueError(
                         f"Lookup '{normalized}' is not supported for field '{field_name}'"
                     )
+
             return compile_lookup(gf, lookup, value)
 
         return compile_node(q)
@@ -523,23 +565,11 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
         #     obj = self.model_class(graph_data=item, parent=self)
         #     yield obj
 
-    def has_next_link(self) -> bool:
-        """
-        Return True if there is a nextLink available to fetch more items.
-        """
-        return self._next_link is not None
-
     @property
     def _client(self) -> "Client":
         if c := self._c or getattr(self._parent, "_client", None):
             return c
         raise RuntimeError("No client found.")
-
-    def make_from_graph(self, data: dict[str, Any]):
-        return self.model_class(graph_data=data, parent=self)
-
-    def make(self, **kwargs: Any):
-        return self.model_class(**kwargs, parent=self)
 
 
 class BulkQuerySet:

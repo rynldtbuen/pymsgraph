@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 from pymsgraph import utils
@@ -139,6 +140,32 @@ class UserQuerySet(QuerySet["User"]):
     @property
     def licenses(self) -> licenses.LicensesBulkQuerySet:
         return licenses.LicensesBulkQuerySet(self)
+
+    def get_by_directory_ids(
+        self,
+        *ids: str | Iterable[str],
+    ) -> list["User"]:
+        """
+        Resolve directory object IDs to users via /directoryObjects/getByIds.
+        """
+        id_list: list[str] = []
+        for arg in ids:
+            if isinstance(arg, str):
+                id_list.append(arg)
+            else:
+                id_list.extend(list(arg))
+        if not id_list:
+            return []
+
+        results: list[User] = []
+        for chunk in utils.chunks(id_list, 1000):
+            payload = {"ids": list(chunk), "types": ["user"]}
+            data = self._client.post("/directoryObjects/getByIds", json_body=payload)
+            results.extend(
+                self.model_class(graph_data=item, parent=self)
+                for item in data.get("value", [])
+            )
+        return results
 
     def create(
         self,

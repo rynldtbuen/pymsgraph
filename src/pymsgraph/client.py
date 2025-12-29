@@ -280,5 +280,9 @@ class Client:
         return query.DriveQuerySet(self)
 
     @property
+    def service_principals(self) -> query.ServicePrincipalQuerySet:
+        return query.ServicePrincipalQuerySet(self)
+
+    @property
     def sites(self) -> query.SiteQuerySet:
         return query.SiteQuerySet(self)
