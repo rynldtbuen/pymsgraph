@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import ClassVar
 from pymsgraph.fields import CharField, IntegerField, ObjectField
 from pymsgraph.models.base import Model
@@ -20,7 +21,7 @@ class LicenseUnitsDetail(Model):
 
     @classmethod
     def as_descriptor(cls):
-        return ObjectField(cls)
+        return ObjectField(cls, factory=lambda v: cls(graph_data=v))
 
     def __repr__(self):
         return f"<LicenseUnitsDetail: enabled={self.enabled}, locked_out={self.locked_out}, suspended={self.suspended}, warning={self.warning}>"
@@ -35,17 +36,17 @@ class ServicePlanInfo(Model):
 
     is_read_only = True
 
-    applies_to = CharField(read_only=True)
-    provisioning_status = CharField(read_only=True)
-    id = CharField(read_only=True, graph_name="servicePlanId")
-    name = CharField(read_only=True, graph_name="servicePlanName")
+    applies_to = CharField()
+    provisioning_status = CharField()
+    id = CharField(graph_name="servicePlanId")
+    name = CharField(graph_name="servicePlanName")
 
     @classmethod
     def as_descriptor(cls):
-        return ObjectField(cls, many=True)
+        return ObjectField(cls, many=True, factory=lambda v: cls(graph_data=v))
 
     def __repr__(self):
-        return f"<ServicePlanInfo: {self.name}>"
+        return f"<ServicePlanInfo: {self.id}>"
 
 
 class SubscribedSku(Model):
@@ -56,7 +57,10 @@ class SubscribedSku(Model):
     """
 
     is_read_only = True
+    endpoint = "/subscribedSkus"
 
+    account_name = CharField()
+    account_id = CharField()
     sku_id = CharField()  # skuId
     sku_part_number = CharField()  # skuPartNumber
     capability_status = CharField()  # capabilityStatus
@@ -65,12 +69,66 @@ class SubscribedSku(Model):
     prepaid_units = LicenseUnitsDetail.as_descriptor()
     service_plans = ServicePlanInfo.as_descriptor()
 
-    endpoint = "/subscribedSkus"
+    # Optional SKU id -> product name mapping (keys are lowercase GUIDs).
+    PRODUCT_NAME_BY_SKU: ClassVar[dict[str, str]] = {}
+    PRODUCT_NAMES_CSV_PATH: ClassVar[Path] = (
+        Path(__file__).resolve().parents[3]
+        / "static"
+        / "Product names and service plan identifiers for licensing.csv"
+    )
+
+    @property
+    def product_name(self) -> str | None:
+        return SubscribedSku.get_product_name(sku_id=self.sku_id)
 
     def __repr__(self):
         return f"<SubscribedSku: {self.sku_id}>"
 
+    @classmethod
+    def get_product_name(
+        cls,
+        *,
+        sku_id: str | None = None,
+        sku_part_number: str | None = None,
+    ) -> str | None:
+        """
+        Resolve a human-friendly product name for a SKU id or sku part number.
+
+        Graph does not provide product names for subscribed SKUs, so this relies
+        on a local mapping (PRODUCT_NAME_BY_SKU) that you can extend.
+        """
+
+        def _load():
+            csv_path = Path(cls.PRODUCT_NAMES_CSV_PATH)
+            if not csv_path.is_file():
+                return
+
+            import csv
+
+            with csv_path.open("r", encoding="utf-8", newline="") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    display = (row.get("Product_Display_Name") or "").strip()
+                    guid = (row.get("GUID") or "").strip()
+                    if not display:
+                        continue
+                    if guid:
+                        cls.PRODUCT_NAME_BY_SKU.setdefault(guid.lower(), display)
+
+        if not cls.PRODUCT_NAME_BY_SKU:
+            _load()
+        if not sku_id and not sku_part_number:
+            raise ValueError("Provide sku_id or sku_part_number")
+        if sku_id:
+            key = sku_id.strip().lower()
+            if key in cls.PRODUCT_NAME_BY_SKU:
+                return cls.PRODUCT_NAME_BY_SKU[key]
+        if sku_part_number:
+            key = sku_part_number.strip().lower()
+            return cls.PRODUCT_NAME_BY_SKU.get(key)
+        return None
+
 
 class SubscribedSkuQuerySet(QuerySet[SubscribedSku]):
     model_class = SubscribedSku
-    capabilities = Capabilities.read_only()
+    capabilities = Capabilities.read_only(filter=True)

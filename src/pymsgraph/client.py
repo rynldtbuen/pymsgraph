@@ -272,7 +272,7 @@ class Client:
         return query.UserQuerySet(self)
 
     @property
-    def subscribed_sku(self) -> query.SubscribedSkuQuerySet:
+    def subscribed_skus(self) -> query.SubscribedSkuQuerySet:
         return query.SubscribedSkuQuerySet(self)
 
     @property

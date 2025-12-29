@@ -320,9 +320,9 @@ class ObjectField(Field, Generic[T]):
             if self.factory is not None:
                 return self.factory(v)
 
-            from_graph = getattr(self.obj_type, "from_graph", None)
-            if callable(from_graph):
-                return from_graph(v)
+            # from_graph = getattr(self.obj_type, "from_graph", None)
+            # if callable(from_graph):
+            #     return from_graph(v)
 
             # fallback: dataclass / normal ctor
             return self.obj_type(**v)  # type: ignore[misc]
