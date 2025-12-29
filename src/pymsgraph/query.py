@@ -258,41 +258,10 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
         """
         yield from self.__iter__()
         while self._next_link:
-            iter_next_objects = self.iter_next_objects()
+            iter_next_objects = self._iter_next_objects()
             if iter_next_objects is None:
                 break
             yield from iter_next_objects
-
-    def iter_next_objects(self) -> Iterator[TModel] | None:
-        """
-        Fetch the nextLink if available and return its items as models.
-        """
-        if not self._next_link:
-            return
-
-        path = self._next_link
-        base = getattr(self._client, "base_url", "")
-        if base and path.startswith(base):
-            path = path[len(base) :]
-        path = path.lstrip("/")
-
-        data = self._client.get(path, headers=self._headers)
-        self._data = data
-        self._next_link = data.get("@odata.nextLink")
-        # self._count = data.get("@odata.count", 0)
-
-        for obj in self._iter_objects(data.get("value", [])):
-            self._objects.append(obj)
-            yield obj
-        # for item in :
-        #     obj = self.model_class(graph_data=item, parent=self)
-        #     yield obj
-
-    def has_next_objects(self) -> bool:
-        """
-        Return True if there is a nextLink available to fetch more items.
-        """
-        return self._next_link is not None
 
     # def __getitem__(self, key: slice | int) -> "QuerySet[TModel]":
     #     if isinstance(key, int):
@@ -529,11 +498,36 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
         for item in data.get("value", []):
             yield self.model_class(graph_data=item, parent=self)
 
-    def _get_object(self) -> Model:
-        obj = getattr(self, "_obj", None)
-        if not obj:
-            raise ValueError("No object found for this queryset.")
-        return obj
+    def _iter_next_objects(self) -> Iterator[TModel] | None:
+        """
+        Fetch the nextLink if available and return its items as models.
+        """
+        if not self._next_link:
+            return
+
+        path = self._next_link
+        base = getattr(self._client, "base_url", "")
+        if base and path.startswith(base):
+            path = path[len(base) :]
+        path = path.lstrip("/")
+
+        data = self._client.get(path, headers=self._headers)
+        self._data = data
+        self._next_link = data.get("@odata.nextLink")
+        # self._count = data.get("@odata.count", 0)
+
+        for obj in self._iter_objects(data.get("value", [])):
+            self._objects.append(obj)
+            yield obj
+        # for item in :
+        #     obj = self.model_class(graph_data=item, parent=self)
+        #     yield obj
+
+    def has_next_link(self) -> bool:
+        """
+        Return True if there is a nextLink available to fetch more items.
+        """
+        return self._next_link is not None
 
     @property
     def _client(self) -> "Client":
