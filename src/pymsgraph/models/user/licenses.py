@@ -5,7 +5,7 @@ from pymsgraph import utils
 from pymsgraph.fields import CharField
 from pymsgraph.models.base import Model
 from pymsgraph.query import BulkQuerySet, Capabilities, QuerySet
-from pymsgraph.models.subscribed_sku import ServicePlanInfo
+from pymsgraph.models.subscribed_sku import ServicePlanInfo, SubscribedSku
 
 if TYPE_CHECKING:
     from pymsgraph.models.user import User
@@ -24,10 +24,14 @@ class LicenseDetails(Model):
     service_plans = ServicePlanInfo.as_descriptor()
 
     def __repr__(self):
-        return f"<LicenseDetails: {self.sku_id}>"
+        return f"<LicenseDetails: {self.product_name}>"
 
     def _has_identity(self) -> bool:
         return False
+
+    @property
+    def product_name(self):
+        return SubscribedSku.get_product_name(sku_id=self.sku_id)
 
 
 arg_types: TypeAlias = (
