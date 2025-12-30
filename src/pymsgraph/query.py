@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic, cast
 
 from pymsgraph.models.base import Model, TModel
 from pymsgraph.utils import get_model_class
+from pymsgraph import utils
 
 if TYPE_CHECKING:
     from pymsgraph.client import Client
@@ -201,10 +202,6 @@ class QuerySetBase(type):
         return cls
 
 
-class Collection:
-    pass
-
-
 class QuerySet(Generic[TModel], metaclass=QuerySetBase):
 
     capabilities: ClassVar[Capabilities] = Capabilities.read_only()
@@ -219,9 +216,12 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
         *,
         model_class: type[TModel] | str | None = None,  # type: ignore
         parent: Model | QuerySet[Any] | None = None,
+        graph_data: dict[str, Any] | None = None,
         q: Q | None = None,
         params: dict[str, Any] | None = None,
         headers: dict[str, Any] | None = None,
+        select_related: Iterable[str] | None = None,
+        set_values: dict[str, Any] | None = None,
     ) -> None:
         if isinstance(model_class, str):
             model_class = cast(type[TModel], get_model_class(model_class))
@@ -231,6 +231,9 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
         self._params = dict(params) if params else {}
         self._headers = dict(headers) if headers else {}
         self._parent = parent
+        self._graph_data: dict[str, Any] = dict(graph_data or {})
+        self._select_related: set[str] = set(select_related or [])
+        self._set_values: dict[str, Any] = dict(set_values or {})
 
         self._changed: bool = True
         self._data: dict[str, Any] = {}
@@ -248,9 +251,11 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
             self._next_link = data.get("@odata.nextLink")
             self._count = data.get("@odata.count", 0)
             self._changed = False
-            for obj in self._iter_objects(data):
-                self._objects.append(obj)
-                yield obj
+            objs = list(self._iter_objects(data))
+            self._objects.extend(objs)
+            if self._select_related:
+                self._prefetch_related(objs)
+            yield from objs
         else:
             for obj in self._objects:
                 yield obj
@@ -341,7 +346,6 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
         if search_field:
             # p = self._params
             graph_field = self.model_class._meta.field_to_graph(search_field)
-            print(graph_field)
             if not graph_field:
                 raise ValueError(
                     f"Field not exist in {self.model_class.__name__} property, '{search_field}'"
@@ -372,6 +376,37 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
         self._params["$select"] = ",".join(graph_fields)
         return self._make_clone()
 
+    def select_related(self, *fields: str) -> QuerySet[TModel]:
+        """
+        Prefetch related collections for the current queryset results.
+        """
+        if not fields:
+            return self
+        supported = getattr(self.model_class, "_related_fields", set())
+        for f in fields:
+            if f not in supported:
+                raise ValueError(
+                    f"{self.model_class.__name__} does not support select_related({f!r})"
+                )
+        clone = self._make_clone()
+        clone._select_related = set(self._select_related).union(fields)
+        return clone
+
+    def set_attr(self, name: str, value: Any) -> QuerySet[TModel]:
+        """
+        Stage a field update to be applied to all objects in this queryset.
+        """
+        field = self.model_class._meta.fields.get(name)
+        if not field:
+            raise ValueError(f"Unknown field: {name!r}")
+        if field.read_only:
+            raise ValueError(f"Field '{name}' is read-only")
+
+        clone = self._make_clone()
+        clone._set_values = dict(self._set_values)
+        clone._set_values[name] = field.to_python(value)
+        return clone
+
     def order_by(self, *fields: str) -> QuerySet[TModel]:
         self._check_capability("order_by")
         parts: list[str] = []
@@ -382,6 +417,47 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
             parts.append(f"{gf} desc" if desc else gf)
         self._params["$orderby"] = ",".join(parts)
         return self._make_clone()
+
+    def save(self) -> int:
+        """
+        Apply staged set_attr updates to all items in this queryset using $batch.
+        Returns the number of objects updated.
+        """
+        if not self._set_values:
+            return 0
+
+        meta = self.model_class._meta
+        payload: dict[str, Any] = {}
+        for name, val in self._set_values.items():
+            field = meta.fields.get(name)
+            if not field:
+                raise ValueError(f"Unknown field: {name!r}")
+            if field.read_only:
+                raise ValueError(f"Field '{name}' is read-only")
+            assert field.graph_name is not None
+            payload[field.graph_name] = field.to_graph(val)
+
+        total = 0
+        for batch in utils.chunks(self.all(), 20):
+            requests: list[dict[str, Any]] = []
+            for idx, obj in enumerate(batch, start=1):
+                requests.append(
+                    {
+                        "id": str(idx),
+                        "method": "PATCH",
+                        "url": obj.endpoint,
+                        "headers": {"Content-Type": "application/json"},
+                        "body": payload,
+                    }
+                )
+            resp = self._client.post("/$batch", json_body={"requests": requests})
+            utils.raise_batch_errors(resp, action="bulk update")
+            total += len(batch)
+            for obj in batch:
+                for name, val in self._set_values.items():
+                    obj._data[name] = val
+                    obj._dirty.discard(name)
+        return total
 
     def top(self, n: int) -> QuerySet[TModel]:
         self._check_capability("top")
@@ -490,6 +566,8 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
             q=q or self._q,
             params=self._params,
             headers=self._headers,
+            select_related=self._select_related,
+            set_values=self._set_values,
         )
 
     def _compile_q(self, q: Q) -> str:
@@ -536,6 +614,9 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
         if not getattr(self.capabilities, name, False):
             raise ValueError(f"{self.__class__.__name__} does not support {name}()")
 
+    def _prefetch_related(self, objs: list[TModel]) -> None:
+        return
+
     def _iter_objects(self, data: dict[str, Any]) -> Iterator[TModel]:
         for item in data.get("value", []):
             yield self.model_class(graph_data=item, parent=self)
@@ -558,9 +639,11 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
         self._next_link = data.get("@odata.nextLink")
         # self._count = data.get("@odata.count", 0)
 
-        for obj in self._iter_objects(data.get("value", [])):
-            self._objects.append(obj)
-            yield obj
+        objs = list(self._iter_objects(data))
+        self._objects.extend(objs)
+        if self._select_related:
+            self._prefetch_related(objs)
+        yield from objs
         # for item in :
         #     obj = self.model_class(graph_data=item, parent=self)
         #     yield obj

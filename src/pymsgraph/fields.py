@@ -348,3 +348,45 @@ class ObjectField(Field, Generic[T]):
 
         # last resort: pass through
         return v
+
+
+class RelatedField(Field, Generic[T]):
+    """
+    Descriptor that binds a QuerySet to a parent Model instance.
+
+    If expanded data is present on the parent, it preloads the queryset cache.
+    """
+
+    def __init__(
+        self,
+        queryset_class: type[Any],
+        *,
+        graph_name: str | None = None,
+    ) -> None:
+        super().__init__(graph_name=graph_name, read_only=True)
+        self.queryset_class = queryset_class
+        self._is_related_field = True
+
+    def __get__(self, obj: Any, objtype=None):
+        if obj is None:
+            return self
+        try:
+            return getattr(obj, f"_{self.name}_qs")
+        except AttributeError:
+            qs = self.queryset_class(parent=obj)
+
+            raw = obj._data.get(self.name) if hasattr(obj, "_data") else None
+            if raw is None and hasattr(obj, "_graph_data"):
+                raw = obj._graph_data.get(self.graph_name or self.name)
+
+            if raw is not None:
+                if isinstance(raw, list):
+                    qs._objects = [qs.make_from_graph(data) for data in raw]
+                elif isinstance(raw, dict):
+                    qs._objects = [qs.make_from_graph(raw)]
+                else:
+                    raise RuntimeError(f"Unsupported Graph data, {type(raw)}, {raw}")
+                qs._changed = False
+
+            setattr(obj, f"_{self.name}_qs", qs)
+            return qs

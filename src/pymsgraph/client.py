@@ -143,7 +143,7 @@ class Client:
             except Exception:
                 detail = resp.text
             raise httpx.HTTPStatusError(
-                f"Graph API error {resp.status_code}: {detail}",
+                f"Graph API error {resp.status_code}: {detail}: {resp.url}",
                 request=e.request,
                 response=e.response,
             ) from None

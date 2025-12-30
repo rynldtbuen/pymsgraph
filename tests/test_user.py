@@ -132,6 +132,90 @@ def test_user_queryset_count_uses_odata_count(make_client: "MakeClient"):
     assert len(list(qs)) == 2
 
 
+def test_select_related_invalid_field(make_client: "MakeClient"):
+    c, _ = make_client(lambda req: httpx.Response(200, json={"value": []}))
+    qs = c.users
+
+    with pytest.raises(ValueError):
+        qs.select_related("does_not_exist")
+
+
+def test_select_related_prefetch_licenses(make_client: "MakeClient"):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1.0/users":
+            return httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {"id": "u1", "displayName": "User 1"},
+                        {"id": "u2", "displayName": "User 2"},
+                    ]
+                },
+            )
+        if request.url.path == "/v1.0/$batch":
+            body = json.loads(request.content.decode())
+            assert len(body.get("requests", [])) == 2
+            responses = [
+                {"id": "1", "status": 200, "body": {"value": [{"skuId": "sku1"}]}},
+                {"id": "2", "status": 200, "body": {"value": [{"skuId": "sku2"}]}},
+            ]
+            return httpx.Response(200, json={"responses": responses})
+        return httpx.Response(404)
+
+    c, _ = make_client(handler)
+
+    users = list(c.users.select_related("licenses"))
+    assert [u.id for u in users] == ["u1", "u2"]
+
+    assert [l.sku_id for l in users[0].licenses] == ["sku1"]
+    assert [l.sku_id for l in users[1].licenses] == ["sku2"]
+
+
+def test_queryset_set_attr_and_save(make_client: "MakeClient"):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1.0/users":
+            return httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {"id": "u1", "displayName": "User 1", "city": "Old"},
+                        {"id": "u2", "displayName": "User 2", "city": "Old"},
+                    ]
+                },
+            )
+        if request.url.path == "/v1.0/$batch":
+            body = json.loads(request.content.decode())
+            assert len(body.get("requests", [])) == 2
+            for req in body.get("requests", []):
+                assert req["method"] == "PATCH"
+                assert req["body"]["city"] == "Auckland"
+                assert req["body"]["department"] == "IT"
+            return httpx.Response(
+                200,
+                json={
+                    "responses": [
+                        {"id": "1", "status": 204},
+                        {"id": "2", "status": 204},
+                    ]
+                },
+            )
+        return httpx.Response(404)
+
+    c, _ = make_client(handler)
+    qs = c.users
+
+    updated = qs.set_attr("city", "Auckland").set_attr("department", "IT").save()
+
+    assert updated == 2
+
+
+def test_queryset_set_attr_rejects_unknown_field(make_client: "MakeClient"):
+    c, _ = make_client(lambda req: httpx.Response(200, json={"value": []}))
+
+    with pytest.raises(ValueError):
+        c.users.set_attr("not_a_field", "x")
+
+
 def test_user_queryset_get_by_id(make_client: "MakeClient"):
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"

@@ -1,5 +1,5 @@
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, TypeAlias, cast, override
 
 from pymsgraph import utils
 from pymsgraph.fields import CharField
@@ -17,6 +17,7 @@ class LicenseDetails(Model):
     """
 
     is_read_only = True
+    endpoint = "/licenseDetails"
 
     sku_id = CharField(read_only=True)
     sku_part_number = CharField(read_only=True)
@@ -24,6 +25,9 @@ class LicenseDetails(Model):
 
     def __repr__(self):
         return f"<LicenseDetails: {self.sku_id}>"
+
+    def _has_identity(self) -> bool:
+        return False
 
 
 arg_types: TypeAlias = (
@@ -47,7 +51,9 @@ class LicensesQuerySet(QuerySet["LicenseDetails"]):
 
     model_class = LicenseDetails
     capabilities = Capabilities.read_only()
-    endpoint = "/assignLicense"
+
+    # def __iter__(self):
+    #     if d := self._graph_data:
 
     def add(self, *args: arg_types) -> None:
         """
@@ -60,8 +66,11 @@ class LicensesQuerySet(QuerySet["LicenseDetails"]):
         if not objects:
             return
 
+        p = self._parent
+        assert p is not None
+
         self._client.post(
-            self.endpoint,
+            f"{p.endpoint}/assignLicense",
             json_body={
                 "addLicenses": [
                     {"skuId": obj.sku_id, "disabledPlans": []} for obj in objects
@@ -81,8 +90,11 @@ class LicensesQuerySet(QuerySet["LicenseDetails"]):
         if not objects:
             return
 
+        p = self._parent
+        assert p is not None
+
         self._client.post(
-            self.endpoint,
+            f"{p.endpoint}/assignLicense",
             json_body={
                 "addLicenses": [],
                 "removeLicenses": [obj.sku_id for obj in objects],
@@ -119,7 +131,7 @@ class LicensesBulkQuerySet(BulkQuerySet):
                     {
                         "id": str(i),
                         "method": "POST",
-                        "url": u.licenses.endpoint,
+                        "url": f"{u.endpoint}/assignLicense",
                         "headers": {"Content-Type": "application/json"},
                         "body": {
                             "addLicenses": [
@@ -155,7 +167,7 @@ class LicensesBulkQuerySet(BulkQuerySet):
                     {
                         "id": str(i),
                         "method": "POST",
-                        "url": u.licenses.endpoint,
+                        "url": f"{u.endpoint}/assignLicense",
                         "headers": {"Content-Type": "application/json"},
                         "body": {
                             "addLicenses": [],

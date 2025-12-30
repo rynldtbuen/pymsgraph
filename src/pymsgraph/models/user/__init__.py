@@ -4,7 +4,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from pymsgraph import utils
-from pymsgraph.fields import BooleanField, CharField, EmailField
+from pymsgraph.fields import BooleanField, CharField, EmailField, RelatedField
 from pymsgraph.models.base import Model
 from pymsgraph.query import Capabilities, QuerySet
 
@@ -42,14 +42,15 @@ class User(Model):
 
     search_field = "display_name"
     endpoint = "/users"
+    related_lookup = {"licenses": compile_lookup._licenses}
 
     @property
     def groups(self) -> groups.GroupsQuerySet:
         return groups.GroupsQuerySet(parent=self)
 
-    @property
-    def licenses(self) -> licenses.LicensesQuerySet:
-        return licenses.LicensesQuerySet(parent=self)
+    licenses: licenses.LicensesQuerySet = RelatedField(
+        licenses.LicensesQuerySet, graph_name="licenseDetails"
+    )  # pyright: ignore[reportAssignmentType]
 
     @property
     def direct_reports(self): ...
@@ -204,6 +205,45 @@ class UserQuerySet(QuerySet["User"]):
         )
         obj.refresh_from_graph(self._client.post(self.endpoint, json_body=payload))
         return obj
+
+    def _prefetch_related(self, objs: list[User]) -> None:
+        if "licenses" not in self._select_related:
+            return
+
+        rel = getattr(self.model_class, "licenses", None)
+        graph_name = getattr(rel, "graph_name", "licenseDetails")
+
+        users = [u for u in objs if getattr(u, "id", None)]
+        if not users:
+            return
+
+        for batch in utils.chunks(users, 20):
+            requests: list[dict[str, Any]] = []
+            id_map: dict[str, User] = {}
+            for idx, u in enumerate(batch, start=1):
+                req_id = str(idx)
+                id_map[req_id] = u
+                requests.append(
+                    {
+                        "id": req_id,
+                        "method": "GET",
+                        "url": f"{u.endpoint}/{graph_name}",
+                    }
+                )
+
+            resp = self._client.post("/$batch", json_body={"requests": requests})
+            utils.raise_batch_errors(resp, action="prefetch user licenses")
+
+            for r in resp.get("responses", []) or []:
+                req_id = str(r.get("id", ""))
+                user = id_map.get(req_id)
+                if not user:
+                    continue
+                body = r.get("body") or {}
+                user._data["licenses"] = body.get("value", [])
+
+    def enabled_with_assigned_licenses(self):
+        return
 
 
 class PasswordProfile(Model):

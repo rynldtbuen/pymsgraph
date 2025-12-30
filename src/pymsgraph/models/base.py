@@ -52,15 +52,19 @@ class ModelBase(type):
     def __new__(mcls, name: str, bases: tuple[type, ...], attrs: dict[str, Any]):
         # inherit fields from bases
         fields: dict[str, Field] = {}
+        related_fields: set[str] = set()
         for b in bases:
             meta: Meta | None = getattr(b, "_meta", None)
             if meta:
                 fields.update(meta.fields)
+            related_fields.update(getattr(b, "_related_fields", set()))
 
         # fields declared on this class
         for k, v in attrs.items():
             if isinstance(v, Field):
                 fields[k] = v
+                if getattr(v, "_is_related_field", False):
+                    related_fields.add(k)
 
         cls = super().__new__(mcls, name, bases, attrs)
 
@@ -71,6 +75,7 @@ class ModelBase(type):
                 by_graph[f.graph_name] = f
 
         setattr(cls, "_meta", Meta(fields=fields, fields_by_graph=by_graph))
+        setattr(cls, "_related_fields", related_fields)
         setattr(cls, "endpoint", EndpointDescriptor(attrs.get("endpoint")))
 
         return cls
