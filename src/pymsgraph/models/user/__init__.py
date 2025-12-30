@@ -4,11 +4,18 @@ from collections.abc import Iterable
 from typing import Any
 
 from pymsgraph import utils
-from pymsgraph.fields import BooleanField, CharField, EmailField, RelatedField
+from pymsgraph.fields import (
+    BooleanField,
+    CharField,
+    DateTimeField,
+    EmailField,
+    Field,
+    RelatedField,
+)
 from pymsgraph.models.base import Model
 from pymsgraph.query import Capabilities, QuerySet
 
-from . import groups, licenses, compile_lookup
+from . import groups, licenses, lookups
 
 
 __all__ = ["UserQuerySet"]
@@ -21,14 +28,8 @@ class User(Model):
     https://learn.microsoft.com/en-us/graph/api/resources/user?view=graph-rest-1.0
     """
 
-    display_name = CharField(
-        required=True,
-        supported_lookups={"exact", "ne", "gte", "lte", "in", "startswith", "isnull"},
-    )
-    user_principal_name = EmailField(
-        required=True,
-        supported_lookups={"exact", "ne", "gte", "lte", "in", "startswith", "isnull"},
-    )
+    display_name = CharField(required=True)
+    user_principal_name = EmailField(required=True)
     account_enabled = BooleanField(default=True)
     mail_nickname = CharField(required=True)
     mail = EmailField(read_only=True)
@@ -38,11 +39,71 @@ class User(Model):
     department = CharField()
     office_location = CharField()
     mobile_phone = CharField()
-    city = CharField(max_length=128, supported_lookups={"exact", "in", "startswith"})
+    city = CharField(max_length=128)
+    about_me = CharField()
+    age_group = CharField()
+    assigned_licenses = Field(read_only=True)
+    assigned_plans = Field(read_only=True)
+    birthday = DateTimeField()
+    business_phones = Field()
+    company_name = CharField()
+    consent_provided_for_minor = CharField()
+    country = CharField()
+    created_date_time = DateTimeField(read_only=True)
+    creation_type = CharField()
+    custom_security_attributes = Field()
+    employee_hire_date = DateTimeField()
+    employee_id = CharField()
+    employee_org_data = Field()
+    employee_type = CharField()
+    fax_number = CharField()
+    hire_date = DateTimeField()
+    identities = Field()
+    im_addresses = Field()
+    interests = Field()
+    is_management_restricted = BooleanField()
+    is_resource_account = BooleanField()
+    legal_age_group_classification = CharField()
+    license_assignment_states = Field(read_only=True)
+    last_password_change_date_time = DateTimeField(read_only=True)
+    mailbox_settings = Field(read_only=True)
+    my_site = CharField()
+    on_premises_distinguished_name = CharField()
+    on_premises_domain_name = CharField()
+    on_premises_extension_attributes = Field()
+    on_premises_immutable_id = CharField()
+    on_premises_last_sync_date_time = DateTimeField(read_only=True)
+    on_premises_provisioning_errors = Field(read_only=True)
+    on_premises_sam_account_name = CharField()
+    on_premises_security_identifier = CharField(read_only=True)
+    on_premises_sync_enabled = BooleanField()
+    on_premises_user_principal_name = CharField()
+    other_mails = Field()
+    password_policies = CharField()
+    password_profile = Field(read_only=True)
+    past_projects = Field()
+    postal_code = CharField()
+    preferred_data_location = CharField()
+    preferred_language = CharField()
+    preferred_name = CharField()
+    provisioned_plans = Field(read_only=True)
+    proxy_addresses = Field()
+    responsibilities = Field()
+    schools = Field()
+    security_identifier = CharField(read_only=True)
+    service_provisioning_errors = Field(read_only=True)
+    show_in_address_list = BooleanField()
+    sign_in_activity = Field(read_only=True)
+    sign_in_sessions_valid_from_date_time = DateTimeField(read_only=True)
+    skills = Field()
+    state = CharField()
+    street_address = CharField()
+    usage_location = CharField()
+    user_type = CharField()
 
     search_field = "display_name"
     endpoint = "/users"
-    related_lookup = {"licenses": compile_lookup._licenses}
+    supported_lookup = lookups.supported_lookup
 
     @property
     def groups(self) -> groups.GroupsQuerySet:
@@ -132,7 +193,7 @@ class User(Model):
 class UserQuerySet(QuerySet["User"]):
     model_class = User
     capabilities = Capabilities.read_write(search=True)
-    related_lookup = {"licenses": compile_lookup._licenses}
+    related_lookup = lookups.related_lookup
 
     @property
     def groups(self) -> groups.GroupsBulkQuerySet:

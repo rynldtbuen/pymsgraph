@@ -20,7 +20,6 @@ class Field:
         read_only: bool = False,
         dump: Callable[[Any], Any] | None = None,  # python -> json
         load: Callable[[Any], Any] | None = None,  # json -> python
-        supported_lookups: set | None = None,
     ) -> None:
         self.name: str = ""  # set by __set_name__
         self.graph_name: str | None = graph_name
@@ -29,7 +28,6 @@ class Field:
         self.read_only = read_only
         self.dump = dump
         self.load = load
-        self.supported_lookups = supported_lookups
 
     def __set_name__(self, owner: type[Model], name: str) -> None:
         self.name = name
@@ -99,7 +97,6 @@ class CharField(Field):
             read_only=read_only,
             dump=dump,
             load=load,
-            supported_lookups=supported_lookups,
         )
         self.max_length = max_length
 

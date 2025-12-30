@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-from typing import Any
-
 from pymsgraph.fields import BooleanField, CharField, Field
 from pymsgraph.models.base import Model
 from pymsgraph.query import Capabilities, QuerySet
 
-from . import compile_lookup, members, owners
+from . import lookups, members, owners
 
 
 class Group(Model):
@@ -66,7 +64,7 @@ class GroupQuerySet(QuerySet["Group"]):
     model_class = Group
     capabilities = Capabilities.read_write(search=True)
 
-    related_lookup = {"group_types": compile_lookup._group_types}
+    # related_lookup = {"group_types": lookups._group_types}
     search_field = "display_name"
 
     @property

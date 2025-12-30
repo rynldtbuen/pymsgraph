@@ -1,4 +1,6 @@
 from collections.abc import Iterable
+import csv
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeAlias, cast, override
 
 from pymsgraph import utils
@@ -13,14 +15,14 @@ if TYPE_CHECKING:
 
 class LicenseDetails(Model):
     """
-    Graph licenseDetails  resource type.
+    Graph licenseDetails resource type.
     """
 
     is_read_only = True
     endpoint = "/licenseDetails"
 
-    sku_id = CharField(read_only=True)
-    sku_part_number = CharField(read_only=True)
+    sku_id = CharField()
+    sku_part_number = CharField()
     service_plans = ServicePlanInfo.as_descriptor()
 
     def __repr__(self):
@@ -111,8 +113,8 @@ class LicensesBulkQuerySet(BulkQuerySet):
     User queryset's licenses.
 
     Usage:
-        UserQuerySet.filter(...).groups.add(...)
-        UserQuerySet.filter(...).groups.remove(...)
+        UserQuerySet.filter(...).licenses.add(...)
+        UserQuerySet.filter(...).licenses.remove(...)
     """
 
     def add(self, *args: arg_types) -> None:
@@ -182,3 +184,46 @@ class LicensesBulkQuerySet(BulkQuerySet):
 
             batch_resp = client.post("/$batch", json_body={"requests": requests})
             utils.raise_batch_errors(batch_resp, action="remove user queryset licenses")
+
+    def to_csv(self, path: str | Path) -> None:
+        """
+        Export user licenses to CSV.
+
+        Headers: id, display_name, user_principal, mail, sku_id, sku_part_number, product_name
+        """
+        out_path = Path(path)
+        with out_path.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(
+                [
+                    "id",
+                    "display_name",
+                    "user_principal",
+                    "mail",
+                    "sku_id",
+                    "sku_part_number",
+                    "product_name",
+                ]
+            )
+            for user in self._queryset.all():
+                user_id = getattr(user, "id", None)
+                display_name = getattr(user, "display_name", None)
+                upn = getattr(user, "user_principal_name", None)
+                mail = getattr(user, "mail", None)
+                licenses = list(user.licenses)
+                if not licenses:
+                    writer.writerow([user_id, display_name, upn, mail, "", "", ""])
+                    continue
+                for lic in licenses:
+                    product_name = SubscribedSku.get_product_name(sku_id=lic.sku_id)
+                    writer.writerow(
+                        [
+                            user_id,
+                            display_name,
+                            upn,
+                            mail,
+                            lic.sku_id,
+                            lic.sku_part_number,
+                            product_name or "",
+                        ]
+                    )

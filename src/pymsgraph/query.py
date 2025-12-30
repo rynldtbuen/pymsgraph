@@ -1,70 +1,23 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
 import csv
 import json
-from pathlib import Path
+import logging
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic, cast
 
 from pymsgraph.models.base import Model, TModel
-from pymsgraph.utils import get_model_class
 from pymsgraph import utils
 
 if TYPE_CHECKING:
     from pymsgraph.client import Client
 
+logger = logging.getLogger("pymsgraph")
+
 
 Lookup = tuple[str, Any, str]  # (field_name, value, lookup)
-
-
-PY_TO_ODATA_LITERAL: dict[str, Any] = {
-    "bool": lambda x: str(x).lower(),
-    "nonetype": "null",
-    "int": lambda x: str(x),
-    "float": lambda x: str(x),
-    "str": lambda x: "'" + x.replace("'", "''") + "'",
-}
-
-
-def in_lookup(field, value):
-    if not isinstance(value, Iterable) or isinstance(value, (str, bytes)):
-        raise TypeError("__in expects a non-string iterable")
-    parts = [f"{field} eq {odata_literal(v)}" for v in value]
-    return "(" + " or ".join(parts) + ")" if parts else "(false)"
-
-
-PY_LOOKUP_TO_ODATA_QUERY: dict[str, Any] = {
-    "exact": lambda gf, v,: f"{gf} eq {odata_literal(v)}",
-    "ne": lambda gf, v: f"{gf} ne {odata_literal(v)}",
-    "gt": lambda gf, v: f"{gf} gt {odata_literal(v)}",
-    "gte": lambda gf, v: f"{gf} ge {odata_literal(v)}",
-    "lt": lambda gf, v: f"{gf} lt {odata_literal(v)}",
-    "lte": lambda gf, v: f"{gf} le {odata_literal(v)}",
-    "contains": lambda gf, v: f"contains({gf}, {odata_literal(v)})",
-    "startswith": lambda gf, v: f"startswith({gf}, {odata_literal(v)})",
-    "endswith": lambda gf, v: f"endswith({gf}, {odata_literal(v)})",
-    "isnull": lambda gf, v: f"{gf} eq null" if v else f"{gf} ne null",
-    "in": in_lookup,
-}
-
-
-def odata_literal(value: Any) -> str:
-    _type = type(value).__name__.lower()
-    try:
-        func = PY_TO_ODATA_LITERAL[_type]
-    except KeyError:
-        raise TypeError(f"Unsupported literal type: {type(value)!r}") from None
-    return func(value)
-
-
-def compile_lookup(graph_field: str, lookup: str, value: Any) -> str:
-    lookup = lookup or "exact"
-    try:
-        func = PY_LOOKUP_TO_ODATA_QUERY[lookup]
-    except:
-        raise ValueError(f"Unsupported lookup: {lookup!r}") from None
-    return func(graph_field, value)
 
 
 @dataclass(frozen=True)
@@ -153,7 +106,7 @@ class ModelDescriptor:
             return self.model_class
 
         if isinstance(self.model_class, str):
-            return get_model_class(self.model_class)
+            return utils.get_model_class(self.model_class)
 
         model_class = obj._model_class or self.model_class
         if model_class is None:
@@ -215,7 +168,7 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
         client: "Client | None" = None,
         *,
         model_class: type[TModel] | str | None = None,  # type: ignore
-        parent: Model | QuerySet[Any] | None = None,
+        parent: Model | TModel | QuerySet[Any] | None = None,
         graph_data: dict[str, Any] | None = None,
         q: Q | None = None,
         params: dict[str, Any] | None = None,
@@ -224,7 +177,7 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
         set_values: dict[str, Any] | None = None,
     ) -> None:
         if isinstance(model_class, str):
-            model_class = cast(type[TModel], get_model_class(model_class))
+            model_class = cast(type[TModel], utils.get_model_class(model_class))
         self._model_class = model_class
         self._c = client
         self._q = q
@@ -245,9 +198,14 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
     def __iter__(self) -> Iterator[TModel]:
         client = self._client
         if self._changed:
-            data = client.get(
-                self.endpoint, params=self._build_params(), headers=self._headers
+            params = self._build_params()
+            logger.debug(
+                "QuerySet.__iter__ model=%s endpoint=%s params=%s",
+                self.model_class.__name__,
+                self.endpoint,
+                params,
             )
+            data = client.get(self.endpoint, params=params, headers=self._headers)
             self._next_link = data.get("@odata.nextLink")
             self._count = data.get("@odata.count", 0)
             self._changed = False
@@ -588,7 +546,8 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
             gf = meta.field_to_graph(field_name)
             # validate lookup support if model declares it
 
-            lookups = getattr(meta.fields.get(field_name), "supported_lookups", None)
+            supported_lookup = getattr(self.model_class, "supported_lookup", {})
+            lookups = supported_lookup.get(field_name)
             if lookups:
                 # allowed = supported.get(field_name)
                 normalized = lookup or "exact"
@@ -597,7 +556,7 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
                         f"Lookup '{normalized}' is not supported for field '{field_name}'"
                     )
 
-            return compile_lookup(gf, lookup, value)
+            return utils.compile_lookup(gf, lookup, value)
 
         return compile_node(q)
 
@@ -608,6 +567,11 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
             parts.append(self._compile_q(self._q))
         if parts:
             p["$filter"] = " and ".join(parts)
+        logger.debug(
+            "QuerySet._build_params model=%s params=%s",
+            self.model_class.__name__,
+            p,
+        )
         return p
 
     def _check_capability(self, name: str) -> None:
@@ -634,6 +598,11 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
             path = path[len(base) :]
         path = path.lstrip("/")
 
+        logger.debug(
+            "QuerySet._iter_next_objects model=%s next_link=%s",
+            self.model_class.__name__,
+            self._next_link,
+        )
         data = self._client.get(path, headers=self._headers)
         self._data = data
         self._next_link = data.get("@odata.nextLink")
@@ -655,7 +624,7 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
         raise RuntimeError("No client found.")
 
 
-class BulkQuerySet:
+class BulkQuerySet(Generic[TModel]):
     def __init__(self, queryset: QuerySet[TModel], endpoint: str | None = None) -> None:
         self._queryset = queryset
         self._client = queryset._client

@@ -4,8 +4,8 @@ import importlib
 import re
 import secrets
 import string
-from collections.abc import Iterable, Iterator
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from collections.abc import Callable, Iterable, Iterator
+from typing import TYPE_CHECKING, Any, TypeVar
 
 if TYPE_CHECKING:
     from pymsgraph.models.base import TModel, Model
@@ -49,11 +49,6 @@ def generate_password(length: int = 12) -> str:
     secrets.SystemRandom().shuffle(chars)
 
     return "".join(chars)
-
-
-# def chunks(items: list[str], size: int) -> Iterable[list[str]]:
-#     for i in range(0, len(items), size):
-#         yield items[i : i + size]
 
 
 _CAMEL_1 = re.compile(r"(.)([A-Z][a-z]+)")
@@ -160,53 +155,54 @@ def coerce_objects(
         seen.add(val)
 
 
-# def coerce_ids(*args: Any) -> list[str]:
-#     """
-#     Flatten *args of:
-#       - "user-id" strings
-#       - User objects
-#       - QuerySet[User] / iterables of the above
-#     into a deduped list of directoryObject ids.
-#     """
+def collection_any_lookup(
+    *,
+    graph_collection: str,
+    element_field: bool | str | None = None,
+    var: str = "x",
+) -> Callable[[str, Any], str]:
+    """
+    Build an any() lookup for a collection.
 
-#     def _dedupe_keep_order(items: Iterable[str]) -> list[str]:
-#         seen: set[str] = set()
-#         out: list[str] = []
-#         for x in items:
-#             if x not in seen:
-#                 seen.add(x)
-#                 out.append(x)
-#         return out
+    - scalar collection: otherMails/any(x:endswith(x,'@edu'))
+    - object collection: assignedLicenses/any(u:u/skuId eq <value>)
+    """
 
-#     ids: list[str] = []
+    def _compile(lookup: str, value: Any) -> str:
+        if lookup == "isnull":
+            if not isinstance(value, bool):
+                raise ValueError(f"Value is not an instance of bool, {value!r}")
+            return (
+                f"{graph_collection}/$count eq 0"
+                if value
+                else f"{graph_collection}/$count ne 0"
+            )
 
-#     def add_one(x: Any) -> None:
-#         if x is None:
-#             return
+        if element_field:
+            if element_field is True:
+                if "__" in lookup:
+                    element, op = lookup.split("__", 1)
+                else:
+                    element, op = lookup, "exact"
+                if not element:
+                    raise ValueError(f"Unsupported lookup for collection: {lookup!r}")
+            else:
+                element = str(element_field)
+                if lookup.startswith(f"{element}__"):
+                    op = lookup.split("__", 1)[1] or "exact"
+                elif lookup == element:
+                    op = "exact"
+                else:
+                    raise ValueError(f"Unsupported lookup for {element}: {lookup!r}")
 
-#         # string id
-#         if isinstance(x, str):
-#             ids.append(x)
-#             return
+            ef_graph = snake_to_camel(element)
+            clause = compile_lookup(f"{var}/{ef_graph}", op, value)
+            return f"{graph_collection}/any({var}:{clause})"
 
-#         # QuerySet or any other iterable (but not strings)
-#         if isinstance(x, QuerySet):
-#             for item in x:
-#                 add_one(item)
-#             return
+        clause = compile_lookup(var, lookup or "exact", value)
+        return f"{graph_collection}/any({var}:{clause})"
 
-#         # assume User-like model instance
-#         # (your User has get_directory_object_id(), which resolves id if needed)
-#         if hasattr(x, "get_id"):
-#             ids.append(x.get_id())  # type: ignore
-#             return
-
-#         raise TypeError(f"Unsupported member type: {type(x)!r}")
-
-#     for arg in args:
-#         add_one(arg)
-
-#     return _dedupe_keep_order(ids)
+    return _compile
 
 
 def raise_batch_errors(batch_payload: dict[str, Any], *, action: str) -> None:
@@ -218,71 +214,50 @@ def raise_batch_errors(batch_payload: dict[str, Any], *, action: str) -> None:
             raise RuntimeError(f"Batch {action} failed (status={status}): {body}")
 
 
-# T = TypeVar("T")
+PY_TO_ODATA_LITERAL: dict[str, Any] = {
+    "bool": lambda x: str(x).lower(),
+    "nonetype": "null",
+    "int": lambda x: str(x),
+    "float": lambda x: str(x),
+    "str": lambda x: "'" + x.replace("'", "''") + "'",
+}
 
 
-# def coerce_values(
-#     *args: Any,
-#     resolver: Callable[[Any], T] | None = None,
-#     attr_names: tuple[str, ...] = (),
-#     allow_str: bool = True,
-# ) -> list[T]:
+def in_lookup(field, value):
+    if not isinstance(value, Iterable) or isinstance(value, (str, bytes)):
+        raise TypeError("__in expects a non-string iterable")
+    parts = [f"{field} eq {odata_literal(v)}" for v in value]
+    return "(" + " or ".join(parts) + ")" if parts else "(false)"
 
-#     def _dedupe_keep_order(items: Iterable[T]) -> list[T]:
-#         seen: set[T] = set()
-#         out: list[T] = []
-#         for x in items:
-#             if x not in seen:
-#                 seen.add(x)
-#                 out.append(x)
-#         return out
 
-#     def _is_iterable_but_not_str(x: Any) -> bool:
-#         return isinstance(x, Iterable) and not isinstance(
-#             x, (str, bytes, bytearray, dict)
-#         )
+PY_LOOKUP_TO_ODATA_QUERY: dict[str, Any] = {
+    "exact": lambda gf, v,: f"{gf} eq {odata_literal(v)}",
+    "ne": lambda gf, v: f"{gf} ne {odata_literal(v)}",
+    "gt": lambda gf, v: f"{gf} gt {odata_literal(v)}",
+    "gte": lambda gf, v: f"{gf} ge {odata_literal(v)}",
+    "lt": lambda gf, v: f"{gf} lt {odata_literal(v)}",
+    "lte": lambda gf, v: f"{gf} le {odata_literal(v)}",
+    "contains": lambda gf, v: f"contains({gf}, {odata_literal(v)})",
+    "startswith": lambda gf, v: f"startswith({gf}, {odata_literal(v)})",
+    "endswith": lambda gf, v: f"endswith({gf}, {odata_literal(v)})",
+    "isnull": lambda gf, v: f"{gf} eq null" if v else f"{gf} ne null",
+    "in": in_lookup,
+}
 
-#     def _flatten_args(*args: Any) -> Iterator[Any]:
-#         """Flatten QuerySets and iterables (lists/tuples/sets/etc) but not strings/dicts."""
 
-#         for x in args:
-#             if x is None:
-#                 continue
+def odata_literal(value: Any) -> str:
+    _type = type(value).__name__.lower()
+    try:
+        func = PY_TO_ODATA_LITERAL[_type]
+    except KeyError:
+        raise TypeError(f"Unsupported literal type: {type(value)!r}") from None
+    return func(value)
 
-#             if isinstance(x, QuerySet):
-#                 for item in x:
-#                     yield item
-#                 continue
 
-#             if _is_iterable_but_not_str(x):
-#                 for item in x:
-#                     yield item
-#                 continue
-
-#             yield x
-
-#     out: list[T] = []
-
-#     for x in _flatten_args(*args):
-#         if allow_str and isinstance(x, str):
-#             out.append(x)  # type: ignore[arg-type]
-#             continue
-
-#         if resolver is not None:
-#             out.append(resolver(x))
-#             continue
-
-#         # attr-based extraction fallback
-#         got = False
-#         for name in attr_names:
-#             if hasattr(x, name):
-#                 out.append(getattr(x, name))
-#                 got = True
-#                 break
-
-#         if got:
-#             continue
-
-#         raise TypeError(f"Unsupported value type: {type(x)!r}")
-
-#     return _dedupe_keep_order(out)
+def compile_lookup(graph_field: str, lookup: str, value: Any) -> str:
+    lookup = lookup or "exact"
+    try:
+        func = PY_LOOKUP_TO_ODATA_QUERY[lookup]
+    except:
+        raise ValueError(f"Unsupported lookup: {lookup!r}") from None
+    return func(graph_field, value)

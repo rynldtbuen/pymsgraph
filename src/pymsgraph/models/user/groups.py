@@ -23,7 +23,7 @@ class GroupsQuerySet(QuerySet["Group"]):
 
     model_class = "Group"  # type: ignore
     endpoint = "/memberOf"
-    capabilities = Capabilities.read_only()
+    capabilities = Capabilities.read_only(filter=True, search=True, count=True)
 
     def add(self, *args: arg_types) -> None:
         """
