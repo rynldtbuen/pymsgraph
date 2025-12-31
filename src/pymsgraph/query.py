@@ -335,13 +335,13 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
         self._params["$select"] = ",".join(graph_fields)
         return self._make_clone()
 
-    def select_related(self, *fields: str) -> QuerySet[TModel]:
+    def prefetch(self, *fields: str) -> QuerySet[TModel]:
         """
         Prefetch related collections for the current queryset results.
         """
         if not fields:
             return self
-        supported = getattr(self.model_class, "_related_fields", set())
+        supported = getattr(self.model_class, "prefetch_fields", set())
         for f in fields:
             if f not in supported:
                 raise ValueError(

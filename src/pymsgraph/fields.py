@@ -21,6 +21,7 @@ class Field:
         read_only: bool = False,
         dump: Callable[[Any], Any] | None = None,  # python -> json
         load: Callable[[Any], Any] | None = None,  # json -> python
+        **kwargs: Any,
     ) -> None:
         self.name: str = ""  # set by __set_name__
         self.graph_name: str | None = graph_name
@@ -29,6 +30,9 @@ class Field:
         self.read_only = read_only
         self.dump = dump
         self.load = load
+
+        for k, v in kwargs.items():
+            setattr(self, k, v)
 
     def __set_name__(self, owner: type[Model], name: str) -> None:
         self.name = name
@@ -348,60 +352,17 @@ class ObjectField(Field, Generic[T]):
         return v
 
 
-class RelatedField(Field, Generic[T]):
-    """
-    Descriptor that binds a QuerySet to a parent Model instance.
-
-    If expanded data is present on the parent, it preloads the queryset cache.
-    """
-
-    def __init__(
-        self,
-        queryset_class: type[Any],
-        *,
-        graph_name: str | None = None,
-    ) -> None:
-        super().__init__(graph_name=graph_name, read_only=True)
-        self.queryset_class = queryset_class
-        self._is_related_field = True
-
-    def __get__(self, obj: Any, objtype=None):
-        if obj is None:
-            return self
-        try:
-            return getattr(obj, f"_{self.name}_qs")
-        except AttributeError:
-            qs = self.queryset_class(parent=obj)
-
-            raw = obj._data.get(self.name) if hasattr(obj, "_data") else None
-            if raw is None and hasattr(obj, "_graph_data"):
-                raw = obj._graph_data.get(self.graph_name or self.name)
-
-            if raw is not None:
-                if isinstance(raw, list):
-                    qs._objects = [qs.make_from_graph(data) for data in raw]
-                elif isinstance(raw, dict):
-                    qs._objects = [qs.make_from_graph(raw)]
-                else:
-                    raise RuntimeError(f"Unsupported Graph data, {type(raw)}, {raw}")
-                qs._changed = False
-
-            setattr(obj, f"_{self.name}_qs", qs)
-            return qs
-
-
 class QuerySetField(Field):
     def __init__(
         self,
         queryset_class: type[QuerySet[TModel]],
         graph_name: str | None = None,
         *,
-        element_field: bool = False,
+        is_related: bool = False,
         **kwargs,
     ) -> None:
-        super().__init__(graph_name=graph_name, **kwargs)
+        super().__init__(graph_name=graph_name, is_related=is_related, **kwargs)
         self.queryset_class = queryset_class
-        self.element_field = element_field
 
     def __get__(self, obj: Any, objtype=None):
         if obj is None:
@@ -430,3 +391,32 @@ class QuerySetField(Field):
 
             setattr(obj, f"_{self.name}_qs", qs)
             return qs
+
+
+# def __get__(self, obj: Any, objtype=None):
+#     if obj is None:
+#         return self
+#     try:
+#         return getattr(obj, f"_{self.name}_qs")
+#     except AttributeError:
+#         qs = self.queryset_class(parent=obj)
+
+#         raw = obj._data.get(self.name) if hasattr(obj, "_data") else None
+#         if raw is None and hasattr(obj, "_graph_data"):
+#             raw = obj._graph_data.get(self.graph_name or self.name)
+
+#         if raw is not None:
+#             if isinstance(raw, list):
+#                 qs._objects = [  # pyright: ignore[reportAttributeAccessIssue]
+#                     qs.make_from_graph(data) for data in raw
+#                 ]
+#             elif isinstance(raw, dict):
+#                 qs._objects = [  # pyright: ignore[reportAttributeAccessIssue]
+#                     qs.make_from_graph(raw)
+#                 ]
+#             else:
+#                 raise RuntimeError(f"Unsupported Graph data, {type(raw)}, {raw}")
+#             qs._changed = False
+
+#         setattr(obj, f"_{self.name}_qs", qs)
+#         return qs

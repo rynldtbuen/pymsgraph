@@ -15,7 +15,7 @@ from pymsgraph.fields import (
 from pymsgraph.models.base import Model
 from pymsgraph.query import Capabilities, QuerySet
 
-from . import groups, lookups, query
+from . import lookups, query
 
 
 __all__ = ["UserQuerySet"]
@@ -43,7 +43,7 @@ class User(Model):
     about_me = CharField()
     age_group = CharField()
     assigned_licenses: query.AssignedLicenseQuerySet = QuerySetField(
-        query.AssignedLicenseQuerySet, read_only=True
+        query.AssignedLicenseQuerySet
     )  # pyright: ignore[reportAssignmentType]
     assigned_plans = Field(read_only=True)
     birthday = DateTimeField()
@@ -103,20 +103,11 @@ class User(Model):
     usage_location = CharField()
     user_type = CharField()
 
+    # Relationship
+    member_of = QuerySetField(query.MemberOfQuerySet)
+
     search_field = "display_name"
     endpoint = "/users"
-    supported_lookup = lookups.supported_lookup
-
-    @property
-    def groups(self) -> groups.GroupsQuerySet:
-        return groups.GroupsQuerySet(parent=self)
-
-    # licenses: licenses.LicensesQuerySet = RelatedField(
-    #     licenses.LicensesQuerySet, graph_name="licenseDetails"
-    # )  # pyright: ignore[reportAssignmentType]
-
-    @property
-    def direct_reports(self): ...
 
     def __repr__(self):
         return f"<User: {self.display_name}>"

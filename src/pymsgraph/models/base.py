@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
-from pymsgraph.fields import CharField, Field
+from pymsgraph.fields import CharField, Field, QuerySetField
 
 if TYPE_CHECKING:
     from pymsgraph.models.base import Model
@@ -52,19 +52,19 @@ class ModelBase(type):
     def __new__(mcls, name: str, bases: tuple[type, ...], attrs: dict[str, Any]):
         # inherit fields from bases
         fields: dict[str, Field] = {}
-        related_fields: set[str] = set()
+        prefetch_fields: set[str] = set()
         for b in bases:
             meta: Meta | None = getattr(b, "_meta", None)
             if meta:
                 fields.update(meta.fields)
-            related_fields.update(getattr(b, "_related_fields", set()))
+            prefetch_fields.update(getattr(b, "prefetch_fields", set()))
 
         # fields declared on this class
         for k, v in attrs.items():
-            if isinstance(v, Field):
+            if isinstance(v, QuerySetField):
                 fields[k] = v
-                if getattr(v, "_is_related_field", False):
-                    related_fields.add(k)
+                if getattr(v, "is_prefetch", False):
+                    prefetch_fields.add(k)
 
         cls = super().__new__(mcls, name, bases, attrs)
 
@@ -75,7 +75,7 @@ class ModelBase(type):
                 by_graph[f.graph_name] = f
 
         setattr(cls, "_meta", Meta(fields=fields, fields_by_graph=by_graph))
-        setattr(cls, "_related_fields", related_fields)
+        setattr(cls, "prefetch_fields", prefetch_fields)
         setattr(cls, "endpoint", EndpointDescriptor(attrs.get("endpoint")))
 
         return cls
