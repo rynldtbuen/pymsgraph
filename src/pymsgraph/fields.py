@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from pymsgraph.utils import snake_to_camel
 
 if TYPE_CHECKING:
-    from pymsgraph.models.base import Model
+    from pymsgraph.models.base import Model, TModel
+    from pymsgraph.query import QuerySet
 
 
 class Field:
@@ -381,6 +382,48 @@ class RelatedField(Field, Generic[T]):
                     qs._objects = [qs.make_from_graph(data) for data in raw]
                 elif isinstance(raw, dict):
                     qs._objects = [qs.make_from_graph(raw)]
+                else:
+                    raise RuntimeError(f"Unsupported Graph data, {type(raw)}, {raw}")
+                qs._changed = False
+
+            setattr(obj, f"_{self.name}_qs", qs)
+            return qs
+
+
+class QuerySetField(Field):
+    def __init__(
+        self,
+        queryset_class: type[QuerySet[TModel]],
+        graph_name: str | None = None,
+        *,
+        element_field: bool = False,
+        **kwargs,
+    ) -> None:
+        super().__init__(graph_name=graph_name, **kwargs)
+        self.queryset_class = queryset_class
+        self.element_field = element_field
+
+    def __get__(self, obj: Any, objtype=None):
+        if obj is None:
+            return self
+        try:
+            return getattr(obj, f"_{self.name}_qs")
+        except AttributeError:
+            qs = self.queryset_class(parent=obj)
+
+            raw = obj._data.get(self.name) if hasattr(obj, "_data") else None
+            if raw is None and hasattr(obj, "_graph_data"):
+                raw = obj._graph_data.get(self.graph_name or self.name)
+
+            if raw is not None:
+                if isinstance(raw, list):
+                    qs._objects = [  # pyright: ignore[reportAttributeAccessIssue]
+                        qs.make_from_graph(data) for data in raw
+                    ]
+                elif isinstance(raw, dict):
+                    qs._objects = [  # pyright: ignore[reportAttributeAccessIssue]
+                        qs.make_from_graph(raw)
+                    ]
                 else:
                     raise RuntimeError(f"Unsupported Graph data, {type(raw)}, {raw}")
                 qs._changed = False

@@ -1,51 +1,69 @@
 from collections.abc import Iterable
 import csv
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeAlias, cast, override
+from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 from pymsgraph import utils
-from pymsgraph.fields import CharField
+from pymsgraph.fields import CharField, Field
 from pymsgraph.models.base import Model
 from pymsgraph.query import BulkQuerySet, Capabilities, QuerySet
-from pymsgraph.models.subscribed_sku import ServicePlanInfo, SubscribedSku
+from pymsgraph.models.subscribed_sku import SubscribedSku
 
 if TYPE_CHECKING:
     from pymsgraph.models.user import User
 
 
-class LicenseDetails(Model):
-    """
-    Graph licenseDetails resource type.
-    """
+# class LicenseDetails(Model):
+#     """
+#     Graph licenseDetails resource type.
+#     """
 
-    is_read_only = True
-    endpoint = "/licenseDetails"
+#     is_read_only = True
+#     endpoint = "/licenseDetails"
 
-    sku_id = CharField()
-    sku_part_number = CharField()
-    service_plans = ServicePlanInfo.as_descriptor()
+#     sku_id = CharField()
+#     sku_part_number = CharField()
+#     service_plans = ServicePlanInfo.as_descriptor()
 
-    def __repr__(self):
-        return f"<LicenseDetails: {self.product_name}>"
+#     def __repr__(self):
+#         return f"<LicenseDetails: {self.product_name}>"
 
-    def _has_identity(self) -> bool:
-        return False
+#     def _has_identity(self) -> bool:
+#         return False
 
-    @property
-    def product_name(self):
-        return SubscribedSku.get_product_name(sku_id=self.sku_id)
+#     @property
+#     def product_name(self):
+#         return SubscribedSku.get_product_name(sku_id=self.sku_id)
 
 
 arg_types: TypeAlias = (
+    """
     str
-    | LicenseDetails
+    | AssignedLicense
     | Iterable[str]
-    | Iterable[LicenseDetails]
-    | QuerySet["LicenseDetails"]
+    | Iterable[AssignedLicense]
+    | QuerySet[AssignedLicense]
+    """
 )
 
 
-class LicensesQuerySet(QuerySet["LicenseDetails"]):
+class AssignedLicense(Model):
+    """
+    Graph assignedLicense resource type.
+    """
+
+    is_read_only = True
+    endpoint = "/assignedLicense"
+
+    īd = CharField(graph_name="skuId")
+    disabledPlans = Field()
+
+    @property
+    def product_name(self):
+        return SubscribedSku.get_product_name(sku_id=self.id)
+
+
+class AssignedLicenseQuerySet(QuerySet["AssignedLicense"]):
     """
     User's licenses
 
@@ -55,20 +73,15 @@ class LicensesQuerySet(QuerySet["LicenseDetails"]):
         User.licenses.remove(...)
     """
 
-    model_class = LicenseDetails
-    capabilities = Capabilities.read_only()
-
-    # def __iter__(self):
-    #     if d := self._graph_data:
+    model_class = AssignedLicense
+    capabilities = Capabilities.read_only(filter=True)
 
     def add(self, *args: arg_types) -> None:
         """
         Add license/s to this user.
         """
 
-        objects: list[LicenseDetails] = list(
-            utils.coerce_objects(*args, queryset=self, key="sku_id")
-        )
+        objects = list(utils.coerce_objects(*args, queryset=self))
         if not objects:
             return
 
@@ -79,7 +92,7 @@ class LicensesQuerySet(QuerySet["LicenseDetails"]):
             f"{p.endpoint}/assignLicense",
             json_body={
                 "addLicenses": [
-                    {"skuId": obj.sku_id, "disabledPlans": []} for obj in objects
+                    {"skuId": obj.id, "disabledPlans": []} for obj in objects
                 ],
                 "removeLicenses": [],
             },
@@ -90,9 +103,7 @@ class LicensesQuerySet(QuerySet["LicenseDetails"]):
         Remove license/s from this user.
         """
 
-        objects: list[LicenseDetails] = list(
-            utils.coerce_objects(*args, queryset=self, key="sku_id")
-        )
+        objects = list(utils.coerce_objects(*args, queryset=self))
         if not objects:
             return
 
@@ -103,9 +114,16 @@ class LicensesQuerySet(QuerySet["LicenseDetails"]):
             f"{p.endpoint}/assignLicense",
             json_body={
                 "addLicenses": [],
-                "removeLicenses": [obj.sku_id for obj in objects],
+                "removeLicenses": [obj.id for obj in objects],
             },
         )
+
+    @classmethod
+    def _collection_any_lookup(cls, lookup: str, value: str) -> str:
+        func = utils.collection_any_lookup(
+            field_name="assigned_licenses", element_field=True, var="u"
+        )
+        return func(lookup, value)
 
 
 class LicensesBulkQuerySet(BulkQuerySet):
@@ -123,9 +141,7 @@ class LicensesBulkQuerySet(BulkQuerySet):
         """
 
         client = self._client
-        objects: list[LicenseDetails] = list(
-            utils.coerce_objects(*args, queryset=LicensesQuerySet(), key="sku_id")
-        )
+        objects = list(utils.coerce_objects(*args, queryset=AssignedLicenseQuerySet()))
         if not objects:
             return
 
@@ -141,7 +157,7 @@ class LicensesBulkQuerySet(BulkQuerySet):
                         "headers": {"Content-Type": "application/json"},
                         "body": {
                             "addLicenses": [
-                                {"skuId": obj.sku_id, "disabledPlans": []}
+                                {"skuId": obj.id, "disabledPlans": []}
                                 for obj in objects
                             ],
                             "removeLicenses": [],
@@ -157,9 +173,7 @@ class LicensesBulkQuerySet(BulkQuerySet):
         Remove license/s from all users in this queryset.
         """
 
-        objects: list[LicenseDetails] = list(
-            utils.coerce_objects(*args, queryset=LicensesQuerySet(), key="sku_id")
-        )
+        objects = list(utils.coerce_objects(*args, queryset=AssignedLicenseQuerySet()))
         if not objects:
             return
 
@@ -177,7 +191,7 @@ class LicensesBulkQuerySet(BulkQuerySet):
                         "headers": {"Content-Type": "application/json"},
                         "body": {
                             "addLicenses": [],
-                            "removeLicenses": [obj.sku_id for obj in objects],
+                            "removeLicenses": [obj.id for obj in objects],
                         },
                     }
                 )

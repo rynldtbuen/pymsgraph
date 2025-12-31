@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic, cast
 
+from pymsgraph.fields import QuerySetField
 from pymsgraph.models.base import Model, TModel
 from pymsgraph import utils
 
@@ -159,7 +160,7 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
 
     capabilities: ClassVar[Capabilities] = Capabilities.read_only()
     search_field: ClassVar[str]
-    related_lookup: ClassVar[dict[str, Callable]] = {}
+    collection_lookup: ClassVar[dict[str, Callable]] = {}
     model_class: type[TModel]
     endpoint: ClassVar[str]
 
@@ -510,10 +511,10 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
         self._headers["ConsistencyLevel"] = "eventual"
         return self
 
-    def make_from_graph(self, data: dict[str, Any]):
+    def make_from_graph(self, data: dict[str, Any]) -> TModel:
         return self.model_class(graph_data=data, parent=self)
 
-    def make(self, **kwargs: Any):
+    def make(self, **kwargs: Any) -> TModel:
         return self.model_class(**kwargs, parent=self)
 
     def _make_clone(self, *, q: Q | None = None) -> QuerySet[TModel]:
@@ -538,10 +539,21 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
 
             field_name, value, lookup = node
             meta = self.model_class._meta
+            field = meta.fields.get(field_name)
+            if isinstance(field, QuerySetField):
+                val = field.queryset_class._collection_any_lookup(
+                    lookup or "exact", value
+                )
+                if val:
+                    return val
+                raise RuntimeError(
+                    "QuerySetField queyset_class must implement a _collection_any_lookup classmethod."
+                )
+
             # print(field_name, value, lookup)
-            related_lookup = self.related_lookup.get(field_name)
-            if related_lookup is not None:
-                return related_lookup(lookup or "exact", value)
+            # collection_lookup = self.collection_lookup.get(field_name)
+            # if collection_lookup is not None:s
+            #     return collection_lookup(lookup or "exact", value)
 
             gf = meta.field_to_graph(field_name)
             # validate lookup support if model declares it
@@ -622,6 +634,10 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
         if c := self._c or getattr(self._parent, "_client", None):
             return c
         raise RuntimeError("No client found.")
+
+    @classmethod
+    def _collection_any_lookup(cls, lookup: str, value: str) -> str | None:
+        return None
 
 
 class BulkQuerySet(Generic[TModel]):

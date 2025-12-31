@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pymsgraph.fields import BooleanField, CharField, Field
+from pymsgraph.fields import BooleanField, CharField, DateTimeField, Field, IntegerField
 from pymsgraph.models.base import Model
 from pymsgraph.query import Capabilities, QuerySet
 
@@ -16,9 +16,45 @@ class Group(Model):
 
     # Optional
     description = CharField()
-    group_types = Field()  # graph: groupTypes (list[str])
+    group_types = Field()
     visibility = CharField()
 
+    allow_external_senders = BooleanField()
+    assigned_labels = Field()
+    assigned_licenses = Field(read_only=True)
+    auto_subscribe_new_members = BooleanField()
+    classification = CharField()
+    created_date_time = DateTimeField(read_only=True)
+    expiration_date_time = DateTimeField(read_only=True)
+    has_members_with_license_errors = BooleanField()
+    hide_from_address_lists = BooleanField()
+    hide_from_outlook_clients = BooleanField()
+    is_archived = BooleanField()
+    is_assignable_to_role = BooleanField()
+    is_management_restricted = BooleanField(read_only=True)
+    is_subscribed_by_mail = BooleanField()
+    license_processing_state = Field(read_only=True)
+    mail = CharField(read_only=True)
+    membership_rule = CharField()
+    membership_rule_processing_state = CharField()
+    on_premises_domain_name = CharField(read_only=True)
+    on_premises_last_sync_date_time = DateTimeField(read_only=True)
+    on_premises_net_bios_name = CharField(read_only=True)
+    on_premises_provisioning_errors = Field()
+    on_premises_sam_account_name = CharField(read_only=True)
+    on_premises_security_identifier = CharField(read_only=True)
+    on_premises_sync_enabled = BooleanField(read_only=True)
+    preferred_data_location = CharField()
+    preferred_language = CharField()
+    proxy_addresses = Field(read_only=True)
+    renewed_date_time = DateTimeField(read_only=True)
+    security_identifier = CharField(read_only=True)
+    service_provisioning_errors = Field()
+    theme = CharField()
+    unique_name = CharField(read_only=True)
+    unseen_count = IntegerField()
+
+    supported_lookup = lookups.supported_lookup
     endpoint = "/groups"
 
     @property

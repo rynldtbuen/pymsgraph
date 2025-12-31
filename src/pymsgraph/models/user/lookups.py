@@ -2,12 +2,12 @@ from collections.abc import Callable
 
 from pymsgraph.utils import collection_any_lookup
 
-related_lookup: dict[str, Callable] = {
-    "licenses": collection_any_lookup(
-        graph_collection="assignedLicenses", element_field=True, var="u"
-    ),
-    "other_mails": collection_any_lookup(graph_collection="otherMails"),
-}
+# collection_lookup: dict[str, Callable] = {
+#     "assigned_licenses": collection_any_lookup(
+#         graph_collection="assignedLicenses", element_field=True, var="u"
+#     ),
+#     "other_mails": collection_any_lookup(graph_collection="otherMails"),
+# }
 
 supported_lookup: dict[str, set[str]] = {
     "account_enabled": {"exact", "ne"},

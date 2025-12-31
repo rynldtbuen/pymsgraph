@@ -7,15 +7,15 @@ from pymsgraph import utils
 from pymsgraph.fields import (
     BooleanField,
     CharField,
+    QuerySetField,
     DateTimeField,
     EmailField,
     Field,
-    RelatedField,
 )
 from pymsgraph.models.base import Model
 from pymsgraph.query import Capabilities, QuerySet
 
-from . import groups, licenses, lookups
+from . import groups, lookups, query
 
 
 __all__ = ["UserQuerySet"]
@@ -42,7 +42,9 @@ class User(Model):
     city = CharField(max_length=128)
     about_me = CharField()
     age_group = CharField()
-    assigned_licenses = Field(read_only=True)
+    assigned_licenses: query.AssignedLicenseQuerySet = QuerySetField(
+        query.AssignedLicenseQuerySet, read_only=True
+    )  # pyright: ignore[reportAssignmentType]
     assigned_plans = Field(read_only=True)
     birthday = DateTimeField()
     business_phones = Field()
@@ -109,9 +111,9 @@ class User(Model):
     def groups(self) -> groups.GroupsQuerySet:
         return groups.GroupsQuerySet(parent=self)
 
-    licenses: licenses.LicensesQuerySet = RelatedField(
-        licenses.LicensesQuerySet, graph_name="licenseDetails"
-    )  # pyright: ignore[reportAssignmentType]
+    # licenses: licenses.LicensesQuerySet = RelatedField(
+    #     licenses.LicensesQuerySet, graph_name="licenseDetails"
+    # )  # pyright: ignore[reportAssignmentType]
 
     @property
     def direct_reports(self): ...
@@ -193,15 +195,14 @@ class User(Model):
 class UserQuerySet(QuerySet["User"]):
     model_class = User
     capabilities = Capabilities.read_write(search=True)
-    related_lookup = lookups.related_lookup
 
-    @property
-    def groups(self) -> groups.GroupsBulkQuerySet:
-        return groups.GroupsBulkQuerySet(self)
+    # @property
+    # def groups(self) -> groups.GroupsBulkQuerySet:
+    #     return groups.GroupsBulkQuerySet(self)
 
-    @property
-    def licenses(self) -> licenses.LicensesBulkQuerySet:
-        return licenses.LicensesBulkQuerySet(self)
+    # @property
+    # def assigned_license(self) -> assigned_licenses.LicensesBulkQuerySet:
+    #     return assigned_licenses.LicensesBulkQuerySet(self)
 
     def get_by_directory_ids(
         self,
@@ -305,6 +306,13 @@ class UserQuerySet(QuerySet["User"]):
 
     def enabled_with_assigned_licenses(self):
         return
+
+    # def _collection_lookup(self, field_name):
+    #     return (
+    #         collection_any_lookup(
+    #             graph_collection="assignedLicenses", element_field=True, var="u"
+    #         ),
+    #     )
 
 
 class PasswordProfile(Model):

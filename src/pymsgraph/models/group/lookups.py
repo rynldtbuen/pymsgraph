@@ -1,15 +1,25 @@
-# from typing import Any
-# from pymsgraph.query import PY_LOOKUP_TO_ODATA_QUERY, odata_literal
-
-
-# def _group_types(lookup: str, value: str) -> str:
-#     # /groups?$filter=groupTypes/any(c:c+eq+'Unified')
-#     func_mapping = {
-#         "exact": lambda x: (
-#             PY_LOOKUP_TO_ODATA_QUERY["exact"]("groupTypes/any(u:u", x) + ")"
-#         )
-#     }
-
-#     if func := func_mapping.get(lookup):
-#         return func(value)
-#     raise ValueError(f"Unsupported lookup for licenses: {lookup!r}")
+supported_lookup: dict[str, set[str]] = {
+    "assigned_licenses": {"exact"},
+    "classification": {"exact", "ne", "gte", "lte", "startswith"},
+    "description": {"exact", "ne", "gte", "lte", "startswith"},
+    "display_name": {"exact", "ne", "gte", "lte", "in", "startswith", "isnull"},
+    "expiration_date_time": {"exact", "ne", "gte", "lte", "in"},
+    "group_types": {"exact"},
+    "has_members_with_license_errors": {"exact"},
+    "is_assignable_to_role": {"exact", "ne"},
+    "mail": {"exact", "ne", "gte", "lte", "in", "startswith", "isnull"},
+    "mail_enabled": {"exact", "ne"},
+    "mail_nickname": {"exact", "ne", "gte", "lte", "in", "startswith", "isnull"},
+    "membership_rule": {"exact", "ne", "gte", "lte", "startswith"},
+    "membership_rule_processing_state": {"exact", "ne", "in"},
+    "on_premises_last_sync_date_time": {"exact", "ne", "gte", "lte", "in"},
+    "on_premises_provisioning_errors": {"exact"},
+    "on_premises_sam_account_name": {"exact", "ne", "gte", "lte", "in", "startswith"},
+    "on_premises_security_identifier": {"exact", "isnull"},
+    "on_premises_sync_enabled": {"exact", "ne", "in", "isnull"},
+    "preferred_language": {"exact", "ne", "gte", "lte", "in", "startswith", "isnull"},
+    "proxy_addresses": {"exact", "gte", "lte", "startswith", "endswith", "isnull"},
+    "renewed_date_time": {"exact", "ne", "gte", "lte", "in"},
+    "security_enabled": {"exact", "ne", "in"},
+    "service_provisioning_errors": {"exact"},
+}

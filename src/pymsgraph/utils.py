@@ -157,7 +157,7 @@ def coerce_objects(
 
 def collection_any_lookup(
     *,
-    graph_collection: str,
+    field_name: str,
     element_field: bool | str | None = None,
     var: str = "x",
 ) -> Callable[[str, Any], str]:
@@ -169,13 +169,12 @@ def collection_any_lookup(
     """
 
     def _compile(lookup: str, value: Any) -> str:
+        graph_field = snake_to_camel(field_name)
         if lookup == "isnull":
             if not isinstance(value, bool):
                 raise ValueError(f"Value is not an instance of bool, {value!r}")
             return (
-                f"{graph_collection}/$count eq 0"
-                if value
-                else f"{graph_collection}/$count ne 0"
+                f"{graph_field}/$count eq 0" if value else f"{graph_field}/$count ne 0"
             )
 
         if element_field:
@@ -197,10 +196,10 @@ def collection_any_lookup(
 
             ef_graph = snake_to_camel(element)
             clause = compile_lookup(f"{var}/{ef_graph}", op, value)
-            return f"{graph_collection}/any({var}:{clause})"
+            return f"{graph_field}/any({var}:{clause})"
 
         clause = compile_lookup(var, lookup or "exact", value)
-        return f"{graph_collection}/any({var}:{clause})"
+        return f"{graph_field}/any({var}:{clause})"
 
     return _compile
 
