@@ -155,7 +155,7 @@ def coerce_objects(
         seen.add(val)
 
 
-def collection_any_lookup(
+def compile_collection_lookup(
     *,
     field_name: str,
     element_field: bool | str | None = None,

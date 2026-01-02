@@ -64,7 +64,7 @@ class AssignedLicense(Model):
         return SubscribedSku.get_product_name(sku_id=self.id)
 
 
-class AssignedLicenseQuerySet(QuerySet["AssignedLicense"]):
+class AssignedLicensesQuerySet(QuerySet["AssignedLicense"]):
     """
     User's licenses
 
@@ -120,8 +120,8 @@ class AssignedLicenseQuerySet(QuerySet["AssignedLicense"]):
         )
 
     @classmethod
-    def _collection_any_lookup(cls, lookup: str, value: str) -> str:
-        func = utils.collection_any_lookup(
+    def _compile_collection_lookup(cls, lookup: str, value: str) -> str:
+        func = utils.compile_collection_lookup(
             field_name="assigned_licenses", element_field=True, var="u"
         )
         return func(lookup, value)
@@ -142,7 +142,7 @@ class LicensesBulkQuerySet(BulkQuerySet):
         """
 
         client = self._client
-        objects = list(utils.coerce_objects(*args, queryset=AssignedLicenseQuerySet()))
+        objects = list(utils.coerce_objects(*args, queryset=AssignedLicensesQuerySet()))
         if not objects:
             return
 
@@ -174,7 +174,7 @@ class LicensesBulkQuerySet(BulkQuerySet):
         Remove license/s from all users in this queryset.
         """
 
-        objects = list(utils.coerce_objects(*args, queryset=AssignedLicenseQuerySet()))
+        objects = list(utils.coerce_objects(*args, queryset=AssignedLicensesQuerySet()))
         if not objects:
             return
 
@@ -364,3 +364,90 @@ class MemberOfBulkQuerySet(BulkQuerySet):
                 utils.raise_batch_errors(
                     batch_resp, action="remove users in queryset from groups"
                 )
+
+
+supported_lookup: dict[str, set[str]] = {
+    "account_enabled": {"exact", "ne"},
+    "age_group": {"exact", "ne"},
+    "assigned_licenses": {"exact"},
+    "business_phones": {"exact", "gte", "lte", "startswith"},
+    "city": {"exact", "gte", "in", "isnull", "lte", "ne", "startswith"},
+    "company_name": {"exact", "gte", "in", "isnull", "lte", "ne", "startswith"},
+    "consent_provided_for_minor": {"exact", "ne"},
+    "country": {"exact", "gte", "in", "isnull", "lte", "ne", "startswith"},
+    "created_date_time": {"exact", "gte", "in", "lte", "ne"},
+    "creation_type": {"exact", "in", "ne"},
+    "custom_security_attributes": {"exact", "ne", "startswith"},
+    "deleted_date_time": {"exact", "gte", "in", "lte", "ne"},
+    "department": {"exact", "gte", "in", "isnull", "lte", "ne"},
+    "display_name": {"exact", "gte", "in", "isnull", "lte", "ne", "startswith"},
+    "employee_hire_date": {"exact", "gte", "in", "lte", "ne"},
+    "employee_id": {"exact", "gte", "in", "isnull", "lte", "ne", "startswith"},
+    "employee_leave_date_time": {"exact", "gte", "in", "lte", "ne"},
+    "employee_org_data": {"exact", "gte", "in", "lte", "ne"},
+    "employee_type": {"exact", "gte", "in", "lte", "ne", "startswith"},
+    "external_user_state": {"exact", "in", "ne"},
+    "external_user_state_change_date_time": {"exact", "in", "ne"},
+    "fax_number": {"exact", "gte", "in", "isnull", "lte", "ne", "startswith"},
+    "given_name": {"exact", "gte", "in", "isnull", "lte", "ne", "startswith"},
+    "id": {"exact", "in", "ne"},
+    "identities": {"exact"},
+    "im_addresses": {"exact", "gte", "lte", "startswith"},
+    "job_title": {"exact", "gte", "in", "isnull", "lte", "ne", "startswith"},
+    "mail": {"endswith", "exact", "gte", "in", "isnull", "lte", "ne", "startswith"},
+    "mail_nickname": {"exact", "gte", "in", "isnull", "lte", "ne", "startswith"},
+    "mobile_phone": {"exact", "gte", "in", "isnull", "lte", "ne", "startswith"},
+    "office_location": {"exact", "gte", "in", "isnull", "lte", "ne", "startswith"},
+    "on_premises_extension_attributes": {"exact", "in", "ne"},
+    "on_premises_immutable_id": {"exact", "gte", "in", "lte", "ne"},
+    "on_premises_last_sync_date_time": {"exact", "gte", "in", "lte", "ne"},
+    "on_premises_provisioning_errors": {"exact", "gte", "lte"},
+    "on_premises_sam_account_name": {
+        "exact",
+        "gte",
+        "in",
+        "lte",
+        "ne",
+        "startswith",
+    },
+    "on_premises_sync_enabled": {"exact", "in", "isnull", "ne"},
+    "on_premises_user_principal_name": {
+        "exact",
+        "gte",
+        "in",
+        "lte",
+        "ne",
+        "startswith",
+    },
+    "other_mails": {"endswith", "exact", "gte", "in", "lte", "startswith"},
+    "password_policies": {"isnull", "ne"},
+    "password_profile": {"exact", "in", "isnull", "ne"},
+    "postal_code": {"exact", "gte", "in", "isnull", "lte", "ne", "startswith"},
+    "preferred_language": {
+        "exact",
+        "gte",
+        "in",
+        "isnull",
+        "lte",
+        "ne",
+        "startswith",
+    },
+    "provisioned_plans": {"exact", "gte", "lte"},
+    "proxy_addresses": {"endswith", "exact", "gte", "lte", "startswith"},
+    "service_provisioning_errors": {"exact"},
+    "sign_in_activity": {"exact", "gte", "lte", "ne"},
+    "state": {"exact", "gte", "in", "isnull", "lte", "ne", "startswith"},
+    "street_address": {"exact", "gte", "in", "isnull", "lte", "ne", "startswith"},
+    "surname": {"exact", "gte", "in", "isnull", "lte", "ne", "startswith"},
+    "user_type": {"exact", "ne", "in", "isnull"},
+    "user_principal_name": {
+        "exact",
+        "ne",
+        "gte",
+        "lte",
+        "in",
+        "startswith",
+        "endswith",
+        "isnull",
+    },
+}

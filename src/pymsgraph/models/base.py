@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
-from pymsgraph.fields import CharField, Field, QuerySetField
+from pymsgraph.fields import CharField, Field
 
 if TYPE_CHECKING:
     from pymsgraph.models.base import Model
@@ -61,9 +61,9 @@ class ModelBase(type):
 
         # fields declared on this class
         for k, v in attrs.items():
-            if isinstance(v, QuerySetField):
+            if isinstance(v, Field):
                 fields[k] = v
-                if getattr(v, "is_prefetch", False):
+                if getattr(v, "prefetch", False):
                     prefetch_fields.add(k)
 
         cls = super().__new__(mcls, name, bases, attrs)

@@ -15,7 +15,7 @@ from pymsgraph.fields import (
 from pymsgraph.models.base import Model
 from pymsgraph.query import Capabilities, QuerySet
 
-from . import lookups, query
+from . import query
 
 
 __all__ = ["UserQuerySet"]
@@ -29,40 +29,40 @@ class User(Model):
     """
 
     display_name = CharField(required=True)
-    user_principal_name = EmailField(required=True)
     account_enabled = BooleanField(default=True)
     mail_nickname = CharField(required=True)
-    mail = EmailField(read_only=True)
-    given_name = CharField()
-    surname = CharField()
-    job_title = CharField()
-    department = CharField()
-    office_location = CharField()
-    mobile_phone = CharField()
-    city = CharField(max_length=128)
+    user_principal_name = EmailField(required=True)
+
     about_me = CharField()
     age_group = CharField()
-    assigned_licenses: query.AssignedLicenseQuerySet = QuerySetField(
-        query.AssignedLicenseQuerySet
+    assigned_licenses: query.AssignedLicensesQuerySet = QuerySetField(
+        query.AssignedLicensesQuerySet
     )  # pyright: ignore[reportAssignmentType]
     assigned_plans = Field(read_only=True)
     birthday = DateTimeField()
     business_phones = Field()
+    city = CharField(max_length=128)
     company_name = CharField()
     consent_provided_for_minor = CharField()
     country = CharField()
     created_date_time = DateTimeField(read_only=True)
     creation_type = CharField()
     custom_security_attributes = Field()
+    department = CharField()
     employee_hire_date = DateTimeField()
     employee_id = CharField()
     employee_org_data = Field()
     employee_type = CharField()
     fax_number = CharField()
+    given_name = CharField()
     hire_date = DateTimeField()
     identities = Field()
     im_addresses = Field()
+    job_title = CharField()
+    mail = EmailField(read_only=True)
+    mobile_phone = CharField()
     interests = Field()
+    office_location = CharField()
     is_management_restricted = BooleanField()
     is_resource_account = BooleanField()
     legal_age_group_classification = CharField()
@@ -100,6 +100,7 @@ class User(Model):
     skills = Field()
     state = CharField()
     street_address = CharField()
+    surname = CharField()
     usage_location = CharField()
     user_type = CharField()
 
@@ -108,6 +109,7 @@ class User(Model):
 
     search_field = "display_name"
     endpoint = "/users"
+    supported_lookup = query.supported_lookup
 
     def __repr__(self):
         return f"<User: {self.display_name}>"
@@ -297,13 +299,6 @@ class UserQuerySet(QuerySet["User"]):
 
     def enabled_with_assigned_licenses(self):
         return
-
-    # def _collection_lookup(self, field_name):
-    #     return (
-    #         collection_any_lookup(
-    #             graph_collection="assignedLicenses", element_field=True, var="u"
-    #         ),
-    #     )
 
 
 class PasswordProfile(Model):

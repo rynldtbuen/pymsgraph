@@ -19,6 +19,7 @@ logger = logging.getLogger("pymsgraph")
 
 
 Lookup = tuple[str, Any, str]  # (field_name, value, lookup)
+PY_LOOKUP_TO_ODATA_QUERY = utils.PY_LOOKUP_TO_ODATA_QUERY
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,10 @@ class Q:
         kids: list["Node"] = list(children)
 
         for key, value in lookups.items():
+            values = key.split("__")
+            if lookup := values[-1] not in PY_LOOKUP_TO_ODATA_QUERY:
+                lookup = "exact"
+
             field, lookup = (key.split("__", 1) + ["exact"])[:2]
             kids.append((field, value, lookup))
 
@@ -538,37 +543,28 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
                 return f"({inner})"
 
             field_name, value, lookup = node
+            lookup = lookup or "exact"
             meta = self.model_class._meta
             field = meta.fields.get(field_name)
+
             if isinstance(field, QuerySetField):
-                val = field.queryset_class._collection_any_lookup(
-                    lookup or "exact", value
-                )
-                if val:
+                if val := field.queryset_class._compile_collection_lookup(
+                    lookup, value
+                ):
                     return val
                 raise RuntimeError(
                     "QuerySetField queyset_class must implement a _collection_any_lookup classmethod."
                 )
 
-            # print(field_name, value, lookup)
-            # collection_lookup = self.collection_lookup.get(field_name)
-            # if collection_lookup is not None:s
-            #     return collection_lookup(lookup or "exact", value)
-
-            gf = meta.field_to_graph(field_name)
-            # validate lookup support if model declares it
-
-            supported_lookup = getattr(self.model_class, "supported_lookup", {})
-            lookups = supported_lookup.get(field_name)
-            if lookups:
-                # allowed = supported.get(field_name)
-                normalized = lookup or "exact"
-                if normalized not in lookups:
+            if supported_lookup := getattr(self.model_class, "supported_lookup", None):
+                lookups = supported_lookup.get(field_name)
+                if lookups and lookup not in lookups:
                     raise ValueError(
-                        f"Lookup '{normalized}' is not supported for field '{field_name}'"
+                        f"Lookup '{lookup}' is not supported for field '{field_name}'"
                     )
 
-            return utils.compile_lookup(gf, lookup, value)
+            graph_name = getattr(field, "graph_name")
+            return utils.compile_lookup(graph_name, lookup, value)
 
         return compile_node(q)
 
@@ -636,7 +632,7 @@ class QuerySet(Generic[TModel], metaclass=QuerySetBase):
         raise RuntimeError("No client found.")
 
     @classmethod
-    def _collection_any_lookup(cls, lookup: str, value: str) -> str | None:
+    def _compile_collection_lookup(cls, lookup: str, value: str) -> str | None:
         return None
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import asdict, is_dataclass
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
@@ -21,6 +21,7 @@ class Field:
         read_only: bool = False,
         dump: Callable[[Any], Any] | None = None,  # python -> json
         load: Callable[[Any], Any] | None = None,  # json -> python
+        supported_lookups: set[str] | None = None,
         **kwargs: Any,
     ) -> None:
         self.name: str = ""  # set by __set_name__
@@ -30,6 +31,7 @@ class Field:
         self.read_only = read_only
         self.dump = dump
         self.load = load
+        self.supported_lookups = set(supported_lookups or set())
 
         for k, v in kwargs.items():
             setattr(self, k, v)
@@ -81,73 +83,19 @@ class Field:
 
 
 class CharField(Field):
-    """A concrete string field."""
-
-    def __init__(
-        self,
-        graph_name: str | None = None,
-        *,
-        default: Any = None,
-        required: bool = False,
-        read_only: bool = False,
-        max_length: int | None = None,
-        dump: Callable[[Any], Any] | None = None,
-        load: Callable[[Any], Any] | None = None,
-        supported_lookups: set | None = None,
-    ) -> None:
-        super().__init__(
-            graph_name,
-            default=default,
-            required=required,
-            read_only=read_only,
-            dump=dump,
-            load=load,
-        )
-        self.max_length = max_length
 
     def to_python(self, value: Any) -> str | None:
         if value is None:
             return None
         if not isinstance(value, str):
             raise TypeError(f"{self.name} must be str (got {type(value).__name__})")
-        if self.max_length is not None and len(value) > self.max_length:
-            raise ValueError(f"{self.name} exceeds max_length={self.max_length}")
+        ml = int(getattr(self, "max_length", 0))
+        if ml and len(value) > ml:
+            raise ValueError(f"{self.name} exceeds max_length={ml}")
         return " ".join([i.strip() for i in value.strip().split(" ")])
 
 
 class EmailField(CharField):
-    """A concrete email-ish field.
-
-    Intended for Graph properties like `mail` and `userPrincipalName`.
-
-    Design goals:
-    - Useful validation (catch obvious mistakes)
-    - Not RFC-perfect (Graph/Entra remains source-of-truth)
-
-    By default, requires a single '@' and a '.' in the domain.
-    """
-
-    # def __init__(
-    #     self,
-    #     graph_name: str | None = None,
-    #     *,
-    #     default: Any = None,
-    #     required: bool = False,
-    #     read_only: bool = False,
-    #     max_length: int | None = None,
-    #     dump: Callable[[Any], Any] | None = None,
-    #     load: Callable[[Any], Any] | None = None,
-
-    # ) -> None:
-    #     super().__init__(
-    #         graph_name,
-    #         default=default,
-    #         required=required,
-    #         read_only=read_only,
-    #         max_length=max_length,
-    #         dump=dump,
-    #         load=load,
-    #     )
 
     def to_python(self, value: Any) -> str | None:
         s = super().to_python(value)
@@ -170,7 +118,6 @@ class EmailField(CharField):
 
 
 class IntegerField(Field):
-    """A concrete integer field."""
 
     def to_python(self, value: Any) -> int | None:
         if value is None:
@@ -183,28 +130,6 @@ class IntegerField(Field):
 
 
 class DateTimeField(Field):
-    """A concrete datetime field."""
-
-    def __init__(
-        self,
-        graph_name: str | None = None,
-        *,
-        default: Any = None,
-        required: bool = False,
-        read_only: bool = False,
-        assume_utc: bool = True,
-        dump: Callable[[Any], Any] | None = None,
-        load: Callable[[Any], Any] | None = None,
-    ) -> None:
-        super().__init__(
-            graph_name,
-            default=default,
-            required=required,
-            read_only=read_only,
-            dump=dump,
-            load=load,
-        )
-        self.assume_utc = assume_utc
 
     def to_python(self, value: Any):
         from datetime import datetime, timezone
@@ -221,9 +146,7 @@ class DateTimeField(Field):
                 f"{self.name} must be datetime or ISO 8601 str (got {type(value).__name__})"
             )
 
-        if dt.tzinfo is None and self.assume_utc:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
+        return dt.replace(tzinfo=timezone.utc)
 
     def to_graph(self, value: Any) -> Any:
         from datetime import datetime, timezone
@@ -235,16 +158,11 @@ class DateTimeField(Field):
                 f"{self.name} must be datetime (got {type(value).__name__})"
             )
 
-        dt = value
-        if dt.tzinfo is None and self.assume_utc:
-            dt = dt.replace(tzinfo=timezone.utc)
-
-        s = dt.isoformat()
-        return s.replace("+00:00", "Z")
+        dt = value.replace(tzinfo=timezone.utc)
+        return dt.isoformat().replace("+00:00", "Z")
 
 
 class BooleanField(Field):
-    """A concrete boolean field."""
 
     def to_python(self, value: Any) -> bool | None:
         if value is None:
@@ -391,32 +309,3 @@ class QuerySetField(Field):
 
             setattr(obj, f"_{self.name}_qs", qs)
             return qs
-
-
-# def __get__(self, obj: Any, objtype=None):
-#     if obj is None:
-#         return self
-#     try:
-#         return getattr(obj, f"_{self.name}_qs")
-#     except AttributeError:
-#         qs = self.queryset_class(parent=obj)
-
-#         raw = obj._data.get(self.name) if hasattr(obj, "_data") else None
-#         if raw is None and hasattr(obj, "_graph_data"):
-#             raw = obj._graph_data.get(self.graph_name or self.name)
-
-#         if raw is not None:
-#             if isinstance(raw, list):
-#                 qs._objects = [  # pyright: ignore[reportAttributeAccessIssue]
-#                     qs.make_from_graph(data) for data in raw
-#                 ]
-#             elif isinstance(raw, dict):
-#                 qs._objects = [  # pyright: ignore[reportAttributeAccessIssue]
-#                     qs.make_from_graph(raw)
-#                 ]
-#             else:
-#                 raise RuntimeError(f"Unsupported Graph data, {type(raw)}, {raw}")
-#             qs._changed = False
-
-#         setattr(obj, f"_{self.name}_qs", qs)
-#         return qs
