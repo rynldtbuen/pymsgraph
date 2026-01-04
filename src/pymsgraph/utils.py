@@ -54,7 +54,7 @@ _CAMEL_1 = re.compile(r"(.)([A-Z][a-z]+)")
 _CAMEL_2 = re.compile(r"([a-z0-9])([A-Z])")
 
 
-def camel_to_snake(s: str) -> str:
+def to_snake_case(s: str) -> str:
     """
     Convert camelCase / PascalCase to snake_case.
 
@@ -74,7 +74,7 @@ def camel_to_snake(s: str) -> str:
     return s.lower()
 
 
-def snake_to_camel(name: str) -> str:
+def to_camel_case(name: str) -> str:
     parts = name.split("_")
     return parts[0] + "".join(p[:1].upper() + p[1:] for p in parts[1:])
 
@@ -154,53 +154,53 @@ def snake_to_camel(name: str) -> str:
 #         seen.add(val)
 
 
-def compile_collection_lookup(
-    *,
-    field_name: str,
-    element_field: bool | str | None = None,
-    var: str = "x",
-) -> Callable[[str, Any], str]:
-    """
-    Build an any() lookup for a collection.
+# def compile_collection_lookup(
+#     *,
+#     field_name: str,
+#     element_field: bool | str | None = None,
+#     var: str = "x",
+# ) -> Callable[[str, Any], str]:
+#     """
+#     Build an any() lookup for a collection.
 
-    - scalar collection: otherMails/any(x:endswith(x,'@edu'))
-    - object collection: assignedLicenses/any(u:u/skuId eq <value>)
-    """
+#     - scalar collection: otherMails/any(x:endswith(x,'@edu'))
+#     - object collection: assignedLicenses/any(u:u/skuId eq <value>)
+#     """
 
-    def _compile(lookup: str, value: Any) -> str:
-        graph_field = snake_to_camel(field_name)
-        if lookup == "isnull":
-            if not isinstance(value, bool):
-                raise ValueError(f"Value is not an instance of bool, {value!r}")
-            return (
-                f"{graph_field}/$count eq 0" if value else f"{graph_field}/$count ne 0"
-            )
+#     def _compile(lookup: str, value: Any) -> str:
+#         graph_field = snake_to_camel(field_name)
+#         if lookup == "isnull":
+#             if not isinstance(value, bool):
+#                 raise ValueError(f"Value is not an instance of bool, {value!r}")
+#             return (
+#                 f"{graph_field}/$count eq 0" if value else f"{graph_field}/$count ne 0"
+#             )
 
-        if element_field:
-            if element_field is True:
-                if "__" in lookup:
-                    element, op = lookup.split("__", 1)
-                else:
-                    element, op = lookup, "exact"
-                if not element:
-                    raise ValueError(f"Unsupported lookup for collection: {lookup!r}")
-            else:
-                element = str(element_field)
-                if lookup.startswith(f"{element}__"):
-                    op = lookup.split("__", 1)[1] or "exact"
-                elif lookup == element:
-                    op = "exact"
-                else:
-                    raise ValueError(f"Unsupported lookup for {element}: {lookup!r}")
+#         if element_field:
+#             if element_field is True:
+#                 if "__" in lookup:
+#                     element, op = lookup.split("__", 1)
+#                 else:
+#                     element, op = lookup, "exact"
+#                 if not element:
+#                     raise ValueError(f"Unsupported lookup for collection: {lookup!r}")
+#             else:
+#                 element = str(element_field)
+#                 if lookup.startswith(f"{element}__"):
+#                     op = lookup.split("__", 1)[1] or "exact"
+#                 elif lookup == element:
+#                     op = "exact"
+#                 else:
+#                     raise ValueError(f"Unsupported lookup for {element}: {lookup!r}")
 
-            ef_graph = snake_to_camel(element)
-            clause = compile_lookup(f"{var}/{ef_graph}", op, value)
-            return f"{graph_field}/any({var}:{clause})"
+#             ef_graph = snake_to_camel(element)
+#             clause = compile_lookup(f"{var}/{ef_graph}", op, value)
+#             return f"{graph_field}/any({var}:{clause})"
 
-        clause = compile_lookup(var, lookup or "exact", value)
-        return f"{graph_field}/any({var}:{clause})"
+#         clause = compile_lookup(var, lookup or "exact", value)
+#         return f"{graph_field}/any({var}:{clause})"
 
-    return _compile
+#     return _compile
 
 
 def raise_batch_errors(batch_payload: dict[str, Any], *, action: str) -> None:
@@ -210,52 +210,3 @@ def raise_batch_errors(batch_payload: dict[str, Any], *, action: str) -> None:
         if status >= 400:
             body = r.get("body")
             raise RuntimeError(f"Batch {action} failed (status={status}): {body}")
-
-
-PY_TO_ODATA_LITERAL: dict[str, Any] = {
-    "bool": lambda x: str(x).lower(),
-    "nonetype": "null",
-    "int": lambda x: str(x),
-    "float": lambda x: str(x),
-    "str": lambda x: "'" + x.replace("'", "''") + "'",
-}
-
-
-def in_lookup(field, value):
-    if not isinstance(value, Iterable) or isinstance(value, (str, bytes)):
-        raise TypeError("__in expects a non-string iterable")
-    parts = [f"{field} eq {odata_literal(v)}" for v in value]
-    return "(" + " or ".join(parts) + ")" if parts else "(false)"
-
-
-PY_LOOKUP_TO_ODATA_QUERY: dict[str, Any] = {
-    "exact": lambda gf, v,: f"{gf} eq {odata_literal(v)}",
-    "ne": lambda gf, v: f"{gf} ne {odata_literal(v)}",
-    "gt": lambda gf, v: f"{gf} gt {odata_literal(v)}",
-    "gte": lambda gf, v: f"{gf} ge {odata_literal(v)}",
-    "lt": lambda gf, v: f"{gf} lt {odata_literal(v)}",
-    "lte": lambda gf, v: f"{gf} le {odata_literal(v)}",
-    "contains": lambda gf, v: f"contains({gf}, {odata_literal(v)})",
-    "startswith": lambda gf, v: f"startswith({gf}, {odata_literal(v)})",
-    "endswith": lambda gf, v: f"endswith({gf}, {odata_literal(v)})",
-    "isnull": lambda gf, v: f"{gf} eq null" if v else f"{gf} ne null",
-    "in": in_lookup,
-}
-
-
-def odata_literal(value: Any) -> str:
-    _type = type(value).__name__.lower()
-    try:
-        func = PY_TO_ODATA_LITERAL[_type]
-    except KeyError:
-        raise TypeError(f"Unsupported literal type: {type(value)!r}") from None
-    return func(value)
-
-
-def compile_lookup(graph_field: str, lookup: str, value: Any) -> str:
-    lookup = lookup or "exact"
-    try:
-        func = PY_LOOKUP_TO_ODATA_QUERY[lookup]
-    except:
-        raise ValueError(f"Unsupported lookup: {lookup!r}") from None
-    return func(graph_field, value)

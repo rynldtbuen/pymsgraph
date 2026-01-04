@@ -39,7 +39,7 @@ class Client:
         scopes: Sequence[str] | None = None,
         default_headers: Mapping[str, str] | None = None,
         timeout: float | None = 30.0,
-        http: httpx.Client | None = None,
+        http: httpx.AsyncClient | None = None,
         user_agent: str | None = None,
     ) -> None:
         self.token_provider = token_provider
@@ -47,7 +47,7 @@ class Client:
         self.scopes = list(scopes) if scopes else None
 
         self._owns_http = http is None
-        self.http = http or httpx.Client(timeout=timeout)
+        self.http = http or httpx.AsyncClient(timeout=timeout)
 
         ua = _default_user_agent()
         if user_agent:
@@ -65,7 +65,7 @@ class Client:
     def _url(self, path: str) -> str:
         return f"{self.base_url}/{path.lstrip('/')}"
 
-    def _headers(self, headers: Mapping[str, str] | None) -> dict[str, str]:
+    def _headers(self, headers: Mapping[str, str] | None = None) -> dict[str, str]:
         token = self.token_provider.get_access_token(self.scopes)
         out = dict(self.default_headers)
         out["Authorization"] = f"Bearer {token}"
@@ -97,21 +97,24 @@ class Client:
         return resp.json()
 
     # ---- public API used by models/queryset ----
-    def get(
+    async def get(
         self,
-        path: str,
+        path: str | None = None,
         *,
         params: Mapping[str, Any] | None = None,
         headers: Mapping[str, str] | None = None,
+        url: str | None = None,
     ) -> dict[str, Any]:
-        resp = self.http.get(
-            self._url(path), params=params, headers=self._headers(headers)
-        )
+        if path:
+            url = self._url(path)
+        if url is None:
+            raise ValueError("Argument required, path/url.")
+        resp = await self.http.get(url, params=params, headers=self._headers(headers))
         self._raise_for_status(resp)
         data = self._json_or_none(resp)
         return data or {}
 
-    def post(
+    async def post(
         self,
         path: str,
         *,
@@ -119,7 +122,7 @@ class Client:
         params: Mapping[str, Any] | None = None,
         headers: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
-        resp = self.http.post(
+        resp = await self.http.post(
             self._url(path),
             params=params,
             json=dict(body) if body is not None else None,
@@ -129,33 +132,33 @@ class Client:
         data = self._json_or_none(resp)
         return data or {}
 
-    def put(
-        self,
-        path: str,
-        *,
-        content: bytes | str | None = None,
-        params: Mapping[str, Any] | None = None,
-        headers: Mapping[str, str] | None = None,
-    ) -> dict[str, Any]:
-        body = content.encode() if isinstance(content, str) else content
-        resp = self.http.put(
-            self._url(path),
-            params=params,
-            content=body,
-            headers=self._headers(headers),
-        )
-        self._raise_for_status(resp)
-        data = self._json_or_none(resp)
-        return data or {}
+    # async def put(
+    #     self,
+    #     path: str,
+    #     *,
+    #     content: bytes | str | None = None,
+    #     params: Mapping[str, Any] | None = None,
+    #     headers: Mapping[str, str] | None = None,
+    # ) -> dict[str, Any]:
+    #     content = content.encode() if isinstance(content, str) else content
+    #     resp = await self.http.put(
+    #         self._url(path),
+    #         params=params,
+    #         content=content,
+    #         headers=self._headers(headers),
+    #     )
+    #     self._raise_for_status(resp)
+    #     data = self._json_or_none(resp)
+    #     return data or {}
 
-    def get_content(
+    async def get_content(
         self,
         path: str,
         *,
         params: Mapping[str, Any] | None = None,
         headers: Mapping[str, str] | None = None,
     ) -> bytes:
-        resp = self.http.get(
+        resp = await self.http.get(
             self._url(path),
             params=params,
             headers=self._headers(headers),
@@ -163,7 +166,7 @@ class Client:
         self._raise_for_status(resp)
         return resp.content
 
-    def patch(
+    async def patch(
         self,
         path: str,
         *,
@@ -171,7 +174,7 @@ class Client:
         params: Mapping[str, Any] | None = None,
         headers: Mapping[str, str] | None = None,
     ) -> Any:
-        resp = self.http.patch(
+        resp = await self.http.patch(
             self._url(path),
             params=params,
             json=dict(body) if body is not None else None,
@@ -180,26 +183,26 @@ class Client:
         self._raise_for_status(resp)
         return self._json_or_none(resp)
 
-    def delete(
+    async def delete(
         self,
         path: str,
         *,
         params: Mapping[str, Any] | None = None,
         headers: Mapping[str, str] | None = None,
     ) -> Any:
-        resp = self.http.delete(
+        resp = await self.http.delete(
             self._url(path), params=params, headers=self._headers(headers)
         )
         self._raise_for_status(resp)
         return self._json_or_none(resp)
 
     # ---- lifecycle ----
-    def close(self) -> None:
+    async def close(self) -> None:
         if self._owns_http:
-            self.http.close()
+            await self.http.aclose()
 
-    def __enter__(self) -> "Client":
+    async def __aenter__(self) -> "Client":
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> None:
-        self.close()
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        await self.close()
