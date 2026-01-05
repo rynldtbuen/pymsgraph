@@ -93,6 +93,24 @@ def test_queryset_order_by_multiple() -> None:
     assert params["$orderby"] == "displayName,mail desc"
 
 
+def test_queryset_expand_single() -> None:
+    qs = make_qs().expand("manager", "display_name", "department")
+    params = qs._build_params()
+    assert params["$expand"] == "manager($select=department,displayName)"
+
+
+def test_queryset_expand_multiple() -> None:
+    qs = (
+        make_qs()
+        .expand("manager", "display_name", "department")
+        .expand("member_of", "display_name", "mail")
+    )
+    params = qs._build_params()
+    assert params["$expand"] == (
+        "manager($select=department,displayName),memberOf($select=displayName,mail)"
+    )
+
+
 def test_queryset_search_with_q_and_kwargs() -> None:
     params = make_qs().search(display_name="A")._build_params()
     assert params["$search"] == '"displayName:A"'

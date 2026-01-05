@@ -107,7 +107,15 @@ class QuerySet(Generic[TModel]):
         qs._params["$top"] = str(value)
         return qs
 
-    def expand(self, field: str, *select: str) -> "QuerySet[TModel]": ...
+    def expand(self, field: str, *select: str) -> "QuerySet[TModel]":
+        qs = self._clone()
+        expands: dict[str, set[str]] = qs._params.setdefault("$expand", {})
+        graph_field = to_camel_case(field)
+        if graph_field not in expands:
+            expands[graph_field] = set()
+        if select:
+            expands[graph_field].update(to_camel_case(s) for s in select)
+        return qs
 
     def all(self) -> "QuerySet[TModel]":
         """Return a copy of the queryset"""
@@ -227,8 +235,14 @@ class QuerySet(Generic[TModel]):
         if value := params.get("$top"):
             compiled_params["$top"] = str(value)
 
-        # if self._expand:
-        #     params["$expand"] = ",".join(self._expand)
+        if expands := params.get("$expand"):
+            parts: list[str] = []
+            for name, fields in expands.items():
+                if fields:
+                    parts.append(f"{name}($select={','.join(sorted(fields))})")
+                else:
+                    parts.append(name)
+            compiled_params["$expand"] = ",".join(parts)
 
         return compiled_params
 
