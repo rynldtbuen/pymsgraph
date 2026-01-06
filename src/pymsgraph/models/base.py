@@ -1,21 +1,19 @@
-from ast import TypeVar
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Self, TypeVar
 
 from pymsgraph.models.fields import CharField, Field
 from pymsgraph.models.query import Context
 from pymsgraph.utils import to_snake_case
 
-_T = TypeVar("_T", bound="Model")
+_Tm = TypeVar("_Tm", bound="Model")
 
 
-class Model(Generic[_T]):
-    FIELD_MAP: dict[str, Field]
+class Model(Generic[_Tm]):
     REQUIRED_FIELDS: frozenset[str]
     FIELD_NAME_MAP: dict[str, str]
 
     id = CharField()
 
-    def __init_subclass__(cls: type[_T], **kwargs: Any) -> None:
+    def __init_subclass__(cls: type[_Tm], **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
         fields: dict[str, Field] = {}
         required_fields: set[str] = set()
@@ -51,13 +49,13 @@ class Model(Generic[_T]):
 
     def __init__(
         self,
-        context: "Context | None" = None,
+        context: "Context[_Tm] | None" = None,
         **kwargs: Any,
     ) -> None:
         self._data: dict[str, Any] = {}
         self._graph_data: dict[str, Any] = {}
         self._dirty: set[str] = set()
-        self._ctx = context or Context()
+        self._ctx = context or Context[_Tm]()
 
         self._initializing = True
         for k, v in kwargs.items():
@@ -104,8 +102,8 @@ class Model(Generic[_T]):
 
     @classmethod
     def from_graph(
-        cls: type[_T], data: dict[str, Any], context: Context | None = None
-    ) -> _T:
+        cls, data: dict[str, Any], context: Context[Any] | None = None
+    ) -> Self:
         obj = cls(context=context)
         obj._initializing = True
 
@@ -121,12 +119,6 @@ class Model(Generic[_T]):
     @property
     def _endpoint(self) -> str:
         return f"{self._ctx.endpoint}/{self.id}"
-
-    # @property
-    # def _client(self) -> "Client":
-    #     if self._parent_obj is None:
-    #         raise RuntimeError("parent_obj has not been initialized.")
-    #     return self._parent_obj._client
 
     def _validate_required_fields(self) -> None:
         missing: list[str] = []

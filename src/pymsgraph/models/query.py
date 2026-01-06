@@ -15,7 +15,7 @@ _Tc = TypeVar("_Tc")
 
 
 class ContextDescriptor(Generic[_Tc]):
-    def __set_name__(self, owner: type["Context"], name: str):
+    def __set_name__(self, owner: type["Context"], name: str) -> None:
         self.name = name
         self.internal_name = f"_{name}"
 
@@ -37,29 +37,29 @@ class ContextDescriptor(Generic[_Tc]):
         raise ValueError(f"Context attribute has been initialized, '{self.name}'")
 
 
-class Context:
+class Context(Generic[_Tm]):
     client: ContextDescriptor["Client"] = ContextDescriptor()
-    model_class: ContextDescriptor[type["Model"]] = ContextDescriptor()
+    model_class: ContextDescriptor[type[_Tm]] = ContextDescriptor()
     endpoint: ContextDescriptor[str] = ContextDescriptor()
-    queryset: ContextDescriptor["QuerySet[Model]"] = ContextDescriptor()
+    queryset: ContextDescriptor["QuerySet[_Tm]"] = ContextDescriptor()
 
     def __init__(self, **kwargs):
         for k, v in kwargs.items():
             setattr(self, f"_{k}", v)
 
-    def astuple(self) -> tuple["Client", type["Model"], str]:
+    def astuple(self) -> tuple["Client", type[_Tm], str]:
         return self.client, self.model_class, self.endpoint
 
 
 class QuerySet(Generic[_Tm]):
     PAGE_SIZE = 50
 
-    def __init__(self, context: Context | None = None) -> None:
-        self._ctx = context or Context()
+    def __init__(self, context: Context[_Tm] | None = None) -> None:
+        self._ctx: Context[_Tm] = context or Context[_Tm]()
         self._params: dict[str, Any] = {}
         self._headers: dict[str, Any] = {}
 
-        self._paginator: Paginator[_Tm]
+        self._paginator: Paginator[_Tm] | None = None
         self._all: bool = False
 
     def _clone(self) -> "QuerySet[_Tm]":
@@ -159,7 +159,7 @@ class QuerySet(Generic[_Tm]):
         qs._params["$count"] = "true"
         return qs
 
-    def with_consistency_level_eventual(self):
+    def with_consistency_level_eventual(self) -> QuerySet[_Tm]:
         qs = self._clone()
         qs._headers["ConsistencyLevel"] = "eventual"
         return qs
@@ -191,11 +191,11 @@ class QuerySet(Generic[_Tm]):
         self.iterator()._count_cache = count
         return count
 
-    async def get(self, id: str | None = None, **kwargs) -> _Tm | Model:
-        c, m, e = self._ctx.astuple()
+    async def get(self, id: str | None = None, **kwargs) -> _Tm:
+        ctx = self._ctx
         if id:
-            response = await c.get(f"{e}/{id}")
-            return m.from_graph(data=response, context=self._ctx)
+            response = await ctx.client.get(f"{ctx.endpoint}/{id}")
+            return ctx.model_class.from_graph(data=response, context=self._ctx)
 
         if not kwargs:
             raise ValueError("No kwargs found.")
@@ -203,14 +203,18 @@ class QuerySet(Generic[_Tm]):
         results = [o async for o in self.filter(**kwargs).top(2)]
 
         if not results:
-            raise DoesNotExist(f"{m.__name__} matching query does not exist")
+            raise DoesNotExist(
+                f"{ctx.model_class.__name__} matching query does not exist"
+            )
 
         if len(results) > 1:
-            raise MultipleObjectsReturned(f"get() returned more than one {m.__name__}")
+            raise MultipleObjectsReturned(
+                f"get() returned more than one {ctx.model_class.__name__}"
+            )
 
         return results[0]
 
-    async def first(self) -> _Tm | Model | None:
+    async def first(self) -> _Tm | None:
         qs = self.top(1)
         params = qs._build_params()
 
@@ -277,10 +281,10 @@ class Paginator(Generic[_Tm]):
     def __init__(
         self,
         *,
-        context: Context | None = None,
+        context: Context[_Tm] | None = None,
         page_size: int | None = None,
     ) -> None:
-        self._ctx = context or Context()
+        self._ctx: Context[_Tm] = context or Context[_Tm]()
         self._cache_objects: dict[int, list[_Tm]] = {}
         self._count_cache: int | None = None
         self._count_cache: int | None = None
@@ -361,24 +365,28 @@ class Paginator(Generic[_Tm]):
             return
 
         ctx = self._ctx
-        c, m, e = ctx.astuple()
-        qs = ctx.queryset
+        # c, m, e = ctx.astuple()
+        # qs = ctx.queryset
 
         if page_number == 1:
-            params = qs._build_params()
+            params = ctx.queryset._build_params()
             if params.get("$top") is None:
                 params["$top"] = str(self._page_size)
-            response = await c.get(e, params=params, headers=qs._headers)
+            response = await ctx.client.get(
+                ctx.endpoint, params=params, headers=ctx.queryset._headers
+            )
         else:
             if not self._next_link:
                 return
-            response = await c.get(url=self._next_link, headers=qs._headers)
+            response = await ctx.client.get(
+                url=self._next_link, headers=ctx.queryset._headers
+            )
 
         self._next_link = response.get("@odata.nextLink")
         objects = self._cache_objects.setdefault(page_number, [])
 
         for item in response.get("value", []):
-            obj = m.from_graph(data=item, context=ctx)
+            obj = ctx.model_class.from_graph(data=item, context=ctx)
             objects.append(obj)
             yield obj
 
