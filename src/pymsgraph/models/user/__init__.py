@@ -1,21 +1,23 @@
 from pymsgraph import utils
-from pymsgraph.models import fields, query, base
-from . import model_fields
+from pymsgraph.models.base import Model
+from pymsgraph.models.fields import BooleanField, CharField, EmailField, ModelField
 
-# __all__ = ["UserQuerySet"]
+from .model_fields import PasswordProfile
+
+__all__ = ["User"]
 
 
-class User(base.Model["User"]):
+class User(Model):
     """
     Graph user resource type.
 
     https://learn.microsoft.com/en-us/graph/api/resources/user?view=graph-rest-1.0
     """
 
-    display_name = fields.CharField(required=True)
-    account_enabled = fields.BooleanField(default=True, required=True)
-    mail_nickname = fields.CharField(required=True)
-    user_principal_name = fields.EmailField(required=True)
+    display_name = CharField(required=True)
+    account_enabled = BooleanField(default=True, required=True)
+    mail_nickname = CharField(required=True)
+    user_principal_name = EmailField(required=True)
 
     # about_me = CharField()
     # age_group = CharField()
@@ -66,7 +68,7 @@ class User(base.Model["User"]):
     # on_premises_user_principal_name = CharField()
     # other_mails = Field()
     # password_policies = CharField()
-    password_profile = fields.ModelField(model_fields.PasswordProfile)
+    password_profile = ModelField(PasswordProfile)
     # past_projects = Field()
     # postal_code = CharField()
     # preferred_data_location = CharField()

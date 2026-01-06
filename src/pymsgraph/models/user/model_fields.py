@@ -1,10 +1,13 @@
 from typing import Any
 
-from pymsgraph.models import fields
-from pymsgraph.models.base import Model
+from pymsgraph import models
 
 
-class PasswordProfile(Model):
-    password = fields.CharField()
-    force_change_password_next_sign_in = fields.BooleanField(default=True)
-    force_change_password_next_sign_in_with_mfa = fields.BooleanField(default=False)
+class PasswordProfile(models.Model):
+    password = models.CharField()
+    force_change_password_next_sign_in = models.BooleanField(default=True)
+    force_change_password_next_sign_in_with_mfa = models.BooleanField(default=False)
+
+
+class AssignedLicenses(models.QuerySet):
+    pass
