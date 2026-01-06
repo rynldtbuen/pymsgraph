@@ -2,12 +2,22 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
 
+from pymsgraph.models.query import Context
 from pymsgraph.utils import to_camel_case
 
 if TYPE_CHECKING:
     from pymsgraph.models.base import Model
+    from pymsgraph.models.query import QuerySet
 
-__all__ = ["CharField", "IntegerField", "BooleanField", "EmailField", "ModelField"]
+__all__ = [
+    "BooleanField",
+    "CharField",
+    "EmailField",
+    "Field",
+    "IntegerField",
+    "ModelField",
+    "QuerySetField",
+]
 
 _Tf = TypeVar("_Tf")
 _Tm = TypeVar("_Tm", bound="Model")
@@ -181,3 +191,30 @@ class ModelField(Field[_Tm]):
                 f"{self.name} must be {self.model_class.__name__} (got {type(value).__name__})"
             )
         return value.serialize()
+
+
+class QuerySetField(Field["QuerySet[_Tm]"]):
+    def __init__(self, queryset_class: type["QuerySet[_Tm]"], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.queryset_class = queryset_class
+
+    @overload
+    def __get__(
+        self, obj: None, owner: type["Model"] | None = None
+    ) -> "QuerySetField[_Tm]": ...
+
+    @overload
+    def __get__(
+        self, obj: "Model[_Tm]", owner: type["Model"] | None = None
+    ) -> "QuerySet[_Tm]": ...
+
+    def __get__(
+        self, obj: "Model[_Tm] | None", owner: type["Model"] | None = None
+    ) -> "QuerySet[_Tm] | Field[QuerySet[_Tm]]":  # pyright: ignore[reportReturnType]
+        if obj is None:
+            return self
+
+        ctx: Context[_Tm] = Context.get(
+            obj._ctx, endpoint=obj._endpoint, cached_data=obj._data.get(self.name)
+        )
+        return self.queryset_class(ctx)

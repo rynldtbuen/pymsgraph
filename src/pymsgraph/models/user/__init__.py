@@ -1,8 +1,14 @@
 from pymsgraph import utils
 from pymsgraph.models.base import Model
-from pymsgraph.models.fields import BooleanField, CharField, EmailField, ModelField
+from pymsgraph.models.fields import (
+    BooleanField,
+    CharField,
+    EmailField,
+    ModelField,
+    QuerySetField,
+)
 
-from .model_fields import PasswordProfile
+from .model_fields import PasswordProfile, AssignedLicensesQuerySet
 
 __all__ = ["User"]
 
@@ -21,9 +27,7 @@ class User(Model):
 
     # about_me = CharField()
     # age_group = CharField()
-    # # assigned_licenses: query.AssignedLicensesQuerySet = QuerySetField(
-    # #     query.AssignedLicensesQuerySet
-    # # )  # pyright: ignore[reportAssignmentType]
+    assigned_licenses = QuerySetField(AssignedLicensesQuerySet)
     # assigned_plans = Field(read_only=True)
     # birthday = DateTimeField()
     # business_phones = Field()

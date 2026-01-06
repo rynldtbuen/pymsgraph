@@ -1,8 +1,12 @@
-from typing import Any, Generic, Self, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Self, TypeVar
 
 from pymsgraph.models.fields import CharField, Field
 from pymsgraph.models.query import Context
 from pymsgraph.utils import to_snake_case
+
+if TYPE_CHECKING:
+    from pymsgraph.models.query import QuerySet
+
 
 __all__ = ["Model"]
 

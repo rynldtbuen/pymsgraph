@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterable
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Generic, Self, TypeVar, overload
 
 from pymsgraph.utils import to_camel_case
 
@@ -17,6 +17,9 @@ _Tc = TypeVar("_Tc")
 
 
 class ContextDescriptor(Generic[_Tc]):
+    def __init__(self, strict: bool = True) -> None:
+        self.strict = strict
+
     def __set_name__(self, owner: type["Context"], name: str) -> None:
         self.name = name
         self.internal_name = f"_{name}"
@@ -27,15 +30,19 @@ class ContextDescriptor(Generic[_Tc]):
     ) -> "ContextDescriptor[_Tc]": ...
 
     @overload
-    def __get__(self, obj: "Context", owner: type["Context"] | None = None) -> _Tc: ...
+    def __get__(
+        self, obj: "Context[_Tm]", owner: type["Context"] | None = None
+    ) -> _Tc: ...
 
     def __get__(
-        self, obj: "Context | None", owner: type["Context"] | None = None
-    ) -> _Tc | "ContextDescriptor[_Tc]":
+        self, obj: "Context[_Tm] | None", owner: type["Context"] | None = None
+    ) -> _Tc | "ContextDescriptor[_Tc]" | None:
         if obj is None:
             return self
         if (attr := getattr(obj, self.internal_name, None)) is not None:
             return attr
+        if not self.strict:
+            return None
         raise ValueError(f"Context attribute has been initialized, '{self.name}'")
 
 
@@ -43,21 +50,31 @@ class Context(Generic[_Tm]):
     client: ContextDescriptor["Client"] = ContextDescriptor()
     model_class: ContextDescriptor[type[_Tm]] = ContextDescriptor()
     endpoint: ContextDescriptor[str] = ContextDescriptor()
-    queryset: ContextDescriptor["QuerySet[_Tm]"] = ContextDescriptor()
+    queryset: ContextDescriptor["QuerySet[_Tm]"] = ContextDescriptor(strict=False)
 
     def __init__(self, **kwargs):
         for k, v in kwargs.items():
             setattr(self, f"_{k}", v)
 
-    def astuple(self) -> tuple["Client", type[_Tm], str]:
-        return self.client, self.model_class, self.endpoint
+    def asdict(self) -> dict[str, Any]:
+        return {
+            "client": self.client,
+            "model_class": self.model_class,
+            "endpoint": self.endpoint,
+        }
+
+    @classmethod
+    def get(cls, context: "Context[_Tm]", **kwargs: Any) -> Self:
+        d_ctx = context.asdict()
+        d_ctx.update(kwargs)
+        return cls(**d_ctx)
 
 
 class QuerySet(Generic[_Tm]):
     PAGE_SIZE = 50
 
     def __init__(self, context: Context[_Tm] | None = None) -> None:
-        self._ctx: Context[_Tm] = context or Context[_Tm]()
+        self._ctx: Context[_Tm] = context or Context()
         self._params: dict[str, Any] = {}
         self._headers: dict[str, Any] = {}
 
@@ -180,17 +197,18 @@ class QuerySet(Generic[_Tm]):
 
     async def count(self) -> int:
         """Get count of results (uses $count)"""
-        if (c := self.iterator()._count_cache) is not None:
+        if (c := self.iterator()._cached_count) is not None:
             return c
 
         qs = self.with_count().top(1)
         params = qs._build_params()
+        ctx = self._ctx
 
-        response = await self._ctx.client.get(
-            self._ctx.endpoint, params=params, headers=qs._headers
+        response = await ctx.client.get(
+            ctx.endpoint, params=params, headers=qs._headers
         )
         count = response.get("@odata.count", len(response.get("value", [])))
-        self.iterator()._count_cache = count
+        self.iterator()._cached_count = count
         return count
 
     async def get(self, id: str | None = None, **kwargs) -> _Tm:
@@ -220,11 +238,13 @@ class QuerySet(Generic[_Tm]):
         qs = self.top(1)
         params = qs._build_params()
 
-        c, m, e = self._ctx.astuple()
+        ctx = self._ctx
 
-        response = await c.get(e, params=params, headers=self._headers)
+        response = await ctx.client.get(
+            ctx.endpoint, params=params, headers=self._headers
+        )
         if response:
-            return m.from_graph(data=response, context=self._ctx)
+            return ctx.model_class.from_graph(data=response, context=self._ctx)
         return None
 
     def __aiter__(self) -> AsyncIterator[_Tm]:
@@ -286,13 +306,19 @@ class Paginator(Generic[_Tm]):
         context: Context[_Tm] | None = None,
         page_size: int | None = None,
     ) -> None:
-        self._ctx: Context[_Tm] = context or Context[_Tm]()
-        self._cache_objects: dict[int, list[_Tm]] = {}
-        self._count_cache: int | None = None
-        self._count_cache: int | None = None
+        self._ctx: Context[_Tm] = context or Context()
+        self._cached_objects: dict[int, list[_Tm]] = {}
+        self._cached_count: int | None = None
         self._page_size = page_size or 50
         self._current_page_number: int = 1
         self._next_link: str | None = None
+
+        objects = self._cached_objects.setdefault(1, [])
+        model_class = self._ctx.model_class
+        if cached_data := getattr(self._ctx, "_cached_data", None):
+            for item in cached_data:
+                obj = model_class.from_graph(data=item, context=self._ctx)
+                objects.append(obj)
 
     async def next_page(self) -> AsyncIterator[_Tm]:
         next_page = self._current_page_number + 1
@@ -309,14 +335,14 @@ class Paginator(Generic[_Tm]):
             yield obj
 
     async def total_count(self) -> int | None:
-        if (_cache := self._count_cache) is None:
+        if (_cache := self._cached_count) is None:
             return await self._ctx.queryset.count()
         return _cache
 
     async def total_pages(self) -> int | None: ...
 
     async def has_next(self) -> bool:
-        if not self._cache_objects.get(1):
+        if not self._cached_objects.get(1):
             async for _ in self._fetch_page(1):
                 ...
         return bool(self._next_link)
@@ -325,7 +351,7 @@ class Paginator(Generic[_Tm]):
         return self._fetch_page(self._current_page_number)
 
     async def all(self) -> AsyncIterator[_Tm]:
-        page_numbers = sorted(self._cache_objects)
+        page_numbers = sorted(self._cached_objects)
 
         if not page_numbers:
             async for obj in self._fetch_page(1):
@@ -360,15 +386,13 @@ class Paginator(Generic[_Tm]):
             raise ValueError("page_number must be greater than 0.")
 
         # return cached page immediately without enforcing gap rules
-        objects = self._cache_objects.get(page_number)
+        objects = self._cached_objects.get(page_number)
         if objects:
             for obj in objects:
                 yield obj
             return
 
         ctx = self._ctx
-        # c, m, e = ctx.astuple()
-        # qs = ctx.queryset
 
         if page_number == 1:
             params = ctx.queryset._build_params()
@@ -385,7 +409,7 @@ class Paginator(Generic[_Tm]):
             )
 
         self._next_link = response.get("@odata.nextLink")
-        objects = self._cache_objects.setdefault(page_number, [])
+        objects = self._cached_objects.setdefault(page_number, [])
 
         for item in response.get("value", []):
             obj = ctx.model_class.from_graph(data=item, context=ctx)
