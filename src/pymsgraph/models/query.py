@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterable
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
 
 from pymsgraph.utils import to_camel_case
 
@@ -10,35 +10,66 @@ if TYPE_CHECKING:
     from pymsgraph.client import Client
     from pymsgraph.models.base import Model
 
-TModel = TypeVar("TModel", bound="Model")
+_Tm = TypeVar("_Tm", bound="Model")
+_Tc = TypeVar("_Tc")
 
 
-class QuerySet(Generic[TModel]):
+class ContextDescriptor(Generic[_Tc]):
+    def __set_name__(self, owner: type["Context"], name: str):
+        self.name = name
+        self.internal_name = f"_{name}"
+
+    @overload
+    def __get__(
+        self, obj: None, owner: type["Context"] | None = None
+    ) -> "ContextDescriptor[_Tc]": ...
+
+    @overload
+    def __get__(self, obj: "Context", owner: type["Context"] | None = None) -> _Tc: ...
+
+    def __get__(
+        self, obj: "Context | None", owner: type["Context"] | None = None
+    ) -> _Tc | "ContextDescriptor[_Tc]":
+        if obj is None:
+            return self
+        if (attr := getattr(obj, self.internal_name, None)) is not None:
+            return attr
+        raise ValueError(f"Context attribute has been initialized, '{self.name}'")
+
+
+class Context:
+    client: ContextDescriptor["Client"] = ContextDescriptor()
+    model_class: ContextDescriptor[type["Model"]] = ContextDescriptor()
+    endpoint: ContextDescriptor[str] = ContextDescriptor()
+    queryset: ContextDescriptor["QuerySet[Model]"] = ContextDescriptor()
+
+    def __init__(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, f"_{k}", v)
+
+    def astuple(self) -> tuple["Client", type["Model"], str]:
+        return self.client, self.model_class, self.endpoint
+
+
+class QuerySet(Generic[_Tm]):
     PAGE_SIZE = 50
 
-    def __init__(
-        self,
-        client: "Client",
-        model_class: type[TModel],
-        endpoint: str | None = None,
-    ) -> None:
-        self._client = client
-        self._model_class = model_class
-        self._endpoint = endpoint
+    def __init__(self, context: Context | None = None) -> None:
+        self._ctx = context or Context()
         self._params: dict[str, Any] = {}
         self._headers: dict[str, Any] = {}
 
-        self._cache_objects: dict[int, list[TModel]] = {}
-        self._count_cache: int | None = None
+        self._paginator: Paginator[_Tm]
         self._all: bool = False
 
-    def _clone(self) -> "QuerySet[TModel]":
-        obj = self.__class__(self._client, self._model_class, self._endpoint)
+    def _clone(self) -> "QuerySet[_Tm]":
+        obj = self.__class__()
+        obj._ctx = self._ctx
         obj._params = deepcopy(self._params)
         obj._headers = dict(self._headers)
         return obj
 
-    def filter(self, *q_objects: "Q", **kwargs: Any) -> "QuerySet[TModel]":
+    def filter(self, *q_objects: "Q", **kwargs: Any) -> "QuerySet[_Tm]":
         if not q_objects and not kwargs:
             return self
 
@@ -54,7 +85,7 @@ class QuerySet(Generic[TModel]):
 
         return qs
 
-    def select(self, *args: str) -> "QuerySet[TModel]":
+    def select(self, *args: str) -> "QuerySet[_Tm]":
         if not args:
             return self
 
@@ -67,7 +98,7 @@ class QuerySet(Generic[TModel]):
 
         return qs
 
-    def order_by(self, *args: str) -> "QuerySet[TModel]":
+    def order_by(self, *args: str) -> "QuerySet[_Tm]":
         if not args:
             return self
 
@@ -83,7 +114,7 @@ class QuerySet(Generic[TModel]):
 
         return qs
 
-    def search(self, *q_objects: "Q", **kwargs: Any) -> "QuerySet[TModel]":
+    def search(self, *q_objects: "Q", **kwargs: Any) -> "QuerySet[_Tm]":
         if not q_objects and not kwargs:
             return self
 
@@ -100,14 +131,14 @@ class QuerySet(Generic[TModel]):
 
         return qs
 
-    def top(self, value: int) -> "QuerySet[TModel]":
+    def top(self, value: int) -> "QuerySet[_Tm]":
         if value < 1:
             raise ValueError("value must be greater than zero.")
         qs = self._clone()
         qs._params["$top"] = str(value)
         return qs
 
-    def expand(self, field: str, *select: str) -> "QuerySet[TModel]":
+    def expand(self, field: str, *select: str) -> "QuerySet[_Tm]":
         qs = self._clone()
         expands: dict[str, set[str]] = qs._params.setdefault("$expand", {})
         graph_field = to_camel_case(field)
@@ -117,13 +148,13 @@ class QuerySet(Generic[TModel]):
             expands[graph_field].update(to_camel_case(s) for s in select)
         return qs
 
-    def all(self) -> "QuerySet[TModel]":
+    def all(self) -> "QuerySet[_Tm]":
         """Return a copy of the queryset"""
         qs = self._clone()
         qs._all = True
         return qs
 
-    def with_count(self) -> QuerySet[TModel]:
+    def with_count(self) -> QuerySet[_Tm]:
         qs = self.with_consistency_level_eventual()
         qs._params["$count"] = "true"
         return qs
@@ -133,10 +164,13 @@ class QuerySet(Generic[TModel]):
         qs._headers["ConsistencyLevel"] = "eventual"
         return qs
 
-    def prefetch(self, *fields: str) -> "QuerySet[TModel]": ...
+    def prefetch(self, *fields: str) -> "QuerySet[_Tm]": ...
 
-    def iterator(self, *, page_size: int | None = None) -> "Paginator[TModel]":
-        return Paginator(self, page_size=page_size or self.PAGE_SIZE)
+    def iterator(self, *, page_size: int | None = None) -> "Paginator[_Tm]":
+        if (p := self._paginator) is None:
+            p = Paginator(context=self._ctx, page_size=page_size or self.PAGE_SIZE)
+            self._paginator = p
+        return p
 
     async def exists(self) -> bool:
         """Check if any results exist"""
@@ -144,28 +178,24 @@ class QuerySet(Generic[TModel]):
 
     async def count(self) -> int:
         """Get count of results (uses $count)"""
-        if self._count_cache is not None:
-            return self._count_cache
+        if (c := self.iterator()._count_cache) is not None:
+            return c
 
         qs = self.with_count().top(1)
         params = qs._build_params()
 
-        assert qs._endpoint is not None
-        response = await self._client.get(
-            self._endpoint, params=params, headers=qs._headers
+        response = await self._ctx.client.get(
+            self._ctx.endpoint, params=params, headers=qs._headers
         )
         count = response.get("@odata.count", len(response.get("value", [])))
-        self._count_cache = count
+        self.iterator()._count_cache = count
         return count
 
-    async def get(self, id: str | None = None, **kwargs) -> TModel:
+    async def get(self, id: str | None = None, **kwargs) -> _Tm | Model:
+        c, m, e = self._ctx.astuple()
         if id:
-            response = await self._client.get(f"{self._endpoint}/{id}")
-            return self._model_class(
-                graph_data=response,  # pyright: ignore[reportCallIssue]
-                client=self._client,  # pyright: ignore[reportCallIssue]
-                endpoint=self._endpoint,  # pyright: ignore[reportCallIssue]
-            )
+            response = await c.get(f"{e}/{id}")
+            return m.from_graph(data=response, context=self._ctx)
 
         if not kwargs:
             raise ValueError("No kwargs found.")
@@ -173,38 +203,34 @@ class QuerySet(Generic[TModel]):
         results = [o async for o in self.filter(**kwargs).top(2)]
 
         if not results:
-            raise DoesNotExist(
-                f"{self._model_class.__name__} matching query does not exist"
-            )
+            raise DoesNotExist(f"{m.__name__} matching query does not exist")
 
         if len(results) > 1:
-            raise MultipleObjectsReturned(
-                f"get() returned more than one {self._model_class.__name__}"
-            )
+            raise MultipleObjectsReturned(f"get() returned more than one {m.__name__}")
 
         return results[0]
 
-    async def first(self) -> TModel | None:
+    async def first(self) -> _Tm | Model | None:
         qs = self.top(1)
         params = qs._build_params()
 
-        assert self._endpoint is not None
-        response = await self._client.get(
-            self._endpoint, params=params, headers=self._headers
-        )
+        c, m, e = self._ctx.astuple()
+
+        response = await c.get(e, params=params, headers=self._headers)
         if response:
-            return self._model_class(
-                graph_data=response,  # pyright: ignore[reportCallIssue]
-                client=self._client,  # pyright: ignore[reportCallIssue]
-                endpoint=self._endpoint,  # pyright: ignore[reportCallIssue]
-            )
+            return m.from_graph(data=response, context=self._ctx)
         return None
 
-    def __aiter__(self) -> AsyncIterator[TModel]:
+    def __aiter__(self) -> AsyncIterator[_Tm]:
         """Execute the query and fetch results"""
+        try:
+            paginator = getattr(self, "_paginator")
+        except AttributeError:
+            paginator = self.iterator()
+            setattr(self, "_paginator", paginator)
         if not self._all:
-            return self.iterator()._fetch_page(1)
-        return self.iterator().all()
+            return paginator._fetch_page(1)
+        return paginator.all()
 
     def _build_params(self) -> dict[str, Any]:
         """Build OData query parameters"""
@@ -247,23 +273,22 @@ class QuerySet(Generic[TModel]):
         return compiled_params
 
 
-class Paginator(Generic[TModel]):
+class Paginator(Generic[_Tm]):
     def __init__(
         self,
-        queryset: QuerySet[TModel],
         *,
+        context: Context | None = None,
         page_size: int | None = None,
     ) -> None:
-        self._qs = queryset._clone()
-        self._model_class = queryset._model_class
-        self._client = queryset._client
-        self._endpoint = queryset._endpoint
-        self._cache_objects = queryset._cache_objects
+        self._ctx = context or Context()
+        self._cache_objects: dict[int, list[_Tm]] = {}
+        self._count_cache: int | None = None
+        self._count_cache: int | None = None
         self._page_size = page_size or 50
         self._current_page_number: int = 1
         self._next_link: str | None = None
 
-    async def next_page(self) -> AsyncIterator[TModel]:
+    async def next_page(self) -> AsyncIterator[_Tm]:
         next_page = self._current_page_number + 1
         objects = self._fetch_page(next_page)
 
@@ -278,8 +303,8 @@ class Paginator(Generic[TModel]):
             yield obj
 
     async def total_count(self) -> int | None:
-        if (_cache := self._qs._count_cache) is None:
-            return await self._qs.count()
+        if (_cache := self._count_cache) is None:
+            return await self._ctx.queryset.count()
         return _cache
 
     async def total_pages(self) -> int | None: ...
@@ -290,10 +315,10 @@ class Paginator(Generic[TModel]):
                 ...
         return bool(self._next_link)
 
-    def __aiter__(self) -> AsyncIterator[TModel]:
+    def __aiter__(self) -> AsyncIterator[_Tm]:
         return self._fetch_page(self._current_page_number)
 
-    async def all(self) -> AsyncIterator[TModel]:
+    async def all(self) -> AsyncIterator[_Tm]:
         page_numbers = sorted(self._cache_objects)
 
         if not page_numbers:
@@ -311,12 +336,10 @@ class Paginator(Generic[TModel]):
                 yield obj
             next_page_number += 1
 
-    def first_page(self) -> AsyncIterator[TModel]:
+    def first_page(self) -> AsyncIterator[_Tm]:
         return self._fetch_page(1)
 
-    async def _fetch_page(
-        self, page_number: int | None = None
-    ) -> AsyncIterator[TModel]:
+    async def _fetch_page(self, page_number: int | None = None) -> AsyncIterator[_Tm]:
         """Fetch a single page of results"""
 
         if page_number is None:
@@ -337,30 +360,25 @@ class Paginator(Generic[TModel]):
                 yield obj
             return
 
+        ctx = self._ctx
+        c, m, e = ctx.astuple()
+        qs = ctx.queryset
+
         if page_number == 1:
-            assert self._endpoint is not None
-            params = self._qs._build_params()
+            params = qs._build_params()
             if params.get("$top") is None:
                 params["$top"] = str(self._page_size)
-            response = await self._client.get(
-                self._endpoint, params=params, headers=self._qs._headers
-            )
+            response = await c.get(e, params=params, headers=qs._headers)
         else:
             if not self._next_link:
                 return
-            response = await self._client.get(
-                url=self._next_link, headers=self._qs._headers
-            )
+            response = await c.get(url=self._next_link, headers=qs._headers)
 
         self._next_link = response.get("@odata.nextLink")
         objects = self._cache_objects.setdefault(page_number, [])
 
         for item in response.get("value", []):
-            obj = self._model_class(
-                graph_data=item,  # pyright: ignore[reportCallIssue]
-                client=self._client,  # pyright: ignore[reportCallIssue]
-                endpoint=self._endpoint,  # pyright: ignore[reportCallIssue]
-            )
+            obj = m.from_graph(data=item, context=ctx)
             objects.append(obj)
             yield obj
 

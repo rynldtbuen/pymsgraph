@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pymsgraph.query import Q, QuerySet
+from pymsgraph.models.query import Q, QuerySet, Context
 
 
 class DummyClient:
@@ -12,9 +12,8 @@ class DummyModel:
 
 
 def make_qs() -> QuerySet[DummyModel]:  # pyright: ignore[reportInvalidTypeArguments]
-    return QuerySet(
-        DummyClient(), DummyModel, "/dummy"  # pyright: ignore[reportArgumentType]
-    )
+    ctx = Context(client=DummyClient(), model_class=DummyModel, endpoint="/dummy")
+    return QuerySet(context=ctx)
 
 
 def test_queryset_filter_single() -> None:

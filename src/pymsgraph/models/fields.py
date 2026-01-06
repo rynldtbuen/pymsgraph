@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
 
 from pymsgraph.utils import to_camel_case
 
 if TYPE_CHECKING:
     from pymsgraph.models.base import Model
 
-T = TypeVar("T")
+_Tf = TypeVar("_Tf")
+_Tm = TypeVar("_Tm", bound="Model")
 
 
-class Field(Generic[T]):
+class Field(Generic[_Tf]):
     def __init__(
         self,
         *,
@@ -33,9 +34,17 @@ class Field(Generic[T]):
     def to_graph(self, value: Any) -> Any:
         return value
 
+    @overload
+    def __get__(
+        self, obj: None, owner: type["Model"] | None = None
+    ) -> "Field[_Tf]": ...
+
+    @overload
+    def __get__(self, obj: "Model", owner: type["Model"] | None = None) -> _Tf: ...
+
     def __get__(
         self, obj: "Model | None", owner: type["Model"] | None = None
-    ) -> T | "Field[T]":
+    ) -> _Tf | "Field[_Tf]":
         if obj is None:
             return self
         return obj._data.get(self.name, self.default)
@@ -60,6 +69,7 @@ class Field(Generic[T]):
 class CharField(Field[str]):
     def __init__(
         self,
+        *,
         min_length: int | None = None,
         max_length: int | None = None,
         **kwargs: Any,
@@ -124,7 +134,7 @@ class BooleanField(Field[bool]):
 
 
 class EmailField(CharField):
-    def __set__(self, obj: "Model", value: Any) -> None:
+    def __set__(self, obj: "Model", value: str) -> None:
         if value is not None:
             if not isinstance(value, str):
                 raise TypeError(f"{self.name} must be str (got {type(value).__name__})")
@@ -138,3 +148,34 @@ class EmailField(CharField):
                 raise ValueError(f"Invalid domain for {self.name}")
 
         super().__set__(obj, value)
+
+
+class ModelField(Field[_Tm]):
+    def __init__(
+        self,
+        model_class: type[_Tm],
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.model_class = model_class
+
+    def __set__(self, obj: "Model", value: Any) -> None:
+        if value is None:
+            super().__set__(obj, None)
+            return
+        if isinstance(value, dict):
+            value = self.model_class(**value)
+        if not isinstance(value, self.model_class):
+            raise TypeError(
+                f"{self.name} must be {self.model_class.__name__} (got {type(value).__name__})"
+            )
+        super().__set__(obj, value)
+
+    def to_graph(self, value: Any) -> Any:
+        if value is None:
+            return None
+        if not isinstance(value, self.model_class):
+            raise TypeError(
+                f"{self.name} must be {self.model_class.__name__} (got {type(value).__name__})"
+            )
+        return value.serialize()
