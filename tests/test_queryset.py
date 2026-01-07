@@ -1,6 +1,10 @@
 from __future__ import annotations
+from typing import TYPE_CHECKING
 
 from pymsgraph.models.query import Q, QuerySet, Context
+
+if TYPE_CHECKING:
+    from .conftest import MakeClient
 
 
 class DummyClient:
