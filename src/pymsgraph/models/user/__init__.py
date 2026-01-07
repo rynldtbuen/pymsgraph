@@ -1,4 +1,7 @@
+__all__ = ["UserQuerySet"]
+
 from typing import Any
+
 from pymsgraph import utils
 from pymsgraph.models.base import Model
 from pymsgraph.models.fields import (
@@ -10,9 +13,7 @@ from pymsgraph.models.fields import (
 )
 from pymsgraph.models.query import QuerySet
 
-from .model_fields import PasswordProfile, AssignedLicensesQuerySet
-
-__all__ = ["User"]
+from .model_fields import AssignedLicensesQuerySet, PasswordProfile
 
 
 class User(Model):
@@ -50,7 +51,7 @@ class User(Model):
     # hire_date = DateTimeField()
     # identities = Field()
     # im_addresses = Field()
-    # job_title = CharField()
+    job_title = CharField()
     # mail = EmailField(read_only=True)
     # mobile_phone = CharField()
     # interests = Field()
@@ -195,7 +196,7 @@ class UserQuerySet(QuerySet["User"]):
     #             )
     #         return results
 
-    def create(
+    async def create(
         self,
         *,
         display_name: str,
@@ -227,9 +228,8 @@ class UserQuerySet(QuerySet["User"]):
             **kwargs,
         )
         obj._validate_for_create()
-        data = ctx.client.post(ctx.endpoint, body=obj.serialize())
-        # obj.refresh_from_graph(self._client.post(self.endpoint, json_body=payload))
-        return obj
+        data = await ctx.client.post(ctx.endpoint, body=obj.serialize())
+        return ctx.model_class.from_graph(data=data, context=ctx)
 
 
 #     def _prefetch_related(self, objs: list[User]) -> None:

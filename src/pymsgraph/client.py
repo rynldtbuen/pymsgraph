@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from pymsgraph import models
+from pymsgraph.models.query import Context
 
 try:
     import importlib.metadata as importlib_metadata
@@ -208,3 +209,8 @@ class Client:
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
         await self.close()
+
+    @property
+    def users(self):
+        ctx = Context(client=self, endpoint="/users", model_class=models.User)
+        return models.UserQuerySet(context=ctx)

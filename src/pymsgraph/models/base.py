@@ -100,7 +100,7 @@ class Model(Generic[_Tm]):
             ep = self._ctx.endpoint
             client_method = self._ctx.client.post
         else:
-            ep = self._ctx.endpoint
+            ep = self._endpoint
             client_method = self._ctx.client.patch
 
         body = self.serialize()
@@ -108,8 +108,10 @@ class Model(Generic[_Tm]):
         if not body:
             return False
 
-        await client_method(ep, body=body)
+        data = await client_method(ep, body=body)
         self._dirty.clear()
+        if data:
+            self._data = self.__class__.from_graph(data=data, context=self._ctx)._data
         return True
 
     @classmethod

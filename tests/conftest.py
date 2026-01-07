@@ -1,12 +1,12 @@
-from functools import partial
 import json
-from typing import Any, Callable, TypeAlias
+from typing import TYPE_CHECKING, Any, Callable, TypeAlias
 import pytest
 import httpx
 
 from pymsgraph.client import Client
-from pymsgraph.models.query import Context, QuerySet
-from pymsgraph.models.user import User
+
+if TYPE_CHECKING:
+    from pymsgraph.models.user import UserQuerySet
 
 
 class FakeTokenProvider:
@@ -34,7 +34,6 @@ def make_client(fake_token_provider: Any) -> MakeClient:
         requests: list[dict] = []
 
         def _handler(request: httpx.Request) -> httpx.Response:
-            # capture request for assertions
             body = None
             if request.content:
                 try:
@@ -62,7 +61,7 @@ def make_client(fake_token_provider: Any) -> MakeClient:
 
 
 @pytest.fixture
-def user_qs(make_client):
+def user_qs(make_client: MakeClient) -> "UserQuerySet":
     """
     Convenience fixture: a QuerySet for User with a no-op transport.
     """
@@ -71,5 +70,4 @@ def user_qs(make_client):
         return httpx.Response(200, json={"value": []})
 
     client, _ = make_client(handler)
-    ctx = Context(client=client, model_class=User, endpoint="/users")
-    return QuerySet(ctx)
+    return client.users
