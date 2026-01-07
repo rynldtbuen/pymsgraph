@@ -30,13 +30,20 @@ class Field(Generic[_Tf]):
         default: Any = None,
         required: bool = False,
         read_only: bool = False,
+        write_only: bool = False,
         graph_attr_name: str | None = None,
     ) -> None:
-        self.name: str = ""
+        self.name: str
         self.graph_attr_name = graph_attr_name
         self.default = default
         self.required = required
         self.read_only = read_only
+        self.write_only = write_only
+
+        if read_only and write_only:
+            raise ValueError(
+                f"Field can't be both read_only and write_only, '{type(self)}'."
+            )
 
     def __set_name__(self, owner: type["Model"], name: str) -> None:
         self.name = name

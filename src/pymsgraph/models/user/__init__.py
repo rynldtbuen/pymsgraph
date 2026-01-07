@@ -1,3 +1,4 @@
+from typing import Any
 from pymsgraph import utils
 from pymsgraph.models.base import Model
 from pymsgraph.models.fields import (
@@ -7,6 +8,7 @@ from pymsgraph.models.fields import (
     ModelField,
     QuerySetField,
 )
+from pymsgraph.models.query import QuerySet
 
 from .model_fields import PasswordProfile, AssignedLicensesQuerySet
 
@@ -72,7 +74,7 @@ class User(Model):
     # on_premises_user_principal_name = CharField()
     # other_mails = Field()
     # password_policies = CharField()
-    password_profile = ModelField(PasswordProfile)
+    password_profile = ModelField(PasswordProfile, write_only=True)
     # past_projects = Field()
     # postal_code = CharField()
     # preferred_data_location = CharField()
@@ -155,81 +157,80 @@ class User(Model):
         self._dirty.clear()
 
 
-# class UserQuerySet(QuerySet["User"]):
-#     model_class = User
-#     capabilities = Capabilities.read_write(search=True)
+class UserQuerySet(QuerySet["User"]):
+    #     model_class = User
+    #     capabilities = Capabilities.read_write(search=True)
 
-#     # @property
-#     # def groups(self) -> groups.GroupsBulkQuerySet:
-#     #     return groups.GroupsBulkQuerySet(self)
+    #     # @property
+    #     # def groups(self) -> groups.GroupsBulkQuerySet:
+    #     #     return groups.GroupsBulkQuerySet(self)
 
-#     # @property
-#     # def assigned_license(self) -> assigned_licenses.LicensesBulkQuerySet:
-#     #     return assigned_licenses.LicensesBulkQuerySet(self)
+    #     # @property
+    #     # def assigned_license(self) -> assigned_licenses.LicensesBulkQuerySet:
+    #     #     return assigned_licenses.LicensesBulkQuerySet(self)
 
-#     def get_by_directory_ids(
-#         self,
-#         *ids: str | Iterable[str],
-#     ) -> list["User"]:
-#         """
-#         Resolve directory object IDs to users via /directoryObjects/getByIds.
-#         """
-#         id_list: list[str] = []
-#         for arg in ids:
-#             if isinstance(arg, str):
-#                 id_list.append(arg)
-#             else:
-#                 id_list.extend(list(arg))
-#         if not id_list:
-#             return []
+    #     def get_by_directory_ids(
+    #         self,
+    #         *ids: str | Iterable[str],
+    #     ) -> list["User"]:
+    #         """
+    #         Resolve directory object IDs to users via /directoryObjects/getByIds.
+    #         """
+    #         id_list: list[str] = []
+    #         for arg in ids:
+    #             if isinstance(arg, str):
+    #                 id_list.append(arg)
+    #             else:
+    #                 id_list.extend(list(arg))
+    #         if not id_list:
+    #             return []
 
-#         results: list[User] = []
-#         for chunk in utils.chunks(id_list, 1000):
-#             payload = {"ids": list(chunk), "types": ["user"]}
-#             data = self._client.post("/directoryObjects/getByIds", json_body=payload)
-#             results.extend(
-#                 self.model_class(graph_data=item, parent=self)
-#                 for item in data.get("value", [])
-#             )
-#         return results
+    #         results: list[User] = []
+    #         for chunk in utils.chunks(id_list, 1000):
+    #             payload = {"ids": list(chunk), "types": ["user"]}
+    #             data = self._client.post("/directoryObjects/getByIds", json_body=payload)
+    #             results.extend(
+    #                 self.model_class(graph_data=item, parent=self)
+    #                 for item in data.get("value", [])
+    #             )
+    #         return results
 
-#     def create(
-#         self,
-#         *,
-#         display_name: str,
-#         user_principal_name: str,
-#         mail_nickname: str,
-#         account_enabled: bool = True,
-#         password: str | None = None,
-#         force_change_password_next_sign_in: bool = True,
-#         auto_generate_password: bool = False,
-#         **kwargs: Any,
-#     ) -> "User":
-#         if password is None:
-#             if not auto_generate_password:
-#                 raise ValueError(
-#                     "'password' is required when creasting a user. Set auto_generate_password=True to let the system create a random password for this user."
-#                 )
-#             password = utils.generate_password(14)
+    def create(
+        self,
+        *,
+        display_name: str,
+        user_principal_name: str,
+        mail_nickname: str,
+        account_enabled: bool = True,
+        password: str | None = None,
+        force_change_password_next_sign_in: bool = True,
+        auto_generate_password: bool = False,
+        **kwargs: Any,
+    ) -> "User":
+        if password is None:
+            if not auto_generate_password:
+                raise ValueError(
+                    "'password' is required when creasting a user. Set auto_generate_password=True to let the system create a random password for this user."
+                )
+            password = utils.generate_password(14)
 
-#         obj = self.model_class(
-#             display_name=display_name,
-#             user_principal_name=user_principal_name,
-#             mail_nickname=mail_nickname,
-#             account_enabled=account_enabled,
-#             parent=self,
-#             **kwargs,
-#         )
-#         obj._validate_for_create()
-#         payload = obj.to_graph(for_update=False)
-#         payload.update(
-#             PasswordProfile(
-#                 password=password,
-#                 force_change_password_next_sign_in=force_change_password_next_sign_in,
-#             ).to_graph()
-#         )
-#         obj.refresh_from_graph(self._client.post(self.endpoint, json_body=payload))
-#         return obj
+        ctx = self._ctx
+        obj = ctx.model_class(
+            display_name=display_name,
+            user_principal_name=user_principal_name,
+            mail_nickname=mail_nickname,
+            account_enabled=account_enabled,
+            password_profile=dict(
+                password=password,
+                force_change_password_next_sign_in=force_change_password_next_sign_in,
+            ),
+            **kwargs,
+        )
+        obj._validate_for_create()
+        data = ctx.client.post(ctx.endpoint, body=obj.serialize())
+        # obj.refresh_from_graph(self._client.post(self.endpoint, json_body=payload))
+        return obj
+
 
 #     def _prefetch_related(self, objs: list[User]) -> None:
 #         if "licenses" not in self._select_related:

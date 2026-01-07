@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from pymsgraph import models
+
 try:
     import importlib.metadata as importlib_metadata
 except ImportError:  # pragma: no cover

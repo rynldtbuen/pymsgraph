@@ -1,3 +1,4 @@
+from os import write
 from typing import TYPE_CHECKING, Any, Generic, Self, TypeVar
 
 from pymsgraph.models.fields import CharField, Field
@@ -16,6 +17,7 @@ _Tm = TypeVar("_Tm", bound="Model")
 class Model(Generic[_Tm]):
     REQUIRED_FIELDS: frozenset[str]
     FIELD_NAME_MAP: dict[str, str]
+    WRITE_FIELDS: frozenset[str]
 
     id = CharField()
 
@@ -24,6 +26,7 @@ class Model(Generic[_Tm]):
         fields: dict[str, Field] = {}
         required_fields: set[str] = set()
         field_name_map: dict[str, str] = {}
+        write_fields: set[str] = set()
 
         for base in cls.__mro__[1:]:
             base_fields = getattr(base, "FIELDS", None)
@@ -48,10 +51,13 @@ class Model(Generic[_Tm]):
                     field_name_map[graph_attr_name] = name
                 if attr.required:
                     required_fields.add(name)
+                if attr.write_only:
+                    write_fields.add(name)
 
         cls.FIELDS = fields
         cls.REQUIRED_FIELDS = frozenset(required_fields)
         cls.FIELD_NAME_MAP = field_name_map
+        cls.WRITE_FIELDS = frozenset(write_fields)
 
     def __init__(
         self,
@@ -90,7 +96,7 @@ class Model(Generic[_Tm]):
 
     async def save(self) -> bool:
         if self.id is None:
-            self._validate_required_fields()
+            self._validate_for_create()
             ep = self._ctx.endpoint
             client_method = self._ctx.client.post
         else:
@@ -126,18 +132,19 @@ class Model(Generic[_Tm]):
     def _endpoint(self) -> str:
         return f"{self._ctx.endpoint}/{self.id}"
 
-    def _validate_required_fields(self) -> None:
+    def _validate_for_create(self) -> None:
         missing: list[str] = []
-        for name in self.REQUIRED_FIELDS:
-            if field := self.FIELDS.get(name):
-                try:
-                    val = self._data[name]
-                except KeyError:
-                    if (d := field.default) is not None:
-                        self._data[name] = d
-                        continue
-                else:
-                    if not val:
-                        missing.append(name)
+        for names in (self.REQUIRED_FIELDS, self.WRITE_FIELDS):
+            for name in names:
+                if field := self.FIELDS.get(name):
+                    try:
+                        val = self._data[name]
+                    except KeyError:
+                        if (d := field.default) is not None:
+                            self._data[name] = d
+                            continue
+                    else:
+                        if not val:
+                            missing.append(name)
         if missing:
             raise ValueError(f"Missing required fields: {', '.join(missing)}")
