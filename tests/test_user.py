@@ -4,6 +4,9 @@ from typing import TYPE_CHECKING
 import httpx
 import pytest
 
+from pymsgraph.models import query
+from pymsgraph.models.user import User
+
 if TYPE_CHECKING:
     from tests.conftest import MakeClient
 
@@ -30,8 +33,7 @@ async def test_user_queryset_create(make_client: "MakeClient"):
         )
 
     c, r = make_client(handler)
-    qs = c.users
-    user = await qs.create(
+    user = await c.users.create(
         display_name="Alice",
         user_principal_name="alice@example.com",
         mail_nickname="alice",
@@ -69,8 +71,8 @@ async def test_user_create(make_client: "MakeClient"):
         )
 
     c, r = make_client(handler)
-    ctx = c.users._ctx
-    user = ctx.model_class(
+    queryset = c.users
+    user = User(
         display_name="Alice",
         user_principal_name="alice@example.com",
         mail_nickname="alice",
@@ -78,7 +80,8 @@ async def test_user_create(make_client: "MakeClient"):
             password="Pass@word1",
             force_change_password_next_sign_in=True,
         ),
-        context=ctx,
+        client=queryset._client,
+        endpoint=queryset._endpoint,
     )
 
     saved = await user.save()
@@ -102,9 +105,11 @@ async def test_user_save_patches_dirty_fields(make_client: "MakeClient"):
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
     c, r = make_client(handler)
-    ctx = c.users._ctx
-    user = ctx.model_class.from_graph(
-        {"id": "123", "displayName": "Alice"}, context=ctx
+    queryset = c.users
+    user = queryset._model_class.from_graph(
+        {"id": "123", "displayName": "Alice"},
+        client=queryset._client,
+        endpoint=queryset._endpoint,
     )
     assert user._dirty == set()
 
@@ -121,7 +126,7 @@ async def test_user_save_patches_dirty_fields(make_client: "MakeClient"):
 def test_user_queryset_select_builds_select(user_qs):
     qs = user_qs.select("display_name", "mail_nickname")
     params = qs._build_params()
-    assert params["$select"] == "displayName,mailNickname"
+    assert params["$select"] == "displayName,mailNickname,id"
 
 
 def test_user_queryset_order_by(user_qs):
@@ -177,7 +182,9 @@ async def test_user_queryset_count_uses_odata_count(make_client: "MakeClient"):
         )
 
     c, _ = make_client(handler)
-    qs = c.users
+    qs = c.users.with_count()
+    async for item in qs:
+        ...
     count = await qs.count()
     assert count == 42
     p = qs.iterator()
@@ -269,28 +276,28 @@ async def test_user_queryset_count_uses_odata_count(make_client: "MakeClient"):
 #         c.users.set_attr("not_a_field", "x")
 
 
-# def test_user_queryset_get_by_id(make_client: "MakeClient"):
-#     def handler(request: httpx.Request) -> httpx.Response:
-#         assert request.method == "GET"
-#         assert request.url.path == "/v1.0/users/abc"
-#         return httpx.Response(
-#             200,
-#             json={
-#                 "id": "abc",
-#                 "displayName": "Bob",
-#                 "userPrincipalName": "bob@example.com",
-#                 "mailNickname": "bob",
-#             },
-#         )
+@pytest.mark.asyncio
+async def test_user_queryset_get_by_id(make_client: "MakeClient"):
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/v1.0/users/abc"
+        return httpx.Response(
+            200,
+            json={
+                "id": "abc",
+                "displayName": "Bob",
+                "userPrincipalName": "bob@example.com",
+                "mailNickname": "bob",
+            },
+        )
 
-#     c, _ = make_client(handler)
-#     qs = c.users
-#     user = qs.get(id="abc")
-#     assert user is not None
-#     assert user.id == "abc"
-#     assert user.display_name == "Bob"
-#     assert user.user_principal_name == "bob@example.com"
-#     assert user._parent is qs
+    c, _ = make_client(handler)
+    qs = c.users
+    user = await qs.get(id="abc")
+    assert user is not None
+    assert user.id == "abc"
+    assert user.display_name == "Bob"
+    assert user.user_principal_name == "bob@example.com"
 
 
 # def test_user_groups_add_remove(make_client: "MakeClient"):
@@ -469,73 +476,76 @@ async def test_user_queryset_count_uses_odata_count(make_client: "MakeClient"):
 #     assert params["$filter"] == "(assignedLicenses/$count ne 0)"
 
 
-# def test_user_delete_requires_id(make_client: "MakeClient"):
-#     # Ensure no HTTP call occurs
-#     def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
-#         raise AssertionError("HTTP should not be called")
+@pytest.mark.asyncio
+async def test_user_delete_requires_id(make_client: "MakeClient"):
+    # Ensure no HTTP call occurs
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("HTTP should not be called")
 
-#     c, _ = make_client(handler)
-#     user = c.users.make(
-#         display_name="Unsaved",
-#         # user_principal_name="unsaved@example.com",
-#         mail_nickname="unsaved",
-#     )
-#     with pytest.raises(ValueError):
-#         user.delete(force=True)
-
-
-# def test_user_delete_force_calls_delete(make_client: "MakeClient"):
-#     def handler(request: httpx.Request) -> httpx.Response:
-#         assert request.method == "DELETE"
-#         assert request.url.path == "/v1.0/users/u_del"
-#         return httpx.Response(204)
-
-#     c, _ = make_client(handler)
-#     user = c.users.make_from_graph(
-#         {
-#             "id": "u_del",
-#             "displayName": "Del",
-#             "userPrincipalName": "del@example.com",
-#             "accountEnabled": True,
-#             "mailNickname": "del",
-#         }
-#     )
-
-#     user.delete(force=True)
-#     # after local cleanup, id should no longer be present
-#     assert user.id is None
+    c, _ = make_client(handler)
+    user = c.users._model_class(
+        display_name="Unsaved",
+        # user_principal_name="unsaved@example.com",
+        mail_nickname="unsaved",
+    )
+    with pytest.raises(AttributeError):
+        await user.delete(force=True)
 
 
-# def test_user_delete_requires_force(make_client: "MakeClient"):
-#     # Ensure no HTTP call occurs
-#     def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
-#         raise AssertionError("HTTP should not be called")
+@pytest.mark.asyncio
+async def test_user_delete_force_calls_delete(make_client: "MakeClient"):
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "DELETE"
+        assert request.url.path == "/v1.0/users/u_del"
+        return httpx.Response(204)
 
-#     c, _ = make_client(handler)
-#     user = c.users.make_from_graph(
-#         {
-#             "id": "u_del",
-#             "displayName": "Del",
-#             "userPrincipalName": "del@example.com",
-#             "accountEnabled": True,
-#             "mailNickname": "del",
-#         }
-#     )
-#     with pytest.raises(RuntimeError):
-#         user.delete()
+    c, _ = make_client(handler)
+    user = c.users._model_class.from_graph(
+        {
+            "id": "u_del",
+            "displayName": "Del",
+            "userPrincipalName": "del@example.com",
+            "accountEnabled": True,
+            "mailNickname": "del",
+        }
+    )
+
+    await user.delete(force=True)
+    # after local cleanup, id should no longer be present
+    assert user.id is None
 
 
-# def test_user_reset_password_requires_id(make_client: "MakeClient"):
-#     # Ensure no HTTP call occurs
-#     def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
-#         raise AssertionError("HTTP should not be called")
+@pytest.mark.asyncio
+async def test_user_delete_requires_force(make_client: "MakeClient"):
+    # Ensure no HTTP call occurs
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("HTTP should not be called")
 
-#     c, _ = make_client(handler)
+    c, _ = make_client(handler)
+    user = c.users._model_class.from_graph(
+        {
+            "id": "u_del",
+            "displayName": "Del",
+            "userPrincipalName": "del@example.com",
+            "accountEnabled": True,
+            "mailNickname": "del",
+        }
+    )
+    with pytest.raises(RuntimeError):
+        await user.delete()
 
-#     user = c.users.make(
-#         display_name="Unsaved",
-#         user_principal_name="unsaved@example.com",
-#         mail_nickname="unsaved",
-#     )
-#     with pytest.raises(ValueError):
-#         user.reset_password(password="Whatever1!234")
+
+@pytest.mark.asyncio
+async def test_user_reset_password_requires_id(make_client: "MakeClient"):
+    # Ensure no HTTP call occurs
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("HTTP should not be called")
+
+    c, _ = make_client(handler)
+
+    with pytest.raises(ValueError):
+        await c.users.create(
+            display_name="Unsaved",
+            user_principal_name="unsaved@example.com",
+            mail_nickname="unsaved",
+        )

@@ -3,20 +3,21 @@ from __future__ import annotations
 import platform
 import sys
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
 
 import httpx
-
-from pymsgraph import models
-from pymsgraph.models.query import Context
 
 try:
     import importlib.metadata as importlib_metadata
 except ImportError:  # pragma: no cover
     import importlib_metadata  # type: ignore
 
+from pymsgraph.models.user import UserQuerySet
+
 if TYPE_CHECKING:
-    from .auth import TokenProvider
+    from pymsgraph.auth import TokenProvider
+    from pymsgraph.models.query import QuerySet
+
 
 __all__ = ["Client"]
 
@@ -210,7 +211,4 @@ class Client:
     async def __aexit__(self, exc_type, exc, tb) -> None:
         await self.close()
 
-    @property
-    def users(self):
-        ctx = Context(client=self, endpoint="/users", model_class=models.User)
-        return models.UserQuerySet(context=ctx)
+    users = UserQuerySet.as_descriptor()

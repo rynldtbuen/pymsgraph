@@ -1,14 +1,14 @@
 from __future__ import annotations
 
+import importlib
 import re
 import secrets
 import string
-from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING, Any
 
-# if TYPE_CHECKING:
-#     from pymsgraph.models.base import TModel, Model
-#     from pymsgraph.query import QuerySet
+
+if TYPE_CHECKING:
+    from pymsgraph.models.base import Model
 
 
 def generate_password(length: int = 12) -> str:
@@ -79,10 +79,13 @@ def to_camel_case(name: str) -> str:
     return parts[0] + "".join(p[:1].upper() + p[1:] for p in parts[1:])
 
 
-# def get_model_class(model_name: str) -> type[Model]:
-#     module_name = camel_to_snake(model_name)
-#     mod = importlib.import_module(f"pymsgraph.models.{module_name}")
-#     return getattr(mod, model_name)
+# _Tm = TypeVar("_Tm", bound="Model")
+
+
+def get_model_class(model_name: str) -> type["Model"]:
+    module_name = to_snake_case(model_name)
+    mod = importlib.import_module(f"pymsgraph.models.{module_name}")
+    return getattr(mod, model_name)
 
 
 # def get_queryset_class(queryset_path: str):

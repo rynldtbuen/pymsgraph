@@ -1,4 +1,4 @@
-from typing import Any
+from __future__ import annotations
 
 from pymsgraph.models.fields import CharField, BooleanField, Field
 from pymsgraph.models.base import Model
@@ -17,4 +17,10 @@ class AssignedLicense(Model):
 
 
 class AssignedLicensesQuerySet(QuerySet[AssignedLicense]):
-    pass
+    model_class = AssignedLicense
+    endpoint = "/assignedLicense"
+
+
+# class MemberOfQuerySet(QuerySet[AssignedLicense]):
+#     endpoint = "/assignedLicense"
+#     model_class = "AssignedLicense"

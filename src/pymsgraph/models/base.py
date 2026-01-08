@@ -1,15 +1,17 @@
-from os import write
+from __future__ import annotations
+
+__all__ = ["Model"]
+
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Generic, Self, TypeVar
 
 from pymsgraph.models.fields import CharField, Field
-from pymsgraph.models.query import Context
 from pymsgraph.utils import to_snake_case
 
 if TYPE_CHECKING:
+    from pymsgraph.client import Client
     from pymsgraph.models.query import QuerySet
 
-
-__all__ = ["Model"]
 
 _Tm = TypeVar("_Tm", bound="Model")
 
@@ -17,9 +19,11 @@ _Tm = TypeVar("_Tm", bound="Model")
 class Model(Generic[_Tm]):
     REQUIRED_FIELDS: frozenset[str]
     FIELD_NAME_MAP: dict[str, str]
-    WRITE_FIELDS: frozenset[str]
+    WRITE_ON_FIELDS: frozenset[str]
+    DEFAULT_SELECT_FIELDS: tuple[str, ...]
 
-    id = CharField()
+    id = CharField(select_default=True)
+    default_queryset: QuerySet[_Tm]
 
     def __init_subclass__(cls: type[_Tm], **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
@@ -27,6 +31,7 @@ class Model(Generic[_Tm]):
         required_fields: set[str] = set()
         field_name_map: dict[str, str] = {}
         write_fields: set[str] = set()
+        default_select: list[str] = []
 
         for base in cls.__mro__[1:]:
             base_fields = getattr(base, "FIELDS", None)
@@ -43,6 +48,8 @@ class Model(Generic[_Tm]):
                         field_name_map[graph_attr_name] = name
                     if attr.required:
                         required_fields.add(name)
+                    if attr.select_default:
+                        default_select.append(name)
 
         for name, attr in cls.__dict__.items():
             if isinstance(attr, Field):
@@ -53,21 +60,27 @@ class Model(Generic[_Tm]):
                     required_fields.add(name)
                 if attr.write_only:
                     write_fields.add(name)
+                if attr.select_default:
+                    default_select.append(name)
 
         cls.FIELDS = fields
         cls.REQUIRED_FIELDS = frozenset(required_fields)
         cls.FIELD_NAME_MAP = field_name_map
         cls.WRITE_FIELDS = frozenset(write_fields)
+        cls.DEFAULT_SELECT_FIELDS = tuple(default_select)
 
     def __init__(
         self,
-        context: "Context[_Tm] | None" = None,
+        *,
+        client: "Client | None" = None,
+        endpoint: str | None = None,
         **kwargs: Any,
     ) -> None:
         self._data: dict[str, Any] = {}
         self._graph_data: dict[str, Any] = {}
         self._dirty: set[str] = set()
-        self._ctx = context or Context[_Tm]()
+        # self._ctx = context or Context[_Tm]()
+        self._args: tuple[Any, ...] = (client, endpoint)
 
         self._initializing = True
         for k, v in kwargs.items():
@@ -79,60 +92,99 @@ class Model(Generic[_Tm]):
 
     def serialize(self) -> dict[str, Any]:
         data: dict[str, Any] = {}
-        attr_names = self._dirty or self._data.keys()
+        attr_names = set(self._dirty or self._data.keys())
+        if self.id is None:
+            for name, field in self.FIELDS.items():
+                if name not in self._data and field.default is not None:
+                    attr_names.add(name)
 
         for attr_name in attr_names:
             field = self.FIELDS[attr_name]
             if field.read_only:
                 continue
-            try:
+            if attr_name in self._data:
                 val = self._data[attr_name]
-            except KeyError:
-                continue
+            else:
+                val = field.default
             if gr_attr_name := field.graph_attr_name:
                 data[gr_attr_name] = field.to_graph(val)
 
         return data
 
     async def save(self) -> bool:
-        if self.id is None:
+        is_create = self.id is None
+        if is_create:
             self._validate_for_create()
-            ep = self._ctx.endpoint
-            client_method = self._ctx.client.post
+            client_method = self._client.post
+            endpoint = self._args[1]
         else:
-            ep = self._endpoint
-            client_method = self._ctx.client.patch
+            client_method = self._client.patch
+            endpoint = self._endpoint
 
         body = self.serialize()
 
         if not body:
             return False
 
-        data = await client_method(ep, body=body)
+        data = await client_method(endpoint, body=body)
         self._dirty.clear()
         if data:
-            self._data = self.__class__.from_graph(data=data, context=self._ctx)._data
+            if is_create:
+                merged = dict(data)
+                for attr_name, val in self._data.items():
+                    field = self.FIELDS.get(attr_name)
+                    if field is None or field.write_only:
+                        continue
+                    graph_attr_name = field.graph_attr_name or attr_name
+                    merged.setdefault(graph_attr_name, field.to_graph(val))
+                data = merged
+            self.refresh_from_graph(data)
         return True
+
+    def refresh_from_graph(self, data: dict[str, Any]) -> None:
+        self._data = self.__class__.from_graph(data)._data
 
     @classmethod
     def from_graph(
-        cls, data: dict[str, Any], context: Context[Any] | None = None
+        cls,
+        data: dict[str, Any],
+        client: "Client | None" = None,
+        endpoint: str | None = None,
     ) -> Self:
-        obj = cls(context=context)
+        obj = cls()
         obj._initializing = True
+        data = deepcopy(data)
 
-        for graph_attr_name, val in data.items():
+        for graph_attr_name, val in deepcopy(data).items():
             py_attr_name = to_snake_case(graph_attr_name)
             if cls.FIELDS.get(py_attr_name):
                 setattr(obj, py_attr_name, val)
 
         obj._graph_data = data
         obj._initializing = False
+        obj._args = (
+            client or cls.default_queryset._client,
+            endpoint or cls.default_queryset._endpoint,
+        )
         return obj
 
     @property
+    def _client(self) -> "Client":
+        if c := self._args[0]:
+            return c
+        raise AttributeError(
+            f"{type(self).__name__} object has no attribute '_endpoint'"
+        )
+
+    @property
     def _endpoint(self) -> str:
-        return f"{self._ctx.endpoint}/{self.id}"
+        if self.id is None:
+            raise AttributeError(f"{type(self).__name__} object has no attribute 'id'")
+        if e := self._args[1]:
+            return f"{e}/{self.id}"
+        raise AttributeError(
+            f"{type(self).__name__} object has no attribute '_endpoint'"
+        )
 
     def _validate_for_create(self) -> None:
         missing: list[str] = []

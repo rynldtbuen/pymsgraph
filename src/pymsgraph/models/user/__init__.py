@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 __all__ = ["UserQuerySet"]
 
 from typing import Any
@@ -23,10 +25,10 @@ class User(Model):
     https://learn.microsoft.com/en-us/graph/api/resources/user?view=graph-rest-1.0
     """
 
-    display_name = CharField(required=True)
-    account_enabled = BooleanField(default=True, required=True)
+    display_name = CharField(required=True, select_default=True)
+    account_enabled = BooleanField(default=True, required=True, select_default=True)
     mail_nickname = CharField(required=True)
-    user_principal_name = EmailField(required=True)
+    user_principal_name = EmailField(required=True, select_default=True)
 
     # about_me = CharField()
     # age_group = CharField()
@@ -52,7 +54,7 @@ class User(Model):
     # identities = Field()
     # im_addresses = Field()
     job_title = CharField()
-    # mail = EmailField(read_only=True)
+    mail = EmailField(read_only=True, select_default=True)
     # mobile_phone = CharField()
     # interests = Field()
     # office_location = CharField()
@@ -98,7 +100,7 @@ class User(Model):
     # user_type = CharField()
 
     # Relationship
-    # member_of = QuerySetField(query.MemberOfQuerySet)
+    # member_of = QuerySetField("GroupQuerySet")
 
     # search_field = "display_name"
     # endpoint = "/users"
@@ -137,10 +139,10 @@ class User(Model):
             }
         )
 
-        await self._ctx.client.patch(ep, body=body)
+        await self._client.patch(ep, body=body)
 
     def revoke_sign_in_sessions(self):
-        return self._ctx.client.post(f"{self._endpoint}/revokeSignInSessions")
+        return self._client.post(f"{self._endpoint}/revokeSignInSessions")
 
     def get_generated_password(self) -> str | None:
         """Return the auto-generated password (if any) and clear it immediately."""
@@ -152,14 +154,15 @@ class User(Model):
         if not force:
             raise RuntimeError("Call delete(force=True) to proceed.")
 
-        await self._ctx.client.delete(self._endpoint)
+        await self._client.delete(self._endpoint)
 
         self._data.clear()
         self._dirty.clear()
 
 
 class UserQuerySet(QuerySet["User"]):
-    #     model_class = User
+    model_class = User
+    endpoint = "/users"
     #     capabilities = Capabilities.read_write(search=True)
 
     #     # @property
@@ -215,8 +218,7 @@ class UserQuerySet(QuerySet["User"]):
                 )
             password = utils.generate_password(14)
 
-        ctx = self._ctx
-        obj = ctx.model_class(
+        obj = User(
             display_name=display_name,
             user_principal_name=user_principal_name,
             mail_nickname=mail_nickname,
@@ -225,11 +227,23 @@ class UserQuerySet(QuerySet["User"]):
                 password=password,
                 force_change_password_next_sign_in=force_change_password_next_sign_in,
             ),
+            client=self._client,
+            endpoint=self._endpoint,
             **kwargs,
         )
         obj._validate_for_create()
-        data = await ctx.client.post(ctx.endpoint, body=obj.serialize())
-        return ctx.model_class.from_graph(data=data, context=ctx)
+        data = await self._client.post(self._endpoint, body=obj.serialize())
+        if data:
+            merged = dict(data)
+            for attr_name, val in obj._data.items():
+                field = obj.FIELDS.get(attr_name)
+                if field is None or field.write_only:
+                    continue
+                graph_attr_name = field.graph_attr_name or attr_name
+                merged.setdefault(graph_attr_name, field.to_graph(val))
+            data = merged
+            obj.refresh_from_graph(data)
+        return obj
 
 
 #     def _prefetch_related(self, objs: list[User]) -> None:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterable
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Generic, Self, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
 
 from pymsgraph.utils import to_camel_case
 
@@ -10,83 +10,97 @@ if TYPE_CHECKING:
     from pymsgraph.client import Client
     from pymsgraph.models.base import Model
 
-__all__ = ["Context", "QuerySet", "Q"]
+__all__ = ["QuerySet", "Q"]
 
 _Tm = TypeVar("_Tm", bound="Model")
 _Tc = TypeVar("_Tc")
 
 
-class ContextDescriptor(Generic[_Tc]):
-    def __init__(self, strict: bool = True) -> None:
-        self.strict = strict
+# class ContextDescriptor(Generic[_Tc]):
+#     def __init__(self, strict: bool = True) -> None:
+#         self.strict = strict
 
-    def __set_name__(self, owner: type["Context"], name: str) -> None:
-        self.name = name
-        self.internal_name = f"_{name}"
+#     def __set_name__(self, owner: type["Context"], name: str) -> None:
+#         self.name = name
+#         self.internal_name = f"_{name}"
 
-    @overload
-    def __get__(
-        self, obj: None, owner: type["Context"] | None = None
-    ) -> "ContextDescriptor[_Tc]": ...
+#     @overload
+#     def __get__(
+#         self, obj: None, owner: type["Context"] | None = None
+#     ) -> "ContextDescriptor[_Tc]": ...
 
-    @overload
-    def __get__(
-        self, obj: "Context[_Tm]", owner: type["Context"] | None = None
-    ) -> _Tc: ...
+#     @overload
+#     def __get__(
+#         self, obj: "Context[_Tm]", owner: type["Context"] | None = None
+#     ) -> _Tc: ...
 
-    def __get__(
-        self, obj: "Context[_Tm] | None", owner: type["Context"] | None = None
-    ) -> _Tc | "ContextDescriptor[_Tc]" | None:
-        if obj is None:
-            return self
-        if (attr := getattr(obj, self.internal_name, None)) is not None:
-            return attr
-        if not self.strict:
-            return None
-        raise ValueError(f"Context attribute has been initialized, '{self.name}'")
+#     def __get__(
+#         self, obj: "Context[_Tm] | None", owner: type["Context"] | None = None
+#     ) -> _Tc | "ContextDescriptor[_Tc]" | None:
+#         if obj is None:
+#             return self
+#         if (attr := getattr(obj, self.internal_name, None)) is not None:
+#             return attr
+#         if not self.strict:
+#             return None
+#         raise ValueError(f"Context attribute has been initialized, '{self.name}'")
 
 
-class Context(Generic[_Tm]):
-    client: ContextDescriptor["Client"] = ContextDescriptor()
-    model_class: ContextDescriptor[type[_Tm]] = ContextDescriptor()
-    endpoint: ContextDescriptor[str] = ContextDescriptor()
-    queryset: ContextDescriptor["QuerySet[_Tm]"] = ContextDescriptor(strict=False)
+# class Context(Generic[_Tm]):
+#     client: ContextDescriptor["Client"] = ContextDescriptor()
+#     endpoint: ContextDescriptor[str] = ContextDescriptor()
+#     model_class: ContextDescriptor[type[_Tm]] = ContextDescriptor()
+#     queryset: ContextDescriptor["QuerySet[_Tm]"] = ContextDescriptor(strict=False)
+#     parent: ContextDescriptor["QuerySet[_Tm]"] | ContextDescriptor[_Tm] = (
+#         ContextDescriptor(strict=False)
+#     )
 
-    def __init__(self, **kwargs):
-        for k, v in kwargs.items():
-            setattr(self, f"_{k}", v)
+#     def __init__(self, **kwargs):
+#         for k, v in kwargs.items():
+#             setattr(self, f"_{k}", v)
 
-    def asdict(self) -> dict[str, Any]:
-        return {
-            "client": self.client,
-            "model_class": self.model_class,
-            "endpoint": self.endpoint,
-        }
+#     def asdict(self) -> dict[str, Any]:
+#         return {
+#             "client": self.client,
+#             "endpoint": self.endpoint,
+#             "model_class": self.model_class,
+#         }
 
-    @classmethod
-    def get(cls, context: "Context[_Tm]", **kwargs: Any) -> Self:
-        d_ctx = context.asdict()
-        d_ctx.update(kwargs)
-        return cls(**d_ctx)
+#     @classmethod
+#     def make(cls, context: "Context[_Tm]", **kwargs: Any) -> Self:
+#         d_ctx = context.asdict()
+#         d_ctx.update(kwargs)
+#         return cls(**d_ctx)
 
 
 class QuerySet(Generic[_Tm]):
-    PAGE_SIZE = 50
+    endpoint: str | None = None
+    model_class: type[_Tm] | None = None
+    page_size: int = 50
 
-    def __init__(self, context: Context[_Tm] | None = None) -> None:
-        self._ctx: Context[_Tm] = context or Context()
+    def __init__(
+        self,
+        client: "Client | None" = None,
+        *,
+        endpoint: str | None = None,
+        model_class: "type[_Tm] | None" = None,
+        **kwargs,
+    ) -> None:
+        self._args: tuple[Any, ...] = (
+            client,
+            endpoint or self.endpoint,
+            model_class or self.model_class,
+        )
         self._params: dict[str, Any] = {}
         self._headers: dict[str, Any] = {}
 
         self._paginator: Paginator[_Tm] | None = None
         self._all: bool = False
+        self._kwargs = kwargs
 
-    def _clone(self) -> "QuerySet[_Tm]":
-        obj = self.__class__()
-        obj._ctx = self._ctx
-        obj._params = deepcopy(self._params)
-        obj._headers = dict(self._headers)
-        return obj
+    @classmethod
+    def as_descriptor(cls: type[_Tqs]) -> "QuerySetDescriptor[_Tqs]":
+        return QuerySetDescriptor(cls)
 
     def filter(self, *q_objects: "Q", **kwargs: Any) -> "QuerySet[_Tm]":
         if not q_objects and not kwargs:
@@ -173,12 +187,12 @@ class QuerySet(Generic[_Tm]):
         qs._all = True
         return qs
 
-    def with_count(self) -> QuerySet[_Tm]:
-        qs = self.with_consistency_level_eventual()
+    def with_count(self) -> "QuerySet[_Tm]":
+        qs = self._clone()
         qs._params["$count"] = "true"
-        return qs
+        return qs.with_consistency_level_eventual()
 
-    def with_consistency_level_eventual(self) -> QuerySet[_Tm]:
+    def with_consistency_level_eventual(self) -> "QuerySet[_Tm]":
         qs = self._clone()
         qs._headers["ConsistencyLevel"] = "eventual"
         return qs
@@ -187,35 +201,25 @@ class QuerySet(Generic[_Tm]):
 
     def iterator(self, *, page_size: int | None = None) -> "Paginator[_Tm]":
         if (p := self._paginator) is None:
-            p = Paginator(context=self._ctx, page_size=page_size or self.PAGE_SIZE)
+            # ctx = Context.make(self._ctx, queryset=self)
+            p = Paginator[_Tm](self, page_size=page_size or self.page_size)
             self._paginator = p
         return p
 
     async def exists(self) -> bool:
-        """Check if any results exist"""
-        return await self.count() > 0
+        return bool(await self.count())
 
-    async def count(self) -> int:
-        """Get count of results (uses $count)"""
-        if (c := self.iterator()._cached_count) is not None:
-            return c
-
-        qs = self.with_count().top(1)
-        params = qs._build_params()
-        ctx = self._ctx
-
-        response = await ctx.client.get(
-            ctx.endpoint, params=params, headers=qs._headers
-        )
-        count = response.get("@odata.count", len(response.get("value", [])))
-        self.iterator()._cached_count = count
-        return count
+    async def count(self) -> int | None:
+        return await self.iterator().count()
 
     async def get(self, id: str | None = None, **kwargs) -> _Tm:
-        ctx = self._ctx
         if id:
-            response = await ctx.client.get(f"{ctx.endpoint}/{id}")
-            return ctx.model_class.from_graph(data=response, context=self._ctx)
+            data = await self._client.get(
+                f"{self._endpoint}/{id}", params=self._build_params()
+            )
+            return self._model_class.from_graph(
+                data, client=self._client, endpoint=self._endpoint
+            )
 
         if not kwargs:
             raise ValueError("No kwargs found.")
@@ -224,52 +228,85 @@ class QuerySet(Generic[_Tm]):
 
         if not results:
             raise DoesNotExist(
-                f"{ctx.model_class.__name__} matching query does not exist"
+                f"{self._model_class.__name__} matching query does not exist"
             )
 
         if len(results) > 1:
             raise MultipleObjectsReturned(
-                f"get() returned more than one {ctx.model_class.__name__}"
+                f"get() returned more than one {self._model_class.__name__}"
             )
 
         return results[0]
 
     async def first(self) -> _Tm | None:
-        qs = self.top(1)
-        params = qs._build_params()
-
-        ctx = self._ctx
-
-        response = await ctx.client.get(
-            ctx.endpoint, params=params, headers=self._headers
-        )
-        if response:
-            return ctx.model_class.from_graph(data=response, context=self._ctx)
+        async for obj in self.top(1):
+            return obj
         return None
+
+    async def create(self, **kwargs: Any) -> _Tm:
+        obj = self._model_class(client=self._client, endpoint=self._endpoint, **kwargs)
+        obj._validate_for_create()
+        data = await self._client.post(self._endpoint, body=obj.serialize())
+        return self._model_class.from_graph(
+            data, client=self._client, endpoint=self._endpoint
+        )
 
     def __aiter__(self) -> AsyncIterator[_Tm]:
         """Execute the query and fetch results"""
-        try:
-            paginator = getattr(self, "_paginator")
-        except AttributeError:
-            paginator = self.iterator()
-            setattr(self, "_paginator", paginator)
+        paginator = self.iterator()
         if not self._all:
             return paginator._fetch_page(1)
         return paginator.all()
 
+    @property
+    def _client(self) -> "Client":
+        if c := self._args[0]:
+            return c
+        raise AttributeError(f"{type(self).__name__} object has no attribute '_client'")
+
+    @property
+    def _endpoint(self) -> str:
+        if e := self._args[1]:
+            return e
+        raise AttributeError(
+            f"{type(self).__name__} object has no attribute '_endpoint'"
+        )
+
+    @property
+    def _model_class(self) -> type[_Tm]:
+        if c := self._args[2]:
+            return c
+        raise AttributeError(
+            f"{type(self).__name__} object has no attribute '_model_class'"
+        )
+
+    def _clone(self) -> "QuerySet[_Tm]":
+        obj = self.__class__(
+            self._client, endpoint=self._endpoint, model_class=self._model_class
+        )
+        obj._params = deepcopy(self._params)
+        obj._headers = dict(self._headers)
+        return obj
+
     def _build_params(self) -> dict[str, Any]:
         """Build OData query parameters"""
         compiled_params = {}
-        params = self._params
+        params = deepcopy(self._params)
 
-        if values := params.get("$filter"):
+        if values := params.pop("$filter", None):
             compiled_params["$filter"] = " and ".join(f"({v})" for v in values)
 
-        if values := params.get("$select"):
+        if "$select" not in params:
+            default_fields = getattr(self._model_class, "DEFAULT_SELECT_FIELDS", None)
+            if default_fields:
+                params["$select"] = list(default_fields)
+
+        if values := params.pop("$select", None):
+            if "id" not in values:
+                values = list(values) + ["id"]
             compiled_params["$select"] = ",".join([to_camel_case(v) for v in values])
 
-        if values := params.get("$orderby"):
+        if values := params.pop("$orderby", None):
             compiled_params["$orderby"] = ",".join(
                 [
                     (
@@ -281,13 +318,10 @@ class QuerySet(Generic[_Tm]):
                 ]
             )
 
-        if values := params.get("$search"):
+        if values := params.pop("$search", None):
             compiled_params["$search"] = " AND ".join(values)
 
-        if value := params.get("$top"):
-            compiled_params["$top"] = str(value)
-
-        if expands := params.get("$expand"):
+        if expands := params.pop("$expand", None):
             parts: list[str] = []
             for name, fields in expands.items():
                 if fields:
@@ -296,48 +330,50 @@ class QuerySet(Generic[_Tm]):
                     parts.append(name)
             compiled_params["$expand"] = ",".join(parts)
 
+        compiled_params.update(params)
+
         return compiled_params
 
 
 class Paginator(Generic[_Tm]):
     def __init__(
-        self,
-        *,
-        context: Context[_Tm] | None = None,
-        page_size: int | None = None,
+        self, queryset: QuerySet[_Tm], *, page_size: int | None = None, **kwargs: Any
     ) -> None:
-        self._ctx: Context[_Tm] = context or Context()
         self._cached_objects: dict[int, list[_Tm]] = {}
         self._cached_count: int | None = None
         self._page_size = page_size or 50
         self._current_page_number: int = 1
         self._next_link: str | None = None
 
+        self._queryset = queryset
+        self._kwargs = kwargs
+
         objects = self._cached_objects.setdefault(1, [])
-        model_class = self._ctx.model_class
-        if cached_data := getattr(self._ctx, "_cached_data", None):
-            for item in cached_data:
-                obj = model_class.from_graph(data=item, context=self._ctx)
+        model_class = self._queryset._model_class
+
+        if cached_data := kwargs.get("cached_data"):
+            for data in cached_data:
+                obj = model_class.from_graph(data)
                 objects.append(obj)
 
-    async def next_page(self) -> AsyncIterator[_Tm]:
+    async def next_page(self) -> list[_Tm]:
         next_page = self._current_page_number + 1
-        objects = self._fetch_page(next_page)
+        objects = [o async for o in self._fetch_page(next_page)]
+        if objects:
+            self._current_page_number = next_page
+        return objects
 
-        try:
-            first = await anext(objects)
-        except StopAsyncIteration:
-            return
-
-        self._current_page_number = next_page
-        yield first
-        async for obj in objects:
-            yield obj
-
-    async def total_count(self) -> int | None:
-        if (_cache := self._cached_count) is None:
-            return await self._ctx.queryset.count()
-        return _cache
+    async def count(self) -> int | None:
+        if (count := self._cached_count) is None:
+            qs = self._queryset.with_consistency_level_eventual()
+            params = qs._build_params()
+            params.pop("$count", None)
+            endpoint = f"{self._queryset._endpoint}/$count"
+            count = await self._queryset._client.get(
+                endpoint, params=params, headers={**qs._headers, "Accept": "text/plain"}
+            )
+            self._cached_count = count  # pyright: ignore[reportAttributeAccessIssue]
+        return count  # pyright: ignore[reportReturnType]
 
     async def total_pages(self) -> int | None: ...
 
@@ -368,8 +404,8 @@ class Paginator(Generic[_Tm]):
                 yield obj
             next_page_number += 1
 
-    def first_page(self) -> AsyncIterator[_Tm]:
-        return self._fetch_page(1)
+    async def first_page(self) -> list[_Tm]:
+        return [o async for o in self._fetch_page(1)]
 
     async def _fetch_page(self, page_number: int | None = None) -> AsyncIterator[_Tm]:
         """Fetch a single page of results"""
@@ -385,34 +421,34 @@ class Paginator(Generic[_Tm]):
         if page_number < 1:
             raise ValueError("page_number must be greater than 0.")
 
-        # return cached page immediately without enforcing gap rules
         objects = self._cached_objects.get(page_number)
         if objects:
             for obj in objects:
                 yield obj
             return
 
-        ctx = self._ctx
+        queryset = self._queryset
 
         if page_number == 1:
-            params = ctx.queryset._build_params()
+            params = queryset._build_params()
             if params.get("$top") is None:
                 params["$top"] = str(self._page_size)
-            response = await ctx.client.get(
-                ctx.endpoint, params=params, headers=ctx.queryset._headers
+            response = await queryset._client.get(
+                queryset._endpoint, params=params, headers=queryset._headers
             )
         else:
             if not self._next_link:
                 return
-            response = await ctx.client.get(
-                url=self._next_link, headers=ctx.queryset._headers
+            response = await queryset._client.get(
+                url=self._next_link, headers=queryset._headers
             )
 
         self._next_link = response.get("@odata.nextLink")
+        self._cached_count = response.get("@odata.count")
         objects = self._cached_objects.setdefault(page_number, [])
 
-        for item in response.get("value", []):
-            obj = ctx.model_class.from_graph(data=item, context=ctx)
+        for data in response.get("value", []):
+            obj = queryset._model_class.from_graph(data)
             objects.append(obj)
             yield obj
 
@@ -420,6 +456,36 @@ class Paginator(Generic[_Tm]):
         # page_number=2, current_page_number=1
         if page_number > self._current_page_number:
             self._current_page_number = page_number
+
+
+_Tqs = TypeVar("_Tqs", bound="QuerySet")
+
+
+class QuerySetDescriptor(Generic[_Tqs]):
+    def __init__(self, queryset_class: type[_Tqs]) -> None:
+        self.queryset_class = queryset_class
+        self._cache: dict[int, Any] = {}
+
+    @overload
+    def __get__(
+        self, obj: None, owner: type["Client"] | None = None
+    ) -> "QuerySetDescriptor[_Tqs]": ...
+
+    @overload
+    def __get__(self, obj: "Client", owner: type["Client"] | None = None) -> _Tqs: ...
+
+    def __get__(
+        self, obj: "Client | None", owner: type["Client"] | None = None
+    ) -> "_Tqs | QuerySetDescriptor[_Tqs]":
+        if obj is None:
+            return self
+        if cached := self._cache.get(id(obj)):
+            return cached
+
+        qs = self.queryset_class(obj)
+        setattr(qs._model_class, "default_queryset", qs)
+        self._cache[id(obj)] = qs
+        return qs
 
 
 class Q:

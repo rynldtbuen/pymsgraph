@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload
 
-from pymsgraph.models.query import Context
-from pymsgraph.utils import to_camel_case
+from pymsgraph.utils import get_model_class, to_camel_case
 
 if TYPE_CHECKING:
     from pymsgraph.models.base import Model
@@ -31,6 +30,7 @@ class Field(Generic[_Tf]):
         required: bool = False,
         read_only: bool = False,
         write_only: bool = False,
+        select_default: bool = False,
         graph_attr_name: str | None = None,
     ) -> None:
         self.name: str
@@ -39,6 +39,7 @@ class Field(Generic[_Tf]):
         self.required = required
         self.read_only = read_only
         self.write_only = write_only
+        self.select_default = select_default
 
         if read_only and write_only:
             raise ValueError(
@@ -63,10 +64,10 @@ class Field(Generic[_Tf]):
 
     def __get__(
         self, obj: "Model | None", owner: type["Model"] | None = None
-    ) -> _Tf | "Field[_Tf]":
+    ) -> _Tf | "Field[_Tf]" | None:
         if obj is None:
             return self
-        return obj._data.get(self.name, self.default)
+        return obj._data.get(self.name)
 
     def __set__(self, obj: "Model", value: Any) -> None:
         if self.read_only and not obj._initializing:
@@ -201,9 +202,18 @@ class ModelField(Field[_Tm]):
 
 
 class QuerySetField(Field["QuerySet[_Tm]"]):
-    def __init__(self, queryset_class: type["QuerySet[_Tm]"], **kwargs: Any) -> None:
+    def __init__(
+        self,
+        queryset_class: type["QuerySet[_Tm]"],
+        *,
+        endpoint: str | None = None,
+        model_class: type[_Tm] | str | None = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
         self.queryset_class = queryset_class
+        self.endpoint = endpoint
+        self.model_class = model_class
 
     @overload
     def __get__(
@@ -217,11 +227,18 @@ class QuerySetField(Field["QuerySet[_Tm]"]):
 
     def __get__(
         self, obj: "Model[_Tm] | None", owner: type["Model"] | None = None
-    ) -> "QuerySet[_Tm] | Field[QuerySet[_Tm]]":  # pyright: ignore[reportReturnType]
+    ) -> "QuerySet[_Tm] | Field[QuerySet[_Tm]]":
         if obj is None:
             return self
 
-        ctx: Context[_Tm] = Context.get(
-            obj._ctx, endpoint=obj._endpoint, cached_data=obj._data.get(self.name)
+        endpoint = f"{obj._endpoint}/{self.endpoint}"
+        model_class = self.model_class
+        if model_class is None:
+            raise ValueError(f"{type(self)} model_class is missing.")
+        if isinstance(model_class, str):
+            model_class = get_model_class(model_class)
+        model_class = cast(type[_Tm], model_class)
+
+        return self.queryset_class(
+            obj._client, endpoint=endpoint, model_class=model_class
         )
-        return self.queryset_class(ctx)
