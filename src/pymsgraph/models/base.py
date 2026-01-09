@@ -22,7 +22,9 @@ class Model(Generic[_Tm]):
     WRITE_ON_FIELDS: frozenset[str]
     DEFAULT_SELECT_FIELDS: tuple[str, ...]
 
+    read_only: bool = False
     endpoint: str
+    standalone: bool = False
 
     id = CharField(select_default=True)
 

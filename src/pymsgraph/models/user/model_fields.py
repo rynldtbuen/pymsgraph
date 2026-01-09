@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pymsgraph.models.fields import CharField, BooleanField, Field
+from pymsgraph.models.fields import CharField, BooleanField, DateTimeField, Field
 from pymsgraph.models.base import Model
 from pymsgraph.models.query import QuerySet
 
@@ -21,7 +21,23 @@ class AssignedLicense(Model):
 class AssignedLicensesQuerySet(QuerySet[AssignedLicense]):
     model_class = AssignedLicense
 
+    def add(self, *args): ...
+    def remove(self, *args): ...
 
-# class MemberOfQuerySet(QuerySet[AssignedLicense]):
-#     endpoint = "/assignedLicense"
-#     model_class = "AssignedLicense"
+
+class AssignedPlans(Model):
+    read_only = True
+
+    assigned_date_time = DateTimeField()
+    capability_status = CharField()
+    service = CharField()
+    service_plan_id = CharField()
+
+
+class AssignedPlansQuerySet(QuerySet[AssignedPlans]):
+    model_class = AssignedPlans
+
+
+class EmployeeOrgData(Model):
+    cost_center = CharField()
+    division = CharField()

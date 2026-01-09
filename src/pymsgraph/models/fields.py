@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload
 
 from pymsgraph.utils import get_model_class, to_camel_case
@@ -11,9 +12,11 @@ if TYPE_CHECKING:
 __all__ = [
     "BooleanField",
     "CharField",
+    "DateTimeField",
     "EmailField",
     "Field",
     "IntegerField",
+    "ListField",
     "ModelField",
     "QuerySetField",
 ]
@@ -70,7 +73,7 @@ class Field(Generic[_Tf]):
         return obj._data.get(self.name)
 
     def __set__(self, obj: "Model", value: Any) -> None:
-        if self.read_only and not obj._initializing:
+        if (obj.read_only or self.read_only) and not obj._initializing:
             raise AttributeError(f"{self.name} is read-only")
 
         prev_val = self.__get__(obj)
@@ -167,6 +170,71 @@ class EmailField(CharField):
             if domain.startswith(".") or domain.endswith(".") or ".." in domain:
                 raise ValueError(f"Invalid domain for {self.name}")
 
+        super().__set__(obj, value)
+
+
+class DateTimeField(Field[datetime]):
+    def __set__(self, obj: "Model", value: Any) -> None:
+        if value is not None:
+            if isinstance(value, str):
+                val = value.strip()
+                if val.endswith("Z"):
+                    val = f"{val[:-1]}+00:00"
+                try:
+                    value = datetime.fromisoformat(val)
+                except ValueError:
+                    raise ValueError(f"{self.name} must be ISO 8601 datetime") from None
+            elif not isinstance(value, datetime):
+                raise TypeError(
+                    f"{self.name} must be datetime (got {type(value).__name__})"
+                )
+        super().__set__(obj, value)
+
+    def to_graph(self, value: Any) -> Any:
+        if value is None:
+            return None
+        if not isinstance(value, datetime):
+            raise TypeError(
+                f"{self.name} must be datetime (got {type(value).__name__})"
+            )
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        iso = value.isoformat()
+        return iso.replace("+00:00", "Z")
+
+
+class ListField(Field[list[Any]]):
+    def __init__(self, item_type: type | None = None, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.item_type = item_type
+
+    def __set__(self, obj: "Model", value: Any) -> None:
+        if value is not None:
+            if isinstance(value, (str, bytes)):
+                raise TypeError(
+                    f"{self.name} must be a list (got {type(value).__name__})"
+                )
+            if not isinstance(value, (list, tuple)):
+                raise TypeError(
+                    f"{self.name} must be a list (got {type(value).__name__})"
+                )
+            items = list(value)
+            if self.item_type is not None:
+                coerced: list[Any] = []
+                for item in items:
+                    if item is None:
+                        coerced.append(item)
+                        continue
+                    if not isinstance(item, self.item_type):
+                        try:
+                            item = self.item_type(item)
+                        except Exception:
+                            raise TypeError(
+                                f"{self.name} items must be {self.item_type.__name__}"
+                            ) from None
+                    coerced.append(item)
+                items = coerced
+            value = items
         super().__set__(obj, value)
 
 

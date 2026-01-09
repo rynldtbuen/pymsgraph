@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pickletools import read_long1
 from typing import Any
 
 from pymsgraph import utils
@@ -7,13 +8,20 @@ from pymsgraph.models.base import Model
 from pymsgraph.models.fields import (
     BooleanField,
     CharField,
+    DateTimeField,
     EmailField,
+    ListField,
     ModelField,
     QuerySetField,
 )
 from pymsgraph.models.query import QuerySet
 
-from .model_fields import AssignedLicensesQuerySet, PasswordProfile
+from .model_fields import (
+    AssignedLicensesQuerySet,
+    EmployeeOrgData,
+    PasswordProfile,
+    AssignedPlansQuerySet,
+)
 
 
 class User(Model):
@@ -30,81 +38,78 @@ class User(Model):
     mail_nickname = CharField(required=True)
     user_principal_name = EmailField(required=True, select_default=True)
 
-    # about_me = CharField()
-    # age_group = CharField()
+    about_me = CharField()
+    age_group = CharField()
     assigned_licenses = QuerySetField(AssignedLicensesQuerySet)
-    # assigned_plans = Field(read_only=True)
-    # birthday = DateTimeField()
+    assigned_plans = QuerySetField(AssignedPlansQuerySet)
+    birthday = DateTimeField()
     # business_phones = Field()
-    # city = CharField(max_length=128)
-    # company_name = CharField()
-    # consent_provided_for_minor = CharField()
-    # country = CharField()
-    # created_date_time = DateTimeField(read_only=True)
-    # creation_type = CharField()
+    city = CharField(max_length=128)
+    company_name = CharField()
+    consent_provided_for_minor = CharField()
+    country = CharField()
+    created_date_time = DateTimeField(read_only=True)
+    creation_type = CharField(read_only=True)
     # custom_security_attributes = Field()
-    # department = CharField()
-    # employee_hire_date = DateTimeField()
-    # employee_id = CharField()
-    # employee_org_data = Field()
-    # employee_type = CharField()
-    # fax_number = CharField()
-    # given_name = CharField()
-    # hire_date = DateTimeField()
+    department = CharField()
+    employee_hire_date = DateTimeField()
+    employee_id = CharField()
+    employee_org_data = ModelField(EmployeeOrgData)
+    employee_type = CharField()
+    fax_number = CharField()
+    external_user_state = CharField(read_only=True)
+    external_user_state_change_date_time = DateTimeField(read_only=True)
+    given_name = CharField()
+    hire_date = DateTimeField()
     # identities = Field()
     # im_addresses = Field()
     job_title = CharField()
     mail = EmailField(read_only=True, select_default=True)
-    # mobile_phone = CharField()
+    mobile_phone = CharField()
     # interests = Field()
-    # office_location = CharField()
-    # is_management_restricted = BooleanField()
-    # is_resource_account = BooleanField()
-    # legal_age_group_classification = CharField()
+    office_location = CharField()
+    is_management_restricted = BooleanField()
+    is_resource_account = BooleanField()
+    legal_age_group_classification = CharField()
     # license_assignment_states = Field(read_only=True)
-    # last_password_change_date_time = DateTimeField(read_only=True)
+    last_password_change_date_time = DateTimeField(read_only=True)
     # mailbox_settings = Field(read_only=True)
-    # my_site = CharField()
-    # on_premises_distinguished_name = CharField()
-    # on_premises_domain_name = CharField()
+    my_site = CharField()
+    on_premises_distinguished_name = CharField()
+    on_premises_domain_name = CharField()
     # on_premises_extension_attributes = Field()
-    # on_premises_immutable_id = CharField()
-    # on_premises_last_sync_date_time = DateTimeField(read_only=True)
+    on_premises_immutable_id = CharField()
+    on_premises_last_sync_date_time = DateTimeField(read_only=True)
     # on_premises_provisioning_errors = Field(read_only=True)
-    # on_premises_sam_account_name = CharField()
-    # on_premises_security_identifier = CharField(read_only=True)
-    # on_premises_sync_enabled = BooleanField()
-    # on_premises_user_principal_name = CharField()
+    on_premises_sam_account_name = CharField()
+    on_premises_security_identifier = CharField(read_only=True)
+    on_premises_sync_enabled = BooleanField()
+    on_premises_user_principal_name = CharField()
     # other_mails = Field()
-    # password_policies = CharField()
+    password_policies = CharField()
     password_profile = ModelField(PasswordProfile, write_only=True)
     # past_projects = Field()
-    # postal_code = CharField()
-    # preferred_data_location = CharField()
-    # preferred_language = CharField()
-    # preferred_name = CharField()
+    postal_code = CharField()
+    preferred_data_location = CharField()
+    preferred_language = CharField()
+    preferred_name = CharField()
     # provisioned_plans = Field(read_only=True)
-    # proxy_addresses = Field()
+    proxy_addresses = ListField(read_only=True)
     # responsibilities = Field()
     # schools = Field()
-    # security_identifier = CharField(read_only=True)
+    security_identifier = CharField(read_only=True)
     # service_provisioning_errors = Field(read_only=True)
-    # show_in_address_list = BooleanField()
+    show_in_address_list = BooleanField()
     # sign_in_activity = Field(read_only=True)
-    # sign_in_sessions_valid_from_date_time = DateTimeField(read_only=True)
+    sign_in_sessions_valid_from_date_time = DateTimeField(read_only=True)
     # skills = Field()
-    # state = CharField()
-    # street_address = CharField()
-    # surname = CharField()
-    # usage_location = CharField()
-    # user_type = CharField()
+    state = CharField()
+    street_address = CharField()
+    surname = CharField()
+    usage_location = CharField()
+    user_type = CharField()
 
-    # Relationship
     # member_of = QuerySetField("GroupQuerySet")
-
-    # search_field = "display_name"
-    # endpoint = "/users"
-    # supported_lookup = query.supported_lookup
 
     def __repr__(self):
         return f"<User: {self.id}, {self.display_name}, {self.user_principal_name}>"
