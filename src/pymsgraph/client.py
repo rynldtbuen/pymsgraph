@@ -33,6 +33,30 @@ def _default_user_agent() -> str:
     return f"pymsgraph/{version} (python {py_ver}; {os_name})"
 
 
+_Tqs = TypeVar("_Tqs", bound="QuerySet")
+
+
+class QuerySetDescriptor(Generic[_Tqs]):
+    def __init__(self, queryset_class: type[_Tqs]) -> None:
+        self.queryset_class = queryset_class
+
+    @overload
+    def __get__(
+        self, obj: None, owner: type["Client"] | None = None
+    ) -> "QuerySetDescriptor[_Tqs]": ...
+
+    @overload
+    def __get__(self, obj: "Client", owner: type["Client"] | None = None) -> _Tqs: ...
+
+    def __get__(
+        self, obj: "Client | None", owner: type["Client"] | None = None
+    ) -> "_Tqs | QuerySetDescriptor[_Tqs]":
+        if obj is None:
+            return self
+
+        return self.queryset_class(obj)
+
+
 class Client:
 
     def __init__(
@@ -211,4 +235,4 @@ class Client:
     async def __aexit__(self, exc_type, exc, tb) -> None:
         await self.close()
 
-    users = UserQuerySet.as_descriptor()
+    users = QuerySetDescriptor(UserQuerySet)

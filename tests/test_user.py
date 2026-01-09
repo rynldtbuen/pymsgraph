@@ -507,7 +507,8 @@ async def test_user_delete_force_calls_delete(make_client: "MakeClient"):
             "userPrincipalName": "del@example.com",
             "accountEnabled": True,
             "mailNickname": "del",
-        }
+        },
+        client=c,
     )
 
     await user.delete(force=True)

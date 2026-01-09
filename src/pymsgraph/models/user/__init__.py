@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-__all__ = ["UserQuerySet"]
-
 from typing import Any
 
 from pymsgraph import utils
@@ -24,6 +22,8 @@ class User(Model):
 
     https://learn.microsoft.com/en-us/graph/api/resources/user?view=graph-rest-1.0
     """
+
+    endpoint = "/users"
 
     display_name = CharField(required=True, select_default=True)
     account_enabled = BooleanField(default=True, required=True, select_default=True)
@@ -161,8 +161,8 @@ class User(Model):
 
 
 class UserQuerySet(QuerySet["User"]):
+
     model_class = User
-    endpoint = "/users"
     #     capabilities = Capabilities.read_write(search=True)
 
     #     # @property

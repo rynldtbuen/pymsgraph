@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterable
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from pymsgraph.utils import to_camel_case
 
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 __all__ = ["QuerySet", "Q"]
 
 _Tm = TypeVar("_Tm", bound="Model")
-_Tc = TypeVar("_Tc")
+# _Tc = TypeVar("_Tc")
 
 
 # class ContextDescriptor(Generic[_Tc]):
@@ -74,7 +74,6 @@ _Tc = TypeVar("_Tc")
 
 
 class QuerySet(Generic[_Tm]):
-    endpoint: str | None = None
     model_class: type[_Tm] | None = None
     page_size: int = 50
 
@@ -86,10 +85,11 @@ class QuerySet(Generic[_Tm]):
         model_class: "type[_Tm] | None" = None,
         **kwargs,
     ) -> None:
+        model_class = model_class or self.model_class
         self._args: tuple[Any, ...] = (
             client,
-            endpoint or self.endpoint,
-            model_class or self.model_class,
+            endpoint or getattr(model_class, "endpoint", None),
+            model_class,
         )
         self._params: dict[str, Any] = {}
         self._headers: dict[str, Any] = {}
@@ -97,10 +97,6 @@ class QuerySet(Generic[_Tm]):
         self._paginator: Paginator[_Tm] | None = None
         self._all: bool = False
         self._kwargs = kwargs
-
-    @classmethod
-    def as_descriptor(cls: type[_Tqs]) -> "QuerySetDescriptor[_Tqs]":
-        return QuerySetDescriptor(cls)
 
     def filter(self, *q_objects: "Q", **kwargs: Any) -> "QuerySet[_Tm]":
         if not q_objects and not kwargs:
@@ -202,7 +198,9 @@ class QuerySet(Generic[_Tm]):
     def iterator(self, *, page_size: int | None = None) -> "Paginator[_Tm]":
         if (p := self._paginator) is None:
             # ctx = Context.make(self._ctx, queryset=self)
-            p = Paginator[_Tm](self, page_size=page_size or self.page_size)
+            p = Paginator[_Tm](
+                self, page_size=page_size or self.page_size, **self._kwargs
+            )
             self._paginator = p
         return p
 
@@ -348,10 +346,11 @@ class Paginator(Generic[_Tm]):
         self._queryset = queryset
         self._kwargs = kwargs
 
-        objects = self._cached_objects.setdefault(1, [])
         model_class = self._queryset._model_class
 
-        if cached_data := kwargs.get("cached_data"):
+        cached_data = kwargs.get("cached_data")
+        if cached_data is not None:
+            objects = self._cached_objects.setdefault(1, [])
             for data in cached_data:
                 obj = model_class.from_graph(data)
                 objects.append(obj)
@@ -422,7 +421,7 @@ class Paginator(Generic[_Tm]):
             raise ValueError("page_number must be greater than 0.")
 
         objects = self._cached_objects.get(page_number)
-        if objects:
+        if objects is not None:
             for obj in objects:
                 yield obj
             return
@@ -456,36 +455,6 @@ class Paginator(Generic[_Tm]):
         # page_number=2, current_page_number=1
         if page_number > self._current_page_number:
             self._current_page_number = page_number
-
-
-_Tqs = TypeVar("_Tqs", bound="QuerySet")
-
-
-class QuerySetDescriptor(Generic[_Tqs]):
-    def __init__(self, queryset_class: type[_Tqs]) -> None:
-        self.queryset_class = queryset_class
-        self._cache: dict[int, Any] = {}
-
-    @overload
-    def __get__(
-        self, obj: None, owner: type["Client"] | None = None
-    ) -> "QuerySetDescriptor[_Tqs]": ...
-
-    @overload
-    def __get__(self, obj: "Client", owner: type["Client"] | None = None) -> _Tqs: ...
-
-    def __get__(
-        self, obj: "Client | None", owner: type["Client"] | None = None
-    ) -> "_Tqs | QuerySetDescriptor[_Tqs]":
-        if obj is None:
-            return self
-        if cached := self._cache.get(id(obj)):
-            return cached
-
-        qs = self.queryset_class(obj)
-        setattr(qs._model_class, "default_queryset", qs)
-        self._cache[id(obj)] = qs
-        return qs
 
 
 class Q:

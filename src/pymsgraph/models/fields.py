@@ -212,8 +212,9 @@ class QuerySetField(Field["QuerySet[_Tm]"]):
     ) -> None:
         super().__init__(**kwargs)
         self.queryset_class = queryset_class
-        self.endpoint = endpoint
-        self.model_class = model_class
+        self.endpoint = endpoint or getattr(model_class, "endpoint", None)
+        self.model_class = model_class or getattr(queryset_class, "model_class", None)
+        self._cache: dict[int, Any] = {}
 
     @overload
     def __get__(
@@ -231,14 +232,17 @@ class QuerySetField(Field["QuerySet[_Tm]"]):
         if obj is None:
             return self
 
-        endpoint = f"{obj._endpoint}/{self.endpoint}"
-        model_class = self.model_class
-        if model_class is None:
+        if (model_class := self.model_class) is None:
             raise ValueError(f"{type(self)} model_class is missing.")
         if isinstance(model_class, str):
             model_class = get_model_class(model_class)
         model_class = cast(type[_Tm], model_class)
 
-        return self.queryset_class(
-            obj._client, endpoint=endpoint, model_class=model_class
-        )
+        if (endpoint := self.endpoint) is None:
+            raise ValueError(f"{type(self)} endpoint is missing.")
+        endpoint = f"{obj._endpoint}/{endpoint.lstrip('/')}"
+
+        kwargs = {"endpoint": endpoint, "model_class": model_class}
+        if cached_data := obj._data.get(self.name):
+            kwargs["cached_data"] = cached_data
+        return self.queryset_class(obj._client, **kwargs)

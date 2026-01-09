@@ -12,13 +12,14 @@ class PasswordProfile(Model):
 
 
 class AssignedLicense(Model):
-    disabled_plans = Field()
+    endpoint = "/assignedLicense"
+
     sku_id = CharField()
+    disabled_plans = Field()
 
 
 class AssignedLicensesQuerySet(QuerySet[AssignedLicense]):
     model_class = AssignedLicense
-    endpoint = "/assignedLicense"
 
 
 # class MemberOfQuerySet(QuerySet[AssignedLicense]):

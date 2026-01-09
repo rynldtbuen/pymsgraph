@@ -22,8 +22,9 @@ class Model(Generic[_Tm]):
     WRITE_ON_FIELDS: frozenset[str]
     DEFAULT_SELECT_FIELDS: tuple[str, ...]
 
+    endpoint: str
+
     id = CharField(select_default=True)
-    default_queryset: QuerySet[_Tm]
 
     def __init_subclass__(cls: type[_Tm], **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
@@ -79,7 +80,6 @@ class Model(Generic[_Tm]):
         self._data: dict[str, Any] = {}
         self._graph_data: dict[str, Any] = {}
         self._dirty: set[str] = set()
-        # self._ctx = context or Context[_Tm]()
         self._args: tuple[Any, ...] = (client, endpoint)
 
         self._initializing = True
@@ -151,30 +151,28 @@ class Model(Generic[_Tm]):
         client: "Client | None" = None,
         endpoint: str | None = None,
     ) -> Self:
-        obj = cls()
-        obj._initializing = True
         data = deepcopy(data)
+        obj = cls(
+            client=client,
+            endpoint=endpoint or cls.endpoint,
+        )
 
-        for graph_attr_name, val in deepcopy(data).items():
+        obj._initializing = True
+
+        for graph_attr_name, val in data.items():
             py_attr_name = to_snake_case(graph_attr_name)
             if cls.FIELDS.get(py_attr_name):
                 setattr(obj, py_attr_name, val)
 
         obj._graph_data = data
         obj._initializing = False
-        obj._args = (
-            client or cls.default_queryset._client,
-            endpoint or cls.default_queryset._endpoint,
-        )
         return obj
 
     @property
     def _client(self) -> "Client":
         if c := self._args[0]:
             return c
-        raise AttributeError(
-            f"{type(self).__name__} object has no attribute '_endpoint'"
-        )
+        raise AttributeError(f"{type(self).__name__} object has no attribute '_client'")
 
     @property
     def _endpoint(self) -> str:
