@@ -1,8 +1,12 @@
 from __future__ import annotations
+from typing import TYPE_CHECKING
 
 from pymsgraph.models.fields import CharField, BooleanField, DateTimeField, Field
 from pymsgraph.models.base import Model
 from pymsgraph.models.query import QuerySet
+
+if TYPE_CHECKING:
+    from pymsgraph.models.group import Group
 
 
 class PasswordProfile(Model):
@@ -41,3 +45,7 @@ class AssignedPlansQuerySet(QuerySet[AssignedPlans]):
 class EmployeeOrgData(Model):
     cost_center = CharField()
     division = CharField()
+
+
+class MemberOfQuerySet(QuerySet["Group"]):
+    endpoint = "/memberOf"
