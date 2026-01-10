@@ -23,7 +23,7 @@ class Model(Generic[_Tm]):
     DEFAULT_SELECT_FIELDS: tuple[str, ...]
 
     read_only: bool = False
-    endpoint: str
+    endpoint: str | None = None
     standalone: bool = False
 
     id = CharField(select_default=True)
@@ -82,7 +82,7 @@ class Model(Generic[_Tm]):
         self._data: dict[str, Any] = {}
         self._graph_data: dict[str, Any] = {}
         self._dirty: set[str] = set()
-        self._args: tuple[Any, ...] = (client, endpoint)
+        self._args: tuple[Any, ...] = (client, endpoint or self.endpoint)
 
         self._initializing = True
         for k, v in kwargs.items():
@@ -150,6 +150,7 @@ class Model(Generic[_Tm]):
     def from_graph(
         cls,
         data: dict[str, Any],
+        *,
         client: "Client | None" = None,
         endpoint: str | None = None,
     ) -> Self:

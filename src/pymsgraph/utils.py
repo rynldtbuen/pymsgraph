@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 import importlib
 import re
 import secrets
 import string
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Iterator, TypeVar
 
 
 if TYPE_CHECKING:
@@ -97,21 +98,21 @@ def get_model_class(model_name: str) -> type["Model"]:
 #     return getattr(mod, cls_name)
 
 
-# T = TypeVar("T")
+T = TypeVar("T")
 
 
-# def chunks(iterable: Iterable[T], size: int = 2) -> Iterator[list[T]]:
-#     if size <= 2:
-#         raise ValueError("Size must be > 2")
+def chunks(iterable: Iterable[T], size: int = 2) -> Iterator[list[T]]:
+    if size <= 2:
+        raise ValueError("Size must be > 2")
 
-#     batch: list[T] = []
-#     for item in iterable:
-#         batch.append(item)
-#         if len(batch) == size:
-#             yield batch
-#             batch = []
-#     if batch:
-#         yield batch
+    batch: list[T] = []
+    for item in iterable:
+        batch.append(item)
+        if len(batch) == size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
 
 
 # def coerce_objects(

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload
 
+from pymsgraph.models import query
 from pymsgraph.utils import get_model_class, to_camel_case
 
 if TYPE_CHECKING:
@@ -280,7 +281,7 @@ class QuerySetField(Field["QuerySet[_Tm]"]):
     ) -> None:
         super().__init__(**kwargs)
         self.queryset_class = queryset_class
-        self.endpoint = endpoint or getattr(model_class, "endpoint", None)
+        self.endpoint = endpoint
         self.model_class = model_class or getattr(queryset_class, "model_class", None)
         self._cache: dict[int, Any] = {}
 
@@ -306,11 +307,14 @@ class QuerySetField(Field["QuerySet[_Tm]"]):
             model_class = get_model_class(model_class)
         model_class = cast(type[_Tm], model_class)
 
-        if (endpoint := self.endpoint) is None:
+        queryset_class = self.queryset_class
+
+        endpoint = self.endpoint or queryset_class.endpoint or model_class.endpoint
+        if endpoint is None:
             raise ValueError(f"{type(self)} endpoint is missing.")
         endpoint = f"{obj._endpoint}/{endpoint.lstrip('/')}"
 
-        kwargs = {"endpoint": endpoint, "model_class": model_class}
+        kwargs = {"endpoint": endpoint, "model_class": model_class, "obj": obj}
         if cached_data := obj._data.get(self.name):
             kwargs["cached_data"] = cached_data
-        return self.queryset_class(obj._client, **kwargs)
+        return queryset_class(getattr(obj, "_client", None), **kwargs)

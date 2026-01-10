@@ -33,6 +33,8 @@ class User(Model):
     https://learn.microsoft.com/en-us/graph/api/resources/user?view=graph-rest-1.0
     """
 
+    endpoint = "/users"
+
     # Properties
     about_me = CharField()
     account_enabled = BooleanField(default=True, required=True, select_default=True)
@@ -223,7 +225,6 @@ class User(Model):
 
 
 class UserQuerySet(QuerySet["User"]):
-
     model_class = User
     #     capabilities = Capabilities.read_write(search=True)
 

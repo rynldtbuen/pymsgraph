@@ -1,5 +1,6 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, TypeAlias
 
 from pymsgraph.models.fields import CharField, BooleanField, DateTimeField, Field
 from pymsgraph.models.base import Model
@@ -25,8 +26,53 @@ class AssignedLicense(Model):
 class AssignedLicensesQuerySet(QuerySet[AssignedLicense]):
     model_class = AssignedLicense
 
-    def add(self, *args): ...
-    def remove(self, *args): ...
+    async def add(
+        self, *args: str | AssignedLicense | QuerySet[AssignedLicense]
+    ) -> None:
+        """
+        Add license/s to this user.
+        """
+
+        objects = self._coerce_objects(args, key="sku_id")
+        if not objects:
+            return
+
+        response = await self._client.post(
+            self._endpoint,
+            body={
+                "addLicenses": [
+                    {"skuId": obj.id, "disabledPlans": []} for obj in objects
+                ],
+                "removeLicenses": [],
+            },
+        )
+
+    # def remove(self, *args: assigned_license_arg_types) -> None:
+    #     """
+    #     Remove license/s from this user.
+    #     """
+
+    #     objects = list(utils.coerce_objects(*args, queryset=self))
+    #     if not objects:
+    #         return
+
+    #     p = self._parent
+    #     assert p is not None
+
+    #     self._client.post(
+    #         f"{p.endpoint}/assignLicense",
+    #         json_body={
+    #             "addLicenses": [],
+    #             "removeLicenses": [obj.id for obj in objects],
+    #         },
+    #     )
+
+    # @classmethod
+    # def _compile_collection_lookup(cls, lookup: str, value: str) -> str:
+    #     func = utils.compile_collection_lookup(
+    #         field_name="assigned_licenses", element_field=True, var="u"
+    #     )
+    #     return func(lookup, value)
 
 
 class AssignedPlans(Model):

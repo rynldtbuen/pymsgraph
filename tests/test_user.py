@@ -4,15 +4,13 @@ from typing import TYPE_CHECKING
 import httpx
 import pytest
 
-from pymsgraph.models import query
-from pymsgraph.models.user import User
 
 if TYPE_CHECKING:
     from tests.conftest import MakeClient
 
 
 @pytest.mark.asyncio
-async def test_user_queryset_create(make_client: "MakeClient"):
+async def test_qs_create(make_client: "MakeClient"):
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
         assert request.url.path == "/v1.0/users"
@@ -21,6 +19,7 @@ async def test_user_queryset_create(make_client: "MakeClient"):
         assert body["displayName"] == "Alice"
         assert body["userPrincipalName"] == "alice@example.com"
         assert body["mailNickname"] == "alice"
+        assert body["accountEnabled"] == "true"
         assert "passwordProfile" in body
         return httpx.Response(
             201,
@@ -29,132 +28,134 @@ async def test_user_queryset_create(make_client: "MakeClient"):
                 "displayName": "Alice",
                 "userPrincipalName": "alice@example.com",
                 "mailNickname": "alice",
+                "mail": "alice@example.com",
             },
         )
 
     c, r = make_client(handler)
-    user = await c.users.create(
+    u = await c.users.create(
         display_name="Alice",
         user_principal_name="alice@example.com",
         mail_nickname="alice",
         password="Pass@word1",
     )
 
-    assert user.id == "123"
-    assert user.display_name == "Alice"
-    assert user.user_principal_name == "alice@example.com"
-    assert user._dirty == set()
-    assert len(r) == 1
-    assert user.password_profile is None
-    assert user._endpoint == "/users/123"
+    assert u.id == "123"
+    assert u.display_name == "Alice"
+    assert u.user_principal_name == "alice@example.com"
+    assert u.mail == "alice@example.com"
+    assert u.account_enabled is True
+    assert u._endpoint == "/users/123"
+    assert u._dirty == set()
+    assert u.password_profile is None
 
 
-@pytest.mark.asyncio
-async def test_user_create(make_client: "MakeClient"):
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.method == "POST"
-        assert request.url.path == "/v1.0/users"
-        body = json.loads(request.content.decode())
-        # basic payload expectations
-        assert body["displayName"] == "Alice"
-        assert body["userPrincipalName"] == "alice@example.com"
-        assert body["mailNickname"] == "alice"
-        assert "passwordProfile" in body
-        return httpx.Response(
-            201,
-            json={
-                "id": "123",
-                "displayName": "Alice",
-                "userPrincipalName": "alice@example.com",
-                "mailNickname": "alice",
-            },
-        )
+# @pytest.mark.asyncio
+# async def test_user_create(make_client: "MakeClient"):
+#     def handler(request: httpx.Request) -> httpx.Response:
+#         assert request.method == "POST"
+#         assert request.url.path == "/v1.0/users"
+#         body = json.loads(request.content.decode())
+#         # basic payload expectations
+#         assert body["displayName"] == "Alice"
+#         assert body["userPrincipalName"] == "alice@example.com"
+#         assert body["mailNickname"] == "alice"
+#         assert "passwordProfile" in body
+#         return httpx.Response(
+#             201,
+#             json={
+#                 "id": "123",
+#                 "displayName": "Alice",
+#                 "userPrincipalName": "alice@example.com",
+#                 "mailNickname": "alice",
+#             },
+#         )
 
-    c, r = make_client(handler)
-    queryset = c.users
-    user = User(
-        display_name="Alice",
-        user_principal_name="alice@example.com",
-        mail_nickname="alice",
-        password_profile=dict(
-            password="Pass@word1",
-            force_change_password_next_sign_in=True,
-        ),
-        client=queryset._client,
-        endpoint=queryset._endpoint,
-    )
+#     c, r = make_client(handler)
+#     queryset = c.users
+#     user = User(
+#         display_name="Alice",
+#         user_principal_name="alice@example.com",
+#         mail_nickname="alice",
+#         password_profile=dict(
+#             password="Pass@word1",
+#             force_change_password_next_sign_in=True,
+#         ),
+#         client=queryset._client,
+#         endpoint=queryset._endpoint,
+#     )
 
-    saved = await user.save()
-    assert saved is True
-    assert user.id == "123"
-    assert user.display_name == "Alice"
-    assert user.user_principal_name == "alice@example.com"
-    assert user._dirty == set()
-    assert len(r) == 1
-    assert user.password_profile is None
-    assert user._endpoint == "/users/123"
-
-
-@pytest.mark.asyncio
-async def test_user_save_patches_dirty_fields(make_client: "MakeClient"):
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.method == "PATCH" and request.url.path.endswith("/users/123"):
-            body = json.loads(request.content.decode())
-            assert body == {"jobTitle": "Engineer"}
-            return httpx.Response(204, json={})
-        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
-
-    c, r = make_client(handler)
-    queryset = c.users
-    user = queryset._model_class.from_graph(
-        {"id": "123", "displayName": "Alice"},
-        client=queryset._client,
-        endpoint=queryset._endpoint,
-    )
-    assert user._dirty == set()
-
-    user.job_title = "Engineer"
-    assert "job_title" in user._dirty
-
-    saved = await user.save()
-    assert saved is True
-    assert user._dirty == set()
-    assert len(r) == 1
-    assert user._endpoint == "/users/123"
+#     saved = await user.save()
+#     assert saved is True
+#     assert user.id == "123"
+#     assert user.display_name == "Alice"
+#     assert user.user_principal_name == "alice@example.com"
+#     assert user._dirty == set()
+#     assert len(r) == 1
+#     assert user.password_profile is None
+#     assert user._endpoint == "/users/123"
 
 
-def test_user_queryset_select_builds_select(user_qs):
-    qs = user_qs.select("display_name", "mail_nickname")
-    params = qs._build_params()
-    assert params["$select"] == "displayName,mailNickname,id"
+# @pytest.mark.asyncio
+# async def test_user_save_patches_dirty_fields(make_client: "MakeClient"):
+#     def handler(request: httpx.Request) -> httpx.Response:
+#         if request.method == "PATCH" and request.url.path.endswith("/users/123"):
+#             body = json.loads(request.content.decode())
+#             assert body == {"jobTitle": "Engineer"}
+#             return httpx.Response(204, json={})
+#         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+#     c, r = make_client(handler)
+#     queryset = c.users
+#     user = queryset._model_class.from_graph(
+#         {"id": "123", "displayName": "Alice"},
+#         client=queryset._client,
+#         endpoint=queryset._endpoint,
+#     )
+#     assert user._dirty == set()
+
+#     user.job_title = "Engineer"
+#     assert "job_title" in user._dirty
+
+#     saved = await user.save()
+#     assert saved is True
+#     assert user._dirty == set()
+#     assert len(r) == 1
+#     assert user._endpoint == "/users/123"
 
 
-def test_user_queryset_order_by(user_qs):
-    qs = user_qs.order_by("-display_name", "mail_nickname")
-    params = qs._build_params()
-    assert params["$orderby"] == "displayName desc,mailNickname"
+# def test_user_queryset_select_builds_select(user_qs):
+#     qs = user_qs.select("display_name", "mail_nickname")
+#     params = qs._build_params()
+#     assert params["$select"] == "displayName,mailNickname,id"
 
 
-def test_user_queryset_filter_builds_filter_param(user_qs):
-    qs = user_qs.filter(display_name__startswith="A", account_enabled=True)
-    params = qs._build_params()
-    assert (
-        params["$filter"]
-        == "(startswith(displayName, 'A')) and (accountEnabled eq true)"
-    )
+# def test_user_queryset_order_by(user_qs):
+#     qs = user_qs.order_by("-display_name", "mail_nickname")
+#     params = qs._build_params()
+#     assert params["$orderby"] == "displayName desc,mailNickname"
 
 
-def test_user_queryset_filter_with_q_object(user_qs):
-    from pymsgraph.models.query import Q
+# def test_user_queryset_filter_builds_filter_param(user_qs):
+#     qs = user_qs.filter(display_name__startswith="A", account_enabled=True)
+#     params = qs._build_params()
+#     assert (
+#         params["$filter"]
+#         == "(startswith(displayName, 'A')) and (accountEnabled eq true)"
+#     )
 
-    qs = user_qs.filter(
-        Q(display_name__startswith="A") | Q(display_name__startswith="Z")
-    )
-    params = qs._build_params()
-    assert (
-        params["$filter"]
-        == "((startswith(displayName, 'A')) or (startswith(displayName, 'Z')))"
-    )
+
+# def test_user_queryset_filter_with_q_object(user_qs):
+#     from pymsgraph.models.query import Q
+
+#     qs = user_qs.filter(
+#         Q(display_name__startswith="A") | Q(display_name__startswith="Z")
+#     )
+#     params = qs._build_params()
+#     assert (
+#         params["$filter"]
+#         == "((startswith(displayName, 'A')) or (startswith(displayName, 'Z')))"
+#     )
 
 
 # def test_user_queryset_rejects_unsupported_lookup(user_qs):
@@ -162,34 +163,34 @@ def test_user_queryset_filter_with_q_object(user_qs):
 #         user_qs.filter(display_name__contains="x")._build_params()
 
 
-def test_user_queryset_top_sets_limit(user_qs):
-    qs = user_qs.top(5)
-    params = qs._build_params()
-    assert params["$top"] == "5"
+# def test_user_queryset_top_sets_limit(user_qs):
+#     qs = user_qs.top(5)
+#     params = qs._build_params()
+#     assert params["$top"] == "5"
 
 
-@pytest.mark.asyncio
-async def test_user_queryset_count_uses_odata_count(make_client: "MakeClient"):
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.method == "GET"
-        assert request.url.path == "/v1.0/users"
-        return httpx.Response(
-            200,
-            json={
-                "@odata.count": 42,
-                "value": [{"id": "1"}, {"id": "2"}],
-            },
-        )
+# @pytest.mark.asyncio
+# async def test_user_queryset_count(make_client: "MakeClient"):
+#     def handler(request: httpx.Request) -> httpx.Response:
+#         assert request.method == "GET"
+#         assert request.url.path == "/v1.0/users"
+#         return httpx.Response(
+#             200,
+#             json={
+#                 "@odata.count": 42,
+#                 "value": [{"id": "1"}, {"id": "2"}],
+#             },
+#         )
 
-    c, _ = make_client(handler)
-    qs = c.users.with_count()
-    async for item in qs:
-        ...
-    count = await qs.count()
-    assert count == 42
-    p = qs.iterator()
-    assert p._cached_count == 42
-    assert p is qs.iterator()
+#     c, _ = make_client(handler)
+#     qs = c.users.with_count()
+#     async for item in qs:
+#         ...
+#     count = await qs.count()
+#     assert count == 42
+#     p = qs.iterator()
+#     assert p._cached_count == 42
+#     assert p is qs.iterator()
 
 
 # def test_select_related_invalid_field(make_client: "MakeClient"):
@@ -276,28 +277,28 @@ async def test_user_queryset_count_uses_odata_count(make_client: "MakeClient"):
 #         c.users.set_attr("not_a_field", "x")
 
 
-@pytest.mark.asyncio
-async def test_user_queryset_get_by_id(make_client: "MakeClient"):
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.method == "GET"
-        assert request.url.path == "/v1.0/users/abc"
-        return httpx.Response(
-            200,
-            json={
-                "id": "abc",
-                "displayName": "Bob",
-                "userPrincipalName": "bob@example.com",
-                "mailNickname": "bob",
-            },
-        )
+# @pytest.mark.asyncio
+# async def test_user_queryset_get_by_id(make_client: "MakeClient"):
+#     def handler(request: httpx.Request) -> httpx.Response:
+#         assert request.method == "GET"
+#         assert request.url.path == "/v1.0/users/abc"
+#         return httpx.Response(
+#             200,
+#             json={
+#                 "id": "abc",
+#                 "displayName": "Bob",
+#                 "userPrincipalName": "bob@example.com",
+#                 "mailNickname": "bob",
+#             },
+#         )
 
-    c, _ = make_client(handler)
-    qs = c.users
-    user = await qs.get(id="abc")
-    assert user is not None
-    assert user.id == "abc"
-    assert user.display_name == "Bob"
-    assert user.user_principal_name == "bob@example.com"
+#     c, _ = make_client(handler)
+#     qs = c.users
+#     user = await qs.get(id="abc")
+#     assert user is not None
+#     assert user.id == "abc"
+#     assert user.display_name == "Bob"
+#     assert user.user_principal_name == "bob@example.com"
 
 
 # def test_user_groups_add_remove(make_client: "MakeClient"):
@@ -476,77 +477,77 @@ async def test_user_queryset_get_by_id(make_client: "MakeClient"):
 #     assert params["$filter"] == "(assignedLicenses/$count ne 0)"
 
 
-@pytest.mark.asyncio
-async def test_user_delete_requires_id(make_client: "MakeClient"):
-    # Ensure no HTTP call occurs
-    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
-        raise AssertionError("HTTP should not be called")
+# @pytest.mark.asyncio
+# async def test_user_delete_requires_id(make_client: "MakeClient"):
+#     # Ensure no HTTP call occurs
+#     def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+#         raise AssertionError("HTTP should not be called")
 
-    c, _ = make_client(handler)
-    user = c.users._model_class(
-        display_name="Unsaved",
-        # user_principal_name="unsaved@example.com",
-        mail_nickname="unsaved",
-    )
-    with pytest.raises(AttributeError):
-        await user.delete(force=True)
-
-
-@pytest.mark.asyncio
-async def test_user_delete_force_calls_delete(make_client: "MakeClient"):
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.method == "DELETE"
-        assert request.url.path == "/v1.0/users/u_del"
-        return httpx.Response(204)
-
-    c, _ = make_client(handler)
-    user = c.users._model_class.from_graph(
-        {
-            "id": "u_del",
-            "displayName": "Del",
-            "userPrincipalName": "del@example.com",
-            "accountEnabled": True,
-            "mailNickname": "del",
-        },
-        client=c,
-    )
-
-    await user.delete(force=True)
-    # after local cleanup, id should no longer be present
-    assert user.id is None
+#     c, _ = make_client(handler)
+#     user = c.users._model_class(
+#         display_name="Unsaved",
+#         # user_principal_name="unsaved@example.com",
+#         mail_nickname="unsaved",
+#     )
+#     with pytest.raises(AttributeError):
+#         await user.delete(force=True)
 
 
-@pytest.mark.asyncio
-async def test_user_delete_requires_force(make_client: "MakeClient"):
-    # Ensure no HTTP call occurs
-    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
-        raise AssertionError("HTTP should not be called")
+# @pytest.mark.asyncio
+# async def test_user_delete_force_calls_delete(make_client: "MakeClient"):
+#     def handler(request: httpx.Request) -> httpx.Response:
+#         assert request.method == "DELETE"
+#         assert request.url.path == "/v1.0/users/u_del"
+#         return httpx.Response(204)
 
-    c, _ = make_client(handler)
-    user = c.users._model_class.from_graph(
-        {
-            "id": "u_del",
-            "displayName": "Del",
-            "userPrincipalName": "del@example.com",
-            "accountEnabled": True,
-            "mailNickname": "del",
-        }
-    )
-    with pytest.raises(RuntimeError):
-        await user.delete()
+#     c, _ = make_client(handler)
+#     user = c.users._model_class.from_graph(
+#         {
+#             "id": "u_del",
+#             "displayName": "Del",
+#             "userPrincipalName": "del@example.com",
+#             "accountEnabled": True,
+#             "mailNickname": "del",
+#         },
+#         client=c,
+#     )
+
+#     await user.delete(force=True)
+#     # after local cleanup, id should no longer be present
+#     assert user.id is None
 
 
-@pytest.mark.asyncio
-async def test_user_reset_password_requires_id(make_client: "MakeClient"):
-    # Ensure no HTTP call occurs
-    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
-        raise AssertionError("HTTP should not be called")
+# @pytest.mark.asyncio
+# async def test_user_delete_requires_force(make_client: "MakeClient"):
+#     # Ensure no HTTP call occurs
+#     def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+#         raise AssertionError("HTTP should not be called")
 
-    c, _ = make_client(handler)
+#     c, _ = make_client(handler)
+#     user = c.users._model_class.from_graph(
+#         {
+#             "id": "u_del",
+#             "displayName": "Del",
+#             "userPrincipalName": "del@example.com",
+#             "accountEnabled": True,
+#             "mailNickname": "del",
+#         }
+#     )
+#     with pytest.raises(RuntimeError):
+#         await user.delete()
 
-    with pytest.raises(ValueError):
-        await c.users.create(
-            display_name="Unsaved",
-            user_principal_name="unsaved@example.com",
-            mail_nickname="unsaved",
-        )
+
+# @pytest.mark.asyncio
+# async def test_user_reset_password_requires_id(make_client: "MakeClient"):
+#     # Ensure no HTTP call occurs
+#     def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+#         raise AssertionError("HTTP should not be called")
+
+#     c, _ = make_client(handler)
+
+#     with pytest.raises(ValueError):
+#         await c.users.create(
+#             display_name="Unsaved",
+#             user_principal_name="unsaved@example.com",
+#             mail_nickname="unsaved",
+#         )

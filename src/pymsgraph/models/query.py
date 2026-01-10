@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Iterable
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Iterator, TypeVar
 
 from pymsgraph.utils import to_camel_case
 
@@ -74,6 +75,7 @@ _Tm = TypeVar("_Tm", bound="Model")
 
 
 class QuerySet(Generic[_Tm]):
+    endpoint: str | None = None
     model_class: type[_Tm] | None = None
     page_size: int = 50
 
@@ -249,6 +251,14 @@ class QuerySet(Generic[_Tm]):
             data, client=self._client, endpoint=self._endpoint
         )
 
+    def make(self, **kwargs: Any) -> _Tm:
+        return self._model_class(**kwargs, client=self._client, endpoint=self._endpoint)
+
+    def make_from_graph(self, data: dict[str, Any]):
+        return self._model_class.from_graph(
+            data, client=self._client, endpoint=self._endpoint
+        )
+
     def __aiter__(self) -> AsyncIterator[_Tm]:
         """Execute the query and fetch results"""
         paginator = self.iterator()
@@ -331,6 +341,36 @@ class QuerySet(Generic[_Tm]):
         compiled_params.update(params)
 
         return compiled_params
+
+    async def _iter_objects(self, async_gen: Any) -> list[_Tm]:
+        return [i async for i in async_gen]
+
+    def _coerce_objects(
+        self, args: tuple[str | _Tm | QuerySet[_Tm], ...], key: str = "id"
+    ) -> Iterator[_Tm]:
+        def _iter_flatten(args) -> Iterator[_Tm]:
+            for arg in args:
+                if isinstance(arg, str):
+                    yield self._model_class.from_graph(data={key: arg})
+                elif isinstance(arg, self._model_class):
+                    yield arg
+                elif isinstance(arg, QuerySet):
+                    objects = asyncio.run(self._iter_objects(arg))
+                    for obj in objects:
+                        yield obj
+                else:
+                    continue
+
+        seen: set[str] = set()
+
+        for obj in _iter_flatten(*args):
+            try:
+                val = getattr(obj, key)
+            except AttributeError:
+                continue
+            if val not in seen:
+                yield obj
+            seen.add(val)
 
 
 class Paginator(Generic[_Tm]):
