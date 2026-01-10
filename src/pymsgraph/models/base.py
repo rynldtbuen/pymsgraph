@@ -10,13 +10,9 @@ from pymsgraph.utils import to_snake_case
 
 if TYPE_CHECKING:
     from pymsgraph.client import Client
-    from pymsgraph.models.query import QuerySet
 
 
-_Tm = TypeVar("_Tm", bound="Model")
-
-
-class Model(Generic[_Tm]):
+class Model:
     REQUIRED_FIELDS: frozenset[str]
     FIELD_NAME_MAP: dict[str, str]
     WRITE_ON_FIELDS: frozenset[str]
@@ -28,7 +24,7 @@ class Model(Generic[_Tm]):
 
     id = CharField(select_default=True)
 
-    def __init_subclass__(cls: type[_Tm], **kwargs: Any) -> None:
+    def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
         fields: dict[str, Field] = {}
         required_fields: set[str] = set()

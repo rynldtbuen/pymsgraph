@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
 
 from pymsgraph.models import query
 from pymsgraph.utils import get_model_class, to_camel_case
@@ -22,11 +22,12 @@ __all__ = [
     "QuerySetField",
 ]
 
-_Tf = TypeVar("_Tf")
+_T = TypeVar("_T")
 _Tm = TypeVar("_Tm", bound="Model")
+_Tqs = TypeVar("_Tqs", bound="QuerySet")
 
 
-class Field(Generic[_Tf]):
+class Field(Generic[_T]):
     def __init__(
         self,
         *,
@@ -59,16 +60,14 @@ class Field(Generic[_Tf]):
         return value
 
     @overload
-    def __get__(
-        self, obj: None, owner: type["Model"] | None = None
-    ) -> "Field[_Tf]": ...
+    def __get__(self, obj: None, owner: type["Model"] | None = None) -> "Field[_T]": ...
 
     @overload
-    def __get__(self, obj: "Model", owner: type["Model"] | None = None) -> _Tf: ...
+    def __get__(self, obj: "Model", owner: type["Model"] | None = None) -> _T: ...
 
     def __get__(
         self, obj: "Model | None", owner: type["Model"] | None = None
-    ) -> _Tf | "Field[_Tf]" | None:
+    ) -> "_T | Field[_T] | None":
         if obj is None:
             return self
         return obj._data.get(self.name)
@@ -270,13 +269,13 @@ class ModelField(Field[_Tm]):
         return value.serialize()
 
 
-class QuerySetField(Field["QuerySet[_Tm]"]):
+class QuerySetField(Field["_Tqs"]):
     def __init__(
         self,
-        queryset_class: type["QuerySet[_Tm]"],
+        queryset_class: type["_Tqs"],
         *,
         endpoint: str | None = None,
-        model_class: type[_Tm] | str | None = None,
+        model_class: "type[Model] | str | None" = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -288,16 +287,14 @@ class QuerySetField(Field["QuerySet[_Tm]"]):
     @overload
     def __get__(
         self, obj: None, owner: type["Model"] | None = None
-    ) -> "QuerySetField[_Tm]": ...
+    ) -> "QuerySetField[_Tqs]": ...
 
     @overload
-    def __get__(
-        self, obj: "Model[_Tm]", owner: type["Model"] | None = None
-    ) -> "QuerySet[_Tm]": ...
+    def __get__(self, obj: "Model", owner: type["Model"] | None = None) -> "_Tqs": ...
 
     def __get__(
-        self, obj: "Model[_Tm] | None", owner: type["Model"] | None = None
-    ) -> "QuerySet[_Tm] | Field[QuerySet[_Tm]]":
+        self, obj: "Model | None", owner: type["Model"] | None = None
+    ) -> "_Tqs | Field[_Tqs]":
         if obj is None:
             return self
 
@@ -305,7 +302,6 @@ class QuerySetField(Field["QuerySet[_Tm]"]):
             raise ValueError(f"{type(self)} model_class is missing.")
         if isinstance(model_class, str):
             model_class = get_model_class(model_class)
-        model_class = cast(type[_Tm], model_class)
 
         queryset_class = self.queryset_class
 

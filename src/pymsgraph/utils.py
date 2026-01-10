@@ -5,7 +5,7 @@ import importlib
 import re
 import secrets
 import string
-from typing import TYPE_CHECKING, Any, Iterator, TypeVar
+from typing import TYPE_CHECKING, Any, Iterator, TypeVar, cast
 
 
 if TYPE_CHECKING:
@@ -78,9 +78,6 @@ def to_snake_case(s: str) -> str:
 def to_camel_case(name: str) -> str:
     parts = name.split("_")
     return parts[0] + "".join(p[:1].upper() + p[1:] for p in parts[1:])
-
-
-# _Tm = TypeVar("_Tm", bound="Model")
 
 
 def get_model_class(model_name: str) -> type["Model"]:

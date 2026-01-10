@@ -81,6 +81,9 @@ def test_user_assigned_licenses(make_client: "MakeClient") -> None:
     assert qs._model_class is AssignedLicense
 
 
+def test_user_assigned_licenses_add(make_client: "MakeClient"): ...
+
+
 @pytest.mark.asyncio
 async def test_user_assigned_licenses_from_graph_returns_models(
     make_client: "MakeClient",
