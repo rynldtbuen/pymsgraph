@@ -70,7 +70,7 @@ class Model(Generic[_Tm]):
         cls.REQUIRED_FIELDS = frozenset(required_fields)
         cls.FIELD_NAME_MAP = field_name_map
         cls.WRITE_FIELDS = frozenset(write_fields)
-        cls.DEFAULT_SELECT_FIELDS = tuple(default_select)
+        cls.DEFAULT_SELECT_FIELDS = tuple(sorted(default_select))
 
     def __init__(
         self,
@@ -95,10 +95,6 @@ class Model(Generic[_Tm]):
     def serialize(self) -> dict[str, Any]:
         data: dict[str, Any] = {}
         attr_names = set(self._dirty or self._data.keys())
-        if self.id is None:
-            for name, field in self.FIELDS.items():
-                if name not in self._data and field.default is not None:
-                    attr_names.add(name)
 
         for attr_name in attr_names:
             field = self.FIELDS[attr_name]
@@ -113,34 +109,15 @@ class Model(Generic[_Tm]):
 
         return data
 
-    async def save(self) -> bool:
-        is_create = self.id is None
-        if is_create:
-            self._validate_for_create()
-            client_method = self._client.post
-            endpoint = self._args[1]
-        else:
-            client_method = self._client.patch
-            endpoint = self._endpoint
+    async def update(self) -> bool:
+        if self.id is None:
+            raise ValueError("id is required to update this object.")
 
-        body = self.serialize()
-
-        if not body:
+        if not (body := self.serialize()):
             return False
 
-        data = await client_method(endpoint, body=body)
+        await self._client.patch(self._endpoint, body=body)
         self._dirty.clear()
-        if data:
-            if is_create:
-                merged = dict(data)
-                for attr_name, val in self._data.items():
-                    field = self.FIELDS.get(attr_name)
-                    if field is None or field.write_only:
-                        continue
-                    graph_attr_name = field.graph_attr_name or attr_name
-                    merged.setdefault(graph_attr_name, field.to_graph(val))
-                data = merged
-            self.refresh_from_graph(data)
         return True
 
     def refresh_from_graph(self, data: dict[str, Any]) -> None:

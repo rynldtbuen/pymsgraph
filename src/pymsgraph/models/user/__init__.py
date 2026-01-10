@@ -19,10 +19,10 @@ from pymsgraph.models.query import QuerySet
 
 from .model_fields import (
     AssignedLicensesQuerySet,
+    AssignedPlansQuerySet,
     EmployeeOrgData,
     MemberOfQuerySet,
     PasswordProfile,
-    AssignedPlansQuerySet,
 )
 
 

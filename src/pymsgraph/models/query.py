@@ -166,7 +166,7 @@ class QuerySet(Generic[_Tm]):
         if value < 1:
             raise ValueError("value must be greater than zero.")
         qs = self._clone()
-        qs._params["$top"] = str(value)
+        qs._params["$top"] = value
         return qs
 
     def expand(self, field: str, *select: str) -> "QuerySet[_Tm]":
@@ -307,11 +307,11 @@ class QuerySet(Generic[_Tm]):
         if "$select" not in params:
             default_fields = getattr(self._model_class, "DEFAULT_SELECT_FIELDS", None)
             if default_fields:
-                params["$select"] = list(default_fields)
+                params["$select"] = sorted(default_fields)
 
         if values := params.pop("$select", None):
             if "id" not in values:
-                values = list(values) + ["id"]
+                values = ["id"] + list(values)
             compiled_params["$select"] = ",".join([to_camel_case(v) for v in values])
 
         if values := params.pop("$orderby", None):

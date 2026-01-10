@@ -61,7 +61,7 @@ def make_client(fake_token_provider: Any) -> MakeClient:
 
 
 @pytest.fixture
-def user_qs(make_client: MakeClient) -> "UserQuerySet":
+def users_qs(make_client: MakeClient) -> "UserQuerySet":
     """
     Convenience fixture: a QuerySet for User with a no-op transport.
     """
