@@ -2,16 +2,11 @@ import json
 from typing import TYPE_CHECKING
 
 import httpx
-from platformdirs import user_cache_dir
 import pytest
 
 from pymsgraph.models.user import User
-from pymsgraph.models.user.model_fields import (
-    AssignedLicense,
-    AssignedLicensesQuerySet,
-    PasswordProfile,
-)
-
+from pymsgraph.models.user.model_fields import AssignedLicense, PasswordProfile
+from pymsgraph.models.user.query_fields import AssignedLicensesQuerySet
 
 if TYPE_CHECKING:
     from tests.conftest import MakeClient
@@ -147,7 +142,7 @@ def test_field_assigned_licenses(make_client: "MakeClient") -> None:
 
     qs = u.assigned_licenses
     assert isinstance(qs, AssignedLicensesQuerySet)
-    assert qs._endpoint == "/users/u1/assignedLicense"
+    assert qs._endpoint == "/users/u1/assignLicense"
     assert qs._model_class is AssignedLicense
 
 
@@ -171,8 +166,8 @@ async def test_field_assigned_licenses_add_remove(make_client: "MakeClient"):
 
     c, _ = make_client(handler)
     u = c.users.make(id="123", display_name="Alice")
-    u.assigned_licenses
-    # user.assigned_licenses.remove("sku1")
+    await u.assigned_licenses.add("sku1")
+    await u.assigned_licenses.remove("sku1")
 
 
 # def test_user_queryset_order_by(user_qs):

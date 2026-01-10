@@ -346,7 +346,7 @@ class QuerySet(Generic[_Tm]):
         return [i async for i in async_gen]
 
     def _coerce_objects(
-        self, args: tuple[str | _Tm | QuerySet[_Tm], ...], key: str = "id"
+        self, *args: tuple[str | _Tm | QuerySet[_Tm], ...], key: str = "id"
     ) -> Iterator[_Tm]:
         def _iter_flatten(args) -> Iterator[_Tm]:
             for arg in args:

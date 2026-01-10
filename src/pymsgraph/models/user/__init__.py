@@ -17,12 +17,11 @@ from pymsgraph.models.fields import (
 )
 from pymsgraph.models.query import QuerySet
 
-from .model_fields import (
+from .model_fields import EmployeeOrgData, PasswordProfile
+from .query_fields import (
     AssignedLicensesQuerySet,
     AssignedPlansQuerySet,
-    EmployeeOrgData,
     MemberOfQuerySet,
-    PasswordProfile,
 )
 
 

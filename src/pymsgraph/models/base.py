@@ -3,7 +3,7 @@ from __future__ import annotations
 __all__ = ["Model"]
 
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Generic, Self, TypeVar
+from typing import TYPE_CHECKING, Any, Self
 
 from pymsgraph.models.fields import CharField, Field
 from pymsgraph.utils import to_snake_case
