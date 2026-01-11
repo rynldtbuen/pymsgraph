@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 from typing import Any
 
+from pymsgraph.models.base import Model
 from pymsgraph.models.fields import (
     BooleanField,
     CharField,
@@ -8,10 +10,10 @@ from pymsgraph.models.fields import (
     Field,
     IntegerField,
     ListField,
+    QuerySetField,
 )
-from pymsgraph.models.base import Model
+from pymsgraph.models.group.query_fields import MembersQuerySet
 from pymsgraph.models.query import QuerySet
-from pymsgraph.models.user import User
 
 
 class Group(Model):
@@ -73,7 +75,7 @@ class Group(Model):
     extensions = ListField()
     group_lifecycle_policies = ListField()
     member_of = ListField()
-    members = ListField()
+    members = QuerySetField(MembersQuerySet, model_class="User")
     members_with_license_errors = ListField()
     on_premises_sync_behavior = Field()
     onenote = Field()

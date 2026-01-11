@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, override
 
 from pymsgraph import utils
 from pymsgraph.models.base import Model
@@ -146,7 +146,7 @@ class User(Model):
     # managed_app_registrations = ListField()
     # managed_devices = ListField()
     # manager = Field()
-    member_of = QuerySetField(MemberOfQuerySet, model_class="Group")
+    member_of = QuerySetField(MemberOfQuerySet, model_class="DirectoryObject")
     # messages = ListField()
     # oauth2_permission_grants = ListField()
     # onenote = Field()
@@ -222,6 +222,12 @@ class User(Model):
         self._data.clear()
         self._dirty.clear()
 
+    @property
+    def directory_object_id(self) -> str:
+        if not self.id:
+            raise ValueError(f"{type(self)} object id is missing.")
+        return self.id
+
 
 class UserQuerySet(QuerySet["User"]):
     model_class = User
@@ -276,7 +282,7 @@ class UserQuerySet(QuerySet["User"]):
         if password is None:
             if not auto_generate_password:
                 raise ValueError(
-                    "'password' is required when creasting a user. Set auto_generate_password=True to let the system create a random password for this user."
+                    "'password' is required when creating a user. Set auto_generate_password=True to let the system create a random password for this user."
                 )
             password = utils.generate_password(14)
 

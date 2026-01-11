@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload, override
 
 from pymsgraph.models import query
 from pymsgraph.utils import get_model_class, to_camel_case
@@ -20,6 +20,7 @@ __all__ = [
     "ListField",
     "ModelField",
     "QuerySetField",
+    "BaseField",
 ]
 
 _T = TypeVar("_T")
@@ -27,7 +28,10 @@ _Tm = TypeVar("_Tm", bound="Model")
 _Tqs = TypeVar("_Tqs", bound="QuerySet")
 
 
-class Field(Generic[_T]):
+class BaseField: ...
+
+
+class Field(BaseField, Generic[_T]):
     def __init__(
         self,
         *,
@@ -41,10 +45,10 @@ class Field(Generic[_T]):
         self.name: str
         self.graph_attr_name = graph_attr_name
         self.default = default
-        self.required = required
-        self.read_only = read_only
-        self.write_only = write_only
-        self.select_default = select_default
+        self.required: bool = required
+        self.read_only: bool = read_only
+        self.write_only: bool = write_only
+        self.select_default: bool = select_default
 
         if read_only and write_only:
             raise ValueError(
@@ -107,6 +111,7 @@ class CharField(Field[str]):
         if self.max_length is not None and len(value) > self.max_length:
             raise ValueError(f"{self.name} exceeds max_length={self.max_length}")
 
+    @override
     def __set__(self, obj: "Model", value: Any) -> None:
         if value is not None:
             if not isinstance(value, str):
@@ -269,6 +274,12 @@ class ModelField(Field[_Tm]):
         return value.serialize()
 
 
+# class Context:
+#     def __init__(self, cache_objects: Any, instance: Model):
+#         self.cache_objects = cache_objects
+#         self.instance = instance
+
+
 class QuerySetField(Field["_Tqs"]):
     def __init__(
         self,
@@ -281,8 +292,10 @@ class QuerySetField(Field["_Tqs"]):
         super().__init__(**kwargs)
         self.queryset_class = queryset_class
         self.endpoint = endpoint
-        self.model_class = model_class or getattr(queryset_class, "model_class", None)
-        self._cache: dict[int, Any] = {}
+        qs_model_class: type[Model] | None = getattr(
+            queryset_class, "model_class", None
+        )
+        self.model_class = model_class or qs_model_class
 
     @overload
     def __get__(

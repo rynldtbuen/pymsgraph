@@ -3,13 +3,15 @@ from __future__ import annotations
 __all__ = ["Model"]
 
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, Self, TypeVar
 
-from pymsgraph.models.fields import CharField, Field
+from pymsgraph.models.fields import CharField, Field, BaseField
 from pymsgraph.utils import to_snake_case
 
 if TYPE_CHECKING:
     from pymsgraph.client import Client
+
+_Tf = TypeVar("_Tf", bound=BaseField)
 
 
 class Model:

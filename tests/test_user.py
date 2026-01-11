@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 import httpx
 import pytest
 
+from pymsgraph.models.group import Group
 from pymsgraph.models.user import User
 from pymsgraph.models.user.model_fields import AssignedLicense, PasswordProfile
 from pymsgraph.models.user.query_fields import AssignedLicensesQuerySet
@@ -144,6 +145,32 @@ def test_field_assigned_licenses(make_client: "MakeClient") -> None:
     assert isinstance(qs, AssignedLicensesQuerySet)
     assert qs._endpoint == "/users/u1/assignLicense"
     assert qs._model_class is AssignedLicense
+
+
+@pytest.mark.asyncio
+async def test_field_assigned_licenses_list(
+    make_client: "MakeClient",
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("No HTTP call expected")
+
+    client, _ = make_client(handler)
+    qs = client.users
+    user = qs._model_class.from_graph(
+        {
+            "id": "u1",
+            "assignedLicenses": [{"disabledPlans": [], "skuId": "skuId1"}],
+        },
+        client=client,
+    )
+
+    qs = user.assigned_licenses
+    items = [obj async for obj in qs]
+
+    assert len(items) == 1
+    assert isinstance(items[0], AssignedLicense)
+    assert items[0].sku_id == "skuId1"
+    assert items[0].disabled_plans == []
 
 
 @pytest.mark.asyncio
@@ -341,7 +368,8 @@ async def test_field_assigned_licenses_add_remove(make_client: "MakeClient"):
 #     assert user.user_principal_name == "bob@example.com"
 
 
-# def test_user_groups_add_remove(make_client: "MakeClient"):
+# @pytest.mark.asyncio
+# async def test_field_member_of_add_remove(make_client: "MakeClient"):
 #     seen: list[tuple[str, str]] = []
 
 #     def handler(request: httpx.Request) -> httpx.Response:
@@ -361,7 +389,16 @@ async def test_field_assigned_licenses_add_remove(make_client: "MakeClient"):
 #                         "body": {
 #                             "@odata.id": "https://graph.microsoft.com/v1.0/directoryObjects/123"
 #                         },
-#                     }
+#                     },
+#                     {
+#                         "id": "2",
+#                         "method": "POST",
+#                         "url": "/groups/g2/members/$ref",
+#                         "headers": {"Content-Type": "application/json"},
+#                         "body": {
+#                             "@odata.id": "https://graph.microsoft.com/v1.0/directoryObjects/123"
+#                         },
+#                     },
 #                 ]
 #             elif first_method == "DELETE":
 #                 assert requests == [
@@ -377,9 +414,9 @@ async def test_field_assigned_licenses_add_remove(make_client: "MakeClient"):
 #         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
 #     c, r = make_client(handler)
-#     user = c.users.make_from_graph({"id": "123", "displayName": "Alice"})
-#     user.groups.add("g1")
-#     user.groups.remove("g1")
+#     u = c.users.make(id="123", display_name="Alice")
+#     await u.member_of.add("g1", Group(id="g2"))
+#     await u.member_of.remove("g1")
 
 #     assert seen == [
 #         ("POST", "/v1.0/$batch"),

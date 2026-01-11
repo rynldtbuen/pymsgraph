@@ -85,7 +85,7 @@ class QuerySet(Generic[_Tm]):
         *,
         endpoint: str | None = None,
         model_class: "type[_Tm] | None" = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> None:
         model_class = model_class or self.model_class
         self._args: tuple[Any, ...] = (
@@ -98,7 +98,7 @@ class QuerySet(Generic[_Tm]):
 
         self._paginator: Paginator[_Tm] | None = None
         self._all: bool = False
-        self._kwargs = kwargs
+        self._kwargs: dict[str, Any] = kwargs
 
     def filter(self, *q_objects: "Q", **kwargs: Any) -> "QuerySet[_Tm]":
         if not q_objects and not kwargs:
@@ -351,7 +351,7 @@ class QuerySet(Generic[_Tm]):
         def _iter_flatten(args) -> Iterator[_Tm]:
             for arg in args:
                 if isinstance(arg, str):
-                    yield self._model_class.from_graph(data={key: arg})
+                    yield self.make_from_graph(data={key: arg})
                 elif isinstance(arg, self._model_class):
                     yield arg
                 elif isinstance(arg, QuerySet):
@@ -386,13 +386,11 @@ class Paginator(Generic[_Tm]):
         self._queryset = queryset
         self._kwargs = kwargs
 
-        model_class = self._queryset._model_class
-
         cached_data = kwargs.get("cached_data")
         if cached_data is not None:
             objects = self._cached_objects.setdefault(1, [])
             for data in cached_data:
-                obj = model_class.from_graph(data)
+                obj = self._queryset.make_from_graph(data)
                 objects.append(obj)
 
     async def next_page(self) -> list[_Tm]:
@@ -487,7 +485,7 @@ class Paginator(Generic[_Tm]):
         objects = self._cached_objects.setdefault(page_number, [])
 
         for data in response.get("value", []):
-            obj = queryset._model_class.from_graph(data)
+            obj = queryset.make_from_graph(data)
             objects.append(obj)
             yield obj
 
