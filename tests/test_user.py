@@ -4,10 +4,15 @@ from typing import TYPE_CHECKING
 import httpx
 import pytest
 
+from pymsgraph.models.directory_object import DirectoryObject
 from pymsgraph.models.group import Group
 from pymsgraph.models.user import User
 from pymsgraph.models.user.model_fields import AssignedLicense, PasswordProfile
-from pymsgraph.models.user.query_fields import AssignedLicensesQuerySet
+from pymsgraph.models.user.query_fields import (
+    AssignedLicensesQuerySet,
+    GroupsQuerySet,
+    MemberOfQuerySet,
+)
 
 if TYPE_CHECKING:
     from tests.conftest import MakeClient
@@ -103,6 +108,24 @@ async def test_update(make_client: "MakeClient"):
     assert len(r) == 1
 
 
+@pytest.mark.asyncio
+async def test_update_id_is_required(make_client: "MakeClient"):
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("HTTP should not be called")
+
+    c, r = make_client(handler)
+    user = c.users.make(display_name="Alice")
+    assert user._dirty == set()
+
+    user.job_title = "Senior Engineer"
+    user.city = "Auckland"
+    assert "job_title" in user._dirty
+    assert "city" in user._dirty
+
+    with pytest.raises(ValueError):
+        await user.update()
+
+
 def test_qs_select_build_params(users_qs):
     qs = users_qs._clone()
     params = qs.select("display_name", "mail_nickname")._build_params()
@@ -133,13 +156,7 @@ def test_field_assigned_licenses(make_client: "MakeClient") -> None:
         return httpx.Response(200, json={"value": []})
 
     c, _ = make_client(handler)
-    u = c.users.make(
-        id="u1",
-        display_name="Alice",
-        account_enabled=True,
-        mail_nickname="alice",
-        user_principal_name="alice@example.com",
-    )
+    u = c.users.make(id="u1")
 
     qs = u.assigned_licenses
     assert isinstance(qs, AssignedLicensesQuerySet)
@@ -197,75 +214,178 @@ async def test_field_assigned_licenses_add_remove(make_client: "MakeClient"):
     await u.assigned_licenses.remove("sku1")
 
 
-# def test_user_queryset_order_by(user_qs):
-#     qs = user_qs.order_by("-display_name", "mail_nickname")
-#     params = qs._build_params()
-#     assert params["$orderby"] == "displayName desc,mailNickname"
+@pytest.mark.asyncio
+async def test_field_member_of_groups_cached_data(
+    make_client: "MakeClient",
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("No HTTP call expected")
+
+    client, _ = make_client(handler)
+    user = client.users.make_from_graph(
+        {
+            "id": "u1",
+            "displayName": "User One",
+            "memberOf": [
+                {
+                    "@odata.type": "#microsoft.graph.group",
+                    "id": "g1",
+                    "displayName": "Group One",
+                },
+                {
+                    "@odata.type": "#microsoft.graph.directoryRole",
+                    "id": "r1",
+                    "displayName": "Role One",
+                },
+            ],
+        },
+    )
+
+    groups = [g async for g in user.member_of.groups]
+    assert len(groups) == 1
+    assert isinstance(groups[0], Group)
+    assert groups[0].id == "g1"
 
 
-# def test_user_queryset_filter_builds_filter_param(user_qs):
-#     qs = user_qs.filter(display_name__startswith="A", account_enabled=True)
-#     params = qs._build_params()
-#     assert (
-#         params["$filter"]
-#         == "(startswith(displayName, 'A')) and (accountEnabled eq true)"
-#     )
+@pytest.mark.asyncio
+async def test_field_member_of_polymorphic_models(
+    make_client: "MakeClient",
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("No HTTP call expected")
+
+    client, _ = make_client(handler)
+    user = client.users.make_from_graph(
+        {
+            "id": "u1",
+            "displayName": "User One",
+            "memberOf": [
+                {
+                    "@odata.type": "#microsoft.graph.group",
+                    "id": "g1",
+                    "displayName": "Group One",
+                },
+                {
+                    "@odata.type": "#microsoft.graph.directoryRole",
+                    "id": "r1",
+                    "displayName": "Role One",
+                },
+            ],
+        },
+    )
+
+    items = [i async for i in user.member_of]
+    assert len(items) == 2
+    assert isinstance(items[0], Group)
+    assert isinstance(items[1], DirectoryObject)
 
 
-# def test_user_queryset_filter_with_q_object(user_qs):
-#     from pymsgraph.models.query import Q
+def test_field_member_of_groups(make_client: "MakeClient") -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"value": []})
 
-#     qs = user_qs.filter(
-#         Q(display_name__startswith="A") | Q(display_name__startswith="Z")
-#     )
-#     params = qs._build_params()
-#     assert (
-#         params["$filter"]
-#         == "((startswith(displayName, 'A')) or (startswith(displayName, 'Z')))"
-#     )
+    c, _ = make_client(handler)
+    u = c.users.make(id="u1")
 
+    member_of_qs: MemberOfQuerySet = u.member_of
+    assert isinstance(member_of_qs, MemberOfQuerySet)
+    assert member_of_qs._endpoint == "/users/u1/memberOf"
+    assert member_of_qs._model_class is DirectoryObject
 
-# def test_user_queryset_rejects_unsupported_lookup(user_qs):
-#     with pytest.raises(ValueError):
-#         user_qs.filter(display_name__contains="x")._build_params()
-
-
-# def test_user_queryset_top_sets_limit(user_qs):
-#     qs = user_qs.top(5)
-#     params = qs._build_params()
-#     assert params["$top"] == "5"
+    groups_qs: GroupsQuerySet = u.member_of.groups
+    assert isinstance(groups_qs, GroupsQuerySet)
+    assert groups_qs._endpoint == "/users/u1/memberOf/microsoft.graph.group"
+    assert groups_qs._model_class is Group
 
 
-# @pytest.mark.asyncio
-# async def test_user_queryset_count(make_client: "MakeClient"):
-#     def handler(request: httpx.Request) -> httpx.Response:
-#         assert request.method == "GET"
-#         assert request.url.path == "/v1.0/users"
-#         return httpx.Response(
-#             200,
-#             json={
-#                 "@odata.count": 42,
-#                 "value": [{"id": "1"}, {"id": "2"}],
-#             },
-#         )
+@pytest.mark.asyncio
+async def test_field_member_of_groups_add_remove(make_client: "MakeClient"):
+    seen: list[tuple[str, str]] = []
 
-#     c, _ = make_client(handler)
-#     qs = c.users.with_count()
-#     async for item in qs:
-#         ...
-#     count = await qs.count()
-#     assert count == 42
-#     p = qs.iterator()
-#     assert p._cached_count == 42
-#     assert p is qs.iterator()
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        seen.append((request.method, request.url.path))
+        if request.method == "POST" and request.url.path == "/v1.0/$batch":
+            body = json.loads(request.content.decode())
+            requests = body.get("requests", [])
+            first_method = requests[0]["method"] if requests else None
+            if first_method == "POST":
+                assert requests == [
+                    {
+                        "id": "1",
+                        "method": "POST",
+                        "url": "/groups/g1/members/$ref",
+                        "headers": {"Content-Type": "application/json"},
+                        "body": {
+                            "@odata.id": "https://graph.microsoft.com/v1.0/directoryObjects/123"
+                        },
+                    },
+                ]
+            elif first_method == "DELETE":
+                assert requests == [
+                    {
+                        "id": "1",
+                        "method": "DELETE",
+                        "url": "/groups/g1/members/123/$ref",
+                    }
+                ]
+            else:
+                raise AssertionError(f"Unexpected batch payload: {requests}")
+            return httpx.Response(200, json={"responses": [{"id": "1", "status": 204}]})
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    c, r = make_client(handler)
+    u = c.users.make(id="123", display_name="Alice")
+    await u.member_of.groups.add("g1")
+    await u.member_of.groups.remove("g1")
+
+    assert seen == [
+        ("POST", "/v1.0/$batch"),
+        ("POST", "/v1.0/$batch"),
+    ]
+    assert len(r) == 2
 
 
-# def test_select_related_invalid_field(make_client: "MakeClient"):
-#     c, _ = make_client(lambda req: httpx.Response(200, json={"value": []}))
-#     qs = c.users
+@pytest.mark.asyncio
+async def test_field_member_of_groups_add_remove_multiple(make_client: "MakeClient"):
+    seen = []
 
-#     with pytest.raises(ValueError):
-#         qs.select_related("does_not_exist")
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path == "/v1.0/$batch":
+            body = json.loads(request.content.decode())
+            seen.append(body.get("requests", []))
+            return httpx.Response(200, json={"responses": [{"id": "1", "status": 204}]})
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    c, r = make_client(handler)
+    user = c.users.make(id="123", display_name="Alice")
+    await user.member_of.groups.add("g1", Group(id="g2"))
+    await user.member_of.groups.remove("g1", Group(id="g2"))
+
+    # Two batch calls: add then remove
+    assert len(seen) == 2
+    add_requests, remove_requests = seen
+
+    # Add batch: two POSTs to /groups/{gid}/members/$ref with correct body
+    assert {req["method"] for req in add_requests} == {"POST"}
+    assert {req["url"] for req in add_requests} == {
+        "/groups/g1/members/$ref",
+        "/groups/g2/members/$ref",
+    }
+    for req in add_requests:
+        assert req.get("headers", {}).get("Content-Type") == "application/json"
+        assert req.get("body") == {
+            "@odata.id": "https://graph.microsoft.com/v1.0/directoryObjects/123"
+        }
+
+    # Remove batch: two DELETEs to /groups/{gid}/members/{uid}/$ref
+    assert {req["method"] for req in remove_requests} == {"DELETE"}
+    assert {req["url"] for req in remove_requests} == {
+        "/groups/g1/members/123/$ref",
+        "/groups/g2/members/123/$ref",
+    }
+
+    assert len(r) == 2
 
 
 # # def test_select_related_prefetch_licenses(make_client: "MakeClient"):
@@ -366,105 +486,6 @@ async def test_field_assigned_licenses_add_remove(make_client: "MakeClient"):
 #     assert user.id == "abc"
 #     assert user.display_name == "Bob"
 #     assert user.user_principal_name == "bob@example.com"
-
-
-# @pytest.mark.asyncio
-# async def test_field_member_of_add_remove(make_client: "MakeClient"):
-#     seen: list[tuple[str, str]] = []
-
-#     def handler(request: httpx.Request) -> httpx.Response:
-#         assert request.method == "POST"
-#         seen.append((request.method, request.url.path))
-#         if request.method == "POST" and request.url.path == "/v1.0/$batch":
-#             body = json.loads(request.content.decode())
-#             requests = body.get("requests", [])
-#             first_method = requests[0]["method"] if requests else None
-#             if first_method == "POST":
-#                 assert requests == [
-#                     {
-#                         "id": "1",
-#                         "method": "POST",
-#                         "url": "/groups/g1/members/$ref",
-#                         "headers": {"Content-Type": "application/json"},
-#                         "body": {
-#                             "@odata.id": "https://graph.microsoft.com/v1.0/directoryObjects/123"
-#                         },
-#                     },
-#                     {
-#                         "id": "2",
-#                         "method": "POST",
-#                         "url": "/groups/g2/members/$ref",
-#                         "headers": {"Content-Type": "application/json"},
-#                         "body": {
-#                             "@odata.id": "https://graph.microsoft.com/v1.0/directoryObjects/123"
-#                         },
-#                     },
-#                 ]
-#             elif first_method == "DELETE":
-#                 assert requests == [
-#                     {
-#                         "id": "1",
-#                         "method": "DELETE",
-#                         "url": "/groups/g1/members/123/$ref",
-#                     }
-#                 ]
-#             else:
-#                 raise AssertionError(f"Unexpected batch payload: {requests}")
-#             return httpx.Response(200, json={"responses": [{"id": "1", "status": 204}]})
-#         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
-
-#     c, r = make_client(handler)
-#     u = c.users.make(id="123", display_name="Alice")
-#     await u.member_of.add("g1", Group(id="g2"))
-#     await u.member_of.remove("g1")
-
-#     assert seen == [
-#         ("POST", "/v1.0/$batch"),
-#         ("POST", "/v1.0/$batch"),
-#     ]
-#     assert len(r) == 2
-
-
-# def test_user_groups_add_remove_multiple(make_client: "MakeClient"):
-#     seen: list[list[dict[str, Any]]] = []
-
-#     def handler(request: httpx.Request) -> httpx.Response:
-#         if request.method == "POST" and request.url.path == "/v1.0/$batch":
-#             body = json.loads(request.content.decode())
-#             seen.append(body.get("requests", []))
-#             return httpx.Response(200, json={"responses": [{"id": "1", "status": 204}]})
-#         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
-
-#     c, r = make_client(handler)
-#     user = c.users.make_from_graph({"id": "123", "displayName": "Alice"})
-#     user.groups.add("g1", "g2")
-#     user.groups.remove("g1", "g2")
-
-#     # Two batch calls: add then remove
-#     assert len(seen) == 2
-#     add_requests, remove_requests = seen
-
-#     # Add batch: two POSTs to /groups/{gid}/members/$ref with correct body
-#     assert {req["method"] for req in add_requests} == {"POST"}
-#     assert {req["url"] for req in add_requests} == {
-#         "/groups/g1/members/$ref",
-#         "/groups/g2/members/$ref",
-#     }
-#     for req in add_requests:
-#         assert req.get("headers", {}).get("Content-Type") == "application/json"
-#         assert req.get("body") == {
-#             "@odata.id": "https://graph.microsoft.com/v1.0/directoryObjects/123"
-#         }
-
-#     # Remove batch: two DELETEs to /groups/{gid}/members/{uid}/$ref
-#     assert {req["method"] for req in remove_requests} == {"DELETE"}
-#     assert {req["url"] for req in remove_requests} == {
-#         "/groups/g1/members/123/$ref",
-#         "/groups/g2/members/123/$ref",
-#     }
-
-#     assert len(r) == 2
-
 
 # def test_user_groups_descriptor(make_client: "MakeClient"):
 #     def handler(request: httpx.Request) -> httpx.Response:

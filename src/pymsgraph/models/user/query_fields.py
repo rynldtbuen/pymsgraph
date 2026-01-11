@@ -80,14 +80,13 @@ class AssignedPlansQuerySet(QuerySet[AssignedPlans]):
 
 
 class GroupsQuerySet(QuerySet["Group"]):
-    endpoint = "microsoft.graph.group"
 
     async def add(self, *args: "str | Group  | QuerySet[Group]") -> None:
         """
         Add group/s to this user.
         """
         c = self._client
-        groups = self._coerce_objects(args)
+        groups = c.groups._coerce_objects(args)
         obj: "User" = self._kwargs["obj"]
 
         for chunk_groups in utils.chunks(groups, 20):
@@ -114,7 +113,7 @@ class GroupsQuerySet(QuerySet["Group"]):
         """
 
         c = self._client
-        groups = self._coerce_objects(args)
+        groups = c.groups._coerce_objects(args)
         obj: "User" = self._kwargs["obj"]
 
         for chunk_groups in utils.chunks(groups, 20):
@@ -146,8 +145,6 @@ class MemberOfQuerySet(QuerySet["DirectoryObject"]):
         "#microsoft.graph.administrativeunit": "AdministrativeUnit",
     }
 
-    groups = QuerySetField(GroupsQuerySet, model_class="Group")
-
     def _resolve_model_class(self, data: dict[str, Any]) -> type[DirectoryObject]:
         odata_type = (data.get("@odata.type") or "").lower()
         model_name = self._ODATA_TYPE_MAP.get(odata_type)
@@ -163,4 +160,26 @@ class MemberOfQuerySet(QuerySet["DirectoryObject"]):
         model_class = self._resolve_model_class(data)
         return model_class.from_graph(
             data, client=self._client, endpoint=self._endpoint
+        )
+
+    @property
+    def groups(self) -> "GroupsQuerySet":
+        parent_user = self._kwargs.get("obj")
+        if parent_user is None:
+            raise ValueError("MemberOfQuerySet has no parent user bound.")
+
+        cached = self._kwargs.get("cached_data")
+        if cached:
+            cached = [
+                item
+                for item in cached
+                if (item.get("@odata.type") or "").lower() == "#microsoft.graph.group"
+            ]
+
+        return GroupsQuerySet(
+            self._client,
+            endpoint=f"{self._endpoint}/microsoft.graph.group",
+            model_class=cast(type["Group"], get_model_class("Group")),
+            obj=parent_user,
+            cached_data=cached,
         )

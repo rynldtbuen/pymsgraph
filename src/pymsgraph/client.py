@@ -12,7 +12,7 @@ try:
 except ImportError:  # pragma: no cover
     import importlib_metadata  # type: ignore
 
-from pymsgraph.models.user import UserQuerySet
+from pymsgraph.models import UserQuerySet, GroupQuerySet
 
 if TYPE_CHECKING:
     from pymsgraph.auth import TokenProvider
@@ -236,3 +236,4 @@ class Client:
         await self.close()
 
     users = QuerySetDescriptor(UserQuerySet)
+    groups = QuerySetDescriptor(GroupQuerySet)
