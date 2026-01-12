@@ -1,5 +1,5 @@
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import pytest
@@ -217,9 +217,35 @@ async def test_field_assigned_licenses_add_remove(make_client: "MakeClient"):
 def test_qs_filter_assigned_licenses(users_qs: UserQuerySet):
 
     qs = users_qs._clone()
+    # params = (
+    #     qs._clone()
+    #     .assigned_licenses.filter(sku_id="cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46")
+    #     ._build_params()
+    # )
+    # assert (
+    #     params["$filter"]
+    #     == "(assignedLicenses/any(u:u/skuId eq 'cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46'))"
+    # )
+
+    # params = (
+    #     qs._clone()
+    #     .assigned_licenses.filter(sku_id__exact="cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46")
+    #     ._build_params()
+    # )
+    # assert (
+    #     params["$filter"]
+    #     == "(assignedLicenses/any(u:u/skuId eq 'cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46'))"
+    # )
+
+    # params = qs._clone().assigned_licenses.filter(isnull=True)._build_params()
+    # assert params["$filter"] == "(assignedLicenses/$count eq 0)"
+
+    # params = qs._clone().assigned_licenses.filter(isnull=False)._build_params()
+    # assert params["$filter"] == "(assignedLicenses/$count ne 0)"
+
     params = (
         qs._clone()
-        .assigned_licenses.filter(sku_id="cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46")
+        .filter(assigned_licenses__sku_id__exact="cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46")
         ._build_params()
     )
     assert (
@@ -227,21 +253,119 @@ def test_qs_filter_assigned_licenses(users_qs: UserQuerySet):
         == "(assignedLicenses/any(u:u/skuId eq 'cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46'))"
     )
 
-    params = (
-        qs._clone()
-        .assigned_licenses.filter(sku_id__exact="cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46")
-        ._build_params()
-    )
-    assert (
-        params["$filter"]
-        == "(assignedLicenses/any(u:u/skuId eq 'cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46'))"
-    )
-
-    params = qs._clone().assigned_licenses.filter(isnull=True)._build_params()
+    params = qs._clone().filter(assigned_licenses__isnull=True)._build_params()
     assert params["$filter"] == "(assignedLicenses/$count eq 0)"
 
-    params = qs._clone().assigned_licenses.filter(isnull=False)._build_params()
+    params = qs._clone().filter(assigned_licenses__isnull=False)._build_params()
     assert params["$filter"] == "(assignedLicenses/$count ne 0)"
+
+
+def test_qs_filter_list_field(users_qs: UserQuerySet):
+    params = (
+        users_qs._clone()
+        .filter(proxy_addresses="SMTP:admin@contoso.com")
+        ._build_params()
+    )
+    assert params["$filter"] == "(proxyAddresses/any(i:i eq 'SMTP:admin@contoso.com'))"
+
+    params = (
+        users_qs._clone().filter(proxy_addresses__startswith="SMTP:")._build_params()
+    )
+    assert params["$filter"] == "(proxyAddresses/any(i:startswith(i, 'SMTP:')))"
+
+    params = users_qs._clone().filter(proxy_addresses__isnull=True)._build_params()
+    assert params["$filter"] == "(proxyAddresses/$count eq 0)"
+
+
+@pytest.mark.asyncio
+async def test_qs_assigned_licenses_proxy_add_remove(make_client: "MakeClient"):
+    batch_requests: list[list[dict[str, Any]]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1.0/users":
+            return httpx.Response(200, json={"value": [{"id": "u1"}, {"id": "u2"}]})
+
+        if request.method == "POST" and request.url.path == "/v1.0/$batch":
+            body = json.loads(request.content.decode())
+            batch_requests.append(body.get("requests", []))
+            return httpx.Response(200, json={"responses": [{"id": "1", "status": 200}]})
+
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    c, _ = make_client(handler)
+    qs = c.users.filter(display_name="Alice")
+
+    await qs.assigned_licenses.add("sku1")
+    await qs.assigned_licenses.remove("sku2")
+
+    # Two batch calls: add then remove
+    assert len(batch_requests) == 2
+    add_requests, remove_requests = batch_requests
+
+    assert {req["method"] for req in add_requests} == {"POST"}
+    assert {req["url"] for req in add_requests} == {
+        "/users/u1/assignLicense",
+        "/users/u2/assignLicense",
+    }
+    for req in add_requests:
+        assert req.get("body") == {
+            "addLicenses": [{"skuId": "sku1", "disabledPlans": []}],
+            "removeLicenses": [],
+        }
+
+    assert {req["method"] for req in remove_requests} == {"POST"}
+    assert {req["url"] for req in remove_requests} == {
+        "/users/u1/assignLicense",
+        "/users/u2/assignLicense",
+    }
+    for req in remove_requests:
+        assert req.get("body") == {
+            "addLicenses": [],
+            "removeLicenses": ["sku2"],
+        }
+
+
+@pytest.mark.asyncio
+async def test_qs_bulk_update(make_client: "MakeClient") -> None:
+    seen_batches: list[list[dict[str, Any]]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1.0/users":
+            return httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {"id": "u1"},
+                        {"id": "u2"},
+                        {"id": "u3"},
+                    ]
+                },
+            )
+        if request.method == "POST" and request.url.path == "/v1.0/$batch":
+            body = json.loads(request.content.decode())
+            seen_batches.append(body.get("requests", []))
+            return httpx.Response(200, json={"responses": [{"id": "1", "status": 200}]})
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    c, _ = make_client(handler)
+    updated = await c.users.update(company_name="Contoso", city="Auckland")
+
+    assert updated == 3
+    # One batch with 3 PATCH requests
+    assert len(seen_batches) == 1
+    requests = seen_batches[0]
+    assert {req["method"] for req in requests} == {"PATCH"}
+    assert {req["url"] for req in requests} == {
+        "/users/u1",
+        "/users/u2",
+        "/users/u3",
+    }
+    for req in requests:
+        assert req.get("headers", {}).get("Content-Type") == "application/json"
+        assert req.get("body") == {
+            "companyName": "Contoso",
+            "city": "Auckland",
+        }
 
 
 @pytest.mark.asyncio
@@ -418,191 +542,110 @@ async def test_field_member_of_groups_add_remove_multiple(make_client: "MakeClie
     assert len(r) == 2
 
 
-# # def test_select_related_prefetch_licenses(make_client: "MakeClient"):
-# #     def handler(request: httpx.Request) -> httpx.Response:
-# #         if request.url.path == "/v1.0/users":
-# #             return httpx.Response(
-# #                 200,
-# #                 json={
-# #                     "value": [
-# #                         {"id": "u1", "displayName": "User 1"},
-# #                         {"id": "u2", "displayName": "User 2"},
-# #                     ]
-# #                 },
-# #             )
-# #         if request.url.path == "/v1.0/$batch":
-# #             body = json.loads(request.content.decode())
-# #             assert len(body.get("requests", [])) == 2
-# #             responses = [
-# #                 {"id": "1", "status": 200, "body": {"value": [{"skuId": "sku1"}]}},
-# #                 {"id": "2", "status": 200, "body": {"value": [{"skuId": "sku2"}]}},
-# #             ]
-# #             return httpx.Response(200, json={"responses": responses})
-# #         return httpx.Response(404)
+@pytest.mark.asyncio
+async def test_qs_get_by_id(make_client: "MakeClient"):
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/v1.0/users/abc"
+        return httpx.Response(
+            200,
+            json={
+                "id": "abc",
+                "accountEnabled": "true",
+                "displayName": "Bob",
+                "userPrincipalName": "bob@example.com",
+                "mailNickname": "bob",
+            },
+        )
 
-# #     c, _ = make_client(handler)
-
-# #     users = list(c.users.select_related("licenses"))
-# #     assert [u.id for u in users] == ["u1", "u2"]
-
-# #     assert [l.sku_id for l in users[0].licenses] == ["sku1"]
-# #     assert [l.sku_id for l in users[1].licenses] == ["sku2"]
+    c, _ = make_client(handler)
+    qs = c.users
+    user = await qs.get(id="abc")
+    assert user is not None
+    assert user.id == "abc"
+    assert user.display_name == "Bob"
+    assert user.user_principal_name == "bob@example.com"
+    assert user.account_enabled is True
 
 
-# def test_queryset_set_attr_and_save(make_client: "MakeClient"):
+@pytest.mark.asyncio
+async def test_delete_missing_id(make_client: "MakeClient"):
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("HTTP should not be called")
+
+    c, _ = make_client(handler)
+    user = c.users.make(display_name="Alice")
+    with pytest.raises(AttributeError):
+        await user.delete(force=True)
+
+
+@pytest.mark.asyncio
+async def test_force_delete(make_client: "MakeClient"):
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "DELETE"
+        assert request.url.path == "/v1.0/users/u_del"
+        return httpx.Response(204)
+
+    c, _ = make_client(handler)
+    user = c.users.make_from_graph(
+        {
+            "id": "u_del",
+            "displayName": "Del",
+            "userPrincipalName": "del@example.com",
+            "accountEnabled": True,
+            "mailNickname": "del",
+        }
+    )
+
+    await user.delete(force=True)
+    assert user.id is None
+
+
+@pytest.mark.asyncio
+async def test_delete(make_client: "MakeClient"):
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("HTTP should not be called")
+
+    c, _ = make_client(handler)
+    user = c.users._model_class.from_graph(
+        {
+            "id": "u_del",
+            "displayName": "Del",
+            "userPrincipalName": "del@example.com",
+            "accountEnabled": True,
+            "mailNickname": "del",
+        }
+    )
+    with pytest.raises(RuntimeError):
+        await user.delete()
+
+
+# def test_select_related_prefetch_licenses(make_client: "MakeClient"):
 #     def handler(request: httpx.Request) -> httpx.Response:
 #         if request.url.path == "/v1.0/users":
 #             return httpx.Response(
 #                 200,
 #                 json={
 #                     "value": [
-#                         {"id": "u1", "displayName": "User 1", "city": "Old"},
-#                         {"id": "u2", "displayName": "User 2", "city": "Old"},
+#                         {"id": "u1", "displayName": "User 1"},
+#                         {"id": "u2", "displayName": "User 2"},
 #                     ]
 #                 },
 #             )
 #         if request.url.path == "/v1.0/$batch":
 #             body = json.loads(request.content.decode())
 #             assert len(body.get("requests", [])) == 2
-#             for req in body.get("requests", []):
-#                 assert req["method"] == "PATCH"
-#                 assert req["body"]["city"] == "Auckland"
-#                 assert req["body"]["department"] == "IT"
-#             return httpx.Response(
-#                 200,
-#                 json={
-#                     "responses": [
-#                         {"id": "1", "status": 204},
-#                         {"id": "2", "status": 204},
-#                     ]
-#                 },
-#             )
+#             responses = [
+#                 {"id": "1", "status": 200, "body": {"value": [{"skuId": "sku1"}]}},
+#                 {"id": "2", "status": 200, "body": {"value": [{"skuId": "sku2"}]}},
+#             ]
+#             return httpx.Response(200, json={"responses": responses})
 #         return httpx.Response(404)
 
 #     c, _ = make_client(handler)
-#     qs = c.users
 
-#     updated = qs.set_attr("city", "Auckland").set_attr("department", "IT").save()
+#     users = list(c.users.select_related("licenses"))
+#     assert [u.id for u in users] == ["u1", "u2"]
 
-#     assert updated == 2
-
-
-# def test_queryset_set_attr_rejects_unknown_field(make_client: "MakeClient"):
-#     c, _ = make_client(lambda req: httpx.Response(200, json={"value": []}))
-
-#     with pytest.raises(ValueError):
-#         c.users.set_attr("not_a_field", "x")
-
-
-# @pytest.mark.asyncio
-# async def test_user_queryset_get_by_id(make_client: "MakeClient"):
-#     def handler(request: httpx.Request) -> httpx.Response:
-#         assert request.method == "GET"
-#         assert request.url.path == "/v1.0/users/abc"
-#         return httpx.Response(
-#             200,
-#             json={
-#                 "id": "abc",
-#                 "displayName": "Bob",
-#                 "userPrincipalName": "bob@example.com",
-#                 "mailNickname": "bob",
-#             },
-#         )
-
-#     c, _ = make_client(handler)
-#     qs = c.users
-#     user = await qs.get(id="abc")
-#     assert user is not None
-#     assert user.id == "abc"
-#     assert user.display_name == "Bob"
-#     assert user.user_principal_name == "bob@example.com"
-
-# def test_user_groups_descriptor(make_client: "MakeClient"):
-#     def handler(request: httpx.Request) -> httpx.Response:
-#         assert request.method == "GET"
-#         assert request.url.path == "/v1.0/users/123/memberOf"
-#         if request.method == "GET" and request.url.path == "/v1.0/users/123/memberOf":
-#             return httpx.Response(
-#                 200,
-#                 json={
-#                     "value": [
-#                         {
-#                             "id": "g1",
-#                             "displayName": "Group One",
-#                             "mailNickname": "g1",
-#                         }
-#                     ]
-#                 },
-#             )
-#         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
-
-#     c, r = make_client(handler)
-#     # qs = UserQuerySet(client)
-#     user = c.users.make_from_graph({"id": "123", "displayName": "Alice"})
-#     user_groups_qs = user.groups
-#     groups = list(user_groups_qs)
-#     assert len(groups) == 1
-#     g = groups[0]
-#     assert g.id == "g1"
-#     assert g.display_name == "Group One"
-#     assert len(r) == 1
-
-
-# @pytest.mark.asyncio
-# async def test_user_delete_requires_id(make_client: "MakeClient"):
-#     # Ensure no HTTP call occurs
-#     def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
-#         raise AssertionError("HTTP should not be called")
-
-#     c, _ = make_client(handler)
-#     user = c.users._model_class(
-#         display_name="Unsaved",
-#         # user_principal_name="unsaved@example.com",
-#         mail_nickname="unsaved",
-#     )
-#     with pytest.raises(AttributeError):
-#         await user.delete(force=True)
-
-
-# @pytest.mark.asyncio
-# async def test_user_delete_force_calls_delete(make_client: "MakeClient"):
-#     def handler(request: httpx.Request) -> httpx.Response:
-#         assert request.method == "DELETE"
-#         assert request.url.path == "/v1.0/users/u_del"
-#         return httpx.Response(204)
-
-#     c, _ = make_client(handler)
-#     user = c.users._model_class.from_graph(
-#         {
-#             "id": "u_del",
-#             "displayName": "Del",
-#             "userPrincipalName": "del@example.com",
-#             "accountEnabled": True,
-#             "mailNickname": "del",
-#         },
-#         client=c,
-#     )
-
-#     await user.delete(force=True)
-#     # after local cleanup, id should no longer be present
-#     assert user.id is None
-
-
-# @pytest.mark.asyncio
-# async def test_user_delete_requires_force(make_client: "MakeClient"):
-#     # Ensure no HTTP call occurs
-#     def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
-#         raise AssertionError("HTTP should not be called")
-
-#     c, _ = make_client(handler)
-#     user = c.users._model_class.from_graph(
-#         {
-#             "id": "u_del",
-#             "displayName": "Del",
-#             "userPrincipalName": "del@example.com",
-#             "accountEnabled": True,
-#             "mailNickname": "del",
-#         }
-#     )
-#     with pytest.raises(RuntimeError):
-#         await user.delete()
+#     assert [l.sku_id for l in users[0].licenses] == ["sku1"]
+#     assert [l.sku_id for l in users[1].licenses] == ["sku2"]

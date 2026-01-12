@@ -6,10 +6,12 @@ from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Generic, Iterator, Self, TypeVar
 
 from pymsgraph.utils import to_camel_case
+from pymsgraph import utils
 
 if TYPE_CHECKING:
     from pymsgraph.client import Client
     from pymsgraph.models.base import Model
+    from pymsgraph.models.fields import ListField, QuerySetField
 
 __all__ = ["QuerySet", "Q"]
 
@@ -111,7 +113,8 @@ class QuerySet(Generic[_Tm]):
             if (expr := q_obj.to_odata_query()) not in expressions:
                 expressions.append(expr)
         for key, value in kwargs.items():
-            if (expr := to_odata_query(key, value)) not in expressions:
+            expr = qs._compile_filter_expr(key, value)
+            if expr not in expressions:
                 expressions.append(expr)
 
         return qs
@@ -251,6 +254,57 @@ class QuerySet(Generic[_Tm]):
             data, client=self._client, endpoint=self._endpoint
         )
 
+    async def update(self, **fields: Any) -> int:
+        """
+        Bulk update all objects in this queryset.
+
+        Returns the number of objects updated.
+        """
+        if not fields:
+            return 0
+
+        # Validate fields
+        payload: dict[str, Any] = {}
+        for attr_name, val in fields.items():
+            field_obj = self._model_class.FIELDS.get(attr_name)
+            if field_obj is None:
+                raise ValueError(f"Unknown field {attr_name!r}")
+            if field_obj.read_only:
+                raise ValueError(f"Field {attr_name!r} is read-only")
+            graph_name = field_obj.graph_attr_name or to_camel_case(attr_name)
+            payload[graph_name] = field_obj.to_graph(val)
+
+        total_updated = 0
+        batch_size = 20
+
+        async for batch in utils.achunks(self.select("id"), batch_size):
+            await self._bulk_patch(batch, payload)
+            total_updated += len(batch)
+
+        return total_updated
+
+    async def _bulk_patch(self, iterable: list[_Tm], payload: dict[str, Any]) -> None:
+        requests: list[dict[str, Any]] = []
+        for i, obj in enumerate(iterable, start=1):
+            requests.append(
+                {
+                    "id": str(i),
+                    "method": "PATCH",
+                    "url": obj._endpoint,
+                    "headers": {"Content-Type": "application/json"},
+                    "body": payload,
+                }
+            )
+
+        resp = await self._client.post("/$batch", body={"requests": requests})
+        try:
+            from pymsgraph import utils
+
+            utils.raise_batch_errors(resp, action="bulk update")
+        except Exception:
+            # rethrow original error for clarity
+            raise
+
     def make(self, **kwargs: Any) -> _Tm:
         return self._model_class(**kwargs, client=self._client, endpoint=self._endpoint)
 
@@ -295,6 +349,56 @@ class QuerySet(Generic[_Tm]):
         obj._params = deepcopy(self._params)
         obj._headers = dict(self._headers)
         return obj
+
+    def _compile_filter_expr(self, key: str, value: Any) -> str:
+        if "__" in key:
+            field, lookup = key.split("__", 1)
+        else:
+            field, lookup = key, "exact"
+
+        field_obj = self._model_class.FIELDS.get(field) if self._model_class else None
+        from pymsgraph.models import fields as _fields
+
+        if isinstance(field_obj, _fields.ListField):
+            graph_field = field_obj.graph_attr_name or to_camel_case(field)
+            return compile_list_lookup(graph_field, lookup, value)
+
+        if isinstance(field_obj, _fields.QuerySetField):
+            graph_field = field_obj.graph_attr_name or to_camel_case(field)
+            if lookup == "isnull":
+                return compile_list_lookup(graph_field, "isnull", value)
+
+            model_class = field_obj.model_class or field_obj.queryset_class.model_class
+            if model_class is None:
+                raise ValueError(f"{field!r} related model is not configured")
+
+            if isinstance(model_class, str):
+                from pymsgraph.utils import get_model_class
+
+                model_class = get_model_class(model_class)
+
+            if "__" in lookup:
+                element_field, element_lookup = lookup.split("__", 1)
+            else:
+                element_field, element_lookup = lookup, "exact"
+
+            element = model_class.FIELDS.get(element_field)
+            if element is None:
+                raise ValueError(
+                    f"Unsupported related field: {field}__{element_field!r}"
+                )
+            element_graph = element.graph_attr_name or to_camel_case(element_field)
+
+            try:
+                func = PY_TO_ODATA_QUERY[element_lookup]
+            except KeyError:
+                raise ValueError(f"Unsupported lookup: {element_lookup!r}") from None
+
+            clause = func(f"u/{element_graph}", value)
+            return f"{graph_field}/any(u:{clause})"
+
+        # fallback to scalar compiler
+        return to_odata_query(key, value)
 
     def _build_params(self) -> dict[str, Any]:
         """Build OData query parameters"""
@@ -624,6 +728,29 @@ def to_odata_query(key: str, value: Any) -> str:
     except:
         raise ValueError(f"Unsupported lookup: {lookup!r}") from None
     return func(graph_field, value)
+
+
+def compile_list_lookup(
+    graph_field: str, lookup: str, value: Any, var: str = "i"
+) -> str:
+    """
+    Compile lookups for list fields into any()/count OData expressions.
+    """
+    if lookup == "isnull":
+        if not isinstance(value, bool):
+            raise ValueError(f"isnull expects bool, got {type(value).__name__}")
+        return f"{graph_field}/$count eq 0" if value else f"{graph_field}/$count ne 0"
+
+    if lookup == "exact":
+        lookup = "exact"
+
+    try:
+        func = PY_TO_ODATA_QUERY[lookup]
+    except KeyError:
+        raise ValueError(f"Unsupported lookup for list field: {lookup!r}") from None
+
+    clause = func(var, value)
+    return f"{graph_field}/any({var}:{clause})"
 
 
 class DoesNotExist(Exception): ...

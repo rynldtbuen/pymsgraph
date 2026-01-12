@@ -111,13 +111,18 @@ class AssignedLicensesQuerySetProxy:
                 exprs.append(expr)
         return self._parent
 
-    async def add(self, *args: str | AssignedLicense) -> None:
+    async def add(self, *args: str | AssignedLicense, force=False) -> None:
         """
-        Add licenses to all users in this queryset.
+        Add license(s) to all users in this queryset.
+
+        Usage:
+            client.users.filter(...).assigned_licenses.add("sku1", AssignLicense(sku_id="sku2"))
         """
 
         c = self._parent._client
-        objects = list(AssignedLicensesQuerySet()._coerce_objects(args))
+        objects = list(
+            AssignedLicensesQuerySet(self._parent._client)._coerce_objects(args)
+        )
         if not objects:
             return
 
@@ -142,6 +147,43 @@ class AssignedLicensesQuerySetProxy:
 
             batch_resp = await c.post("/$batch", body={"requests": requests})
             utils.raise_batch_errors(batch_resp, action="add user queryset licenses")
+
+    async def remove(
+        self, *args: str | AssignedLicense, force=False, all=False
+    ) -> None:
+        """
+        Remove license(s) from all users in this queryset.
+
+        Usage:
+            client.users.filter(...).assigned_licenses.remove("sku1", AssignLicense(sku_id="sku2"))
+        """
+
+        c = self._parent._client
+        objects = list(
+            AssignedLicensesQuerySet(self._parent._client)._coerce_objects(args)
+        )
+        if not objects:
+            return
+
+        async for chunked_users in utils.achunks(self._parent.select("id"), 20):
+            requests: list[dict[str, Any]] = []
+            for i, u in enumerate(chunked_users, start=1):
+                u = cast("User", u)
+                requests.append(
+                    {
+                        "id": str(i),
+                        "method": "POST",
+                        "url": f"{u._endpoint}/assignLicense",
+                        "headers": {"Content-Type": "application/json"},
+                        "body": {
+                            "addLicenses": [],
+                            "removeLicenses": [obj.id for obj in objects],
+                        },
+                    }
+                )
+
+            batch_resp = await c.post("/$batch", body={"requests": requests})
+            utils.raise_batch_errors(batch_resp, action="remove user queryset licenses")
 
 
 class AssignedPlansQuerySet(QuerySet[AssignedPlans]):
