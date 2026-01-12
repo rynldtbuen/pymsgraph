@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Iterable
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Generic, Iterator, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Iterator, Self, TypeVar
 
 from pymsgraph.utils import to_camel_case
 
@@ -84,7 +84,7 @@ class QuerySet(Generic[_Tm]):
         client: "Client | None" = None,
         *,
         endpoint: str | None = None,
-        model_class: "type[_Tm] | None" = None,
+        model_class: "type[Model] | None" = None,
         **kwargs: Any,
     ) -> None:
         model_class = model_class or self.model_class
@@ -100,7 +100,7 @@ class QuerySet(Generic[_Tm]):
         self._all: bool = False
         self._kwargs: dict[str, Any] = kwargs
 
-    def filter(self, *q_objects: "Q", **kwargs: Any) -> "QuerySet[_Tm]":
+    def filter(self, *q_objects: "Q", **kwargs: Any) -> Self:
         if not q_objects and not kwargs:
             return self
 
@@ -116,7 +116,7 @@ class QuerySet(Generic[_Tm]):
 
         return qs
 
-    def select(self, *args: str) -> "QuerySet[_Tm]":
+    def select(self, *args: str) -> Self:
         if not args:
             return self
 
@@ -129,7 +129,7 @@ class QuerySet(Generic[_Tm]):
 
         return qs
 
-    def order_by(self, *args: str) -> "QuerySet[_Tm]":
+    def order_by(self, *args: str) -> Self:
         if not args:
             return self
 
@@ -145,7 +145,7 @@ class QuerySet(Generic[_Tm]):
 
         return qs
 
-    def search(self, *q_objects: "Q", **kwargs: Any) -> "QuerySet[_Tm]":
+    def search(self, *q_objects: "Q", **kwargs: Any) -> Self:
         if not q_objects and not kwargs:
             return self
 
@@ -162,14 +162,14 @@ class QuerySet(Generic[_Tm]):
 
         return qs
 
-    def top(self, value: int) -> "QuerySet[_Tm]":
+    def top(self, value: int) -> Self:
         if value < 1:
             raise ValueError("value must be greater than zero.")
         qs = self._clone()
         qs._params["$top"] = value
         return qs
 
-    def expand(self, field: str, *select: str) -> "QuerySet[_Tm]":
+    def expand(self, field: str, *select: str) -> Self:
         qs = self._clone()
         expands: dict[str, set[str]] = qs._params.setdefault("$expand", {})
         graph_field = to_camel_case(field)
@@ -179,18 +179,18 @@ class QuerySet(Generic[_Tm]):
             expands[graph_field].update(to_camel_case(s) for s in select)
         return qs
 
-    def all(self) -> "QuerySet[_Tm]":
+    def all(self) -> Self:
         """Return a copy of the queryset"""
         qs = self._clone()
         qs._all = True
         return qs
 
-    def with_count(self) -> "QuerySet[_Tm]":
+    def with_count(self) -> Self:
         qs = self._clone()
         qs._params["$count"] = "true"
         return qs.with_consistency_level_eventual()
 
-    def with_consistency_level_eventual(self) -> "QuerySet[_Tm]":
+    def with_consistency_level_eventual(self) -> Self:
         qs = self._clone()
         qs._headers["ConsistencyLevel"] = "eventual"
         return qs
@@ -288,7 +288,7 @@ class QuerySet(Generic[_Tm]):
             f"{type(self).__name__} object has no attribute '_model_class'"
         )
 
-    def _clone(self) -> "QuerySet[_Tm]":
+    def _clone(self) -> Self:
         obj = self.__class__(
             self._client, endpoint=self._endpoint, model_class=self._model_class
         )

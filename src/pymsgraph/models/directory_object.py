@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from pymsgraph.models.base import Model
 
-__all__ = ["DirectoryObject"]
-
 
 class DirectoryObject(Model):
     """
-    Minimal base model for directory objects.
+    Graph directoryObject resource type
+
+    https://learn.microsoft.com/en-us/graph/api/resources/directoryobject?view=graph-rest-1.0
     """
 
     endpoint = "/directoryObjects"

@@ -4,17 +4,15 @@ from typing import TYPE_CHECKING, Any, cast
 
 from pymsgraph import utils
 from pymsgraph.models.directory_object import DirectoryObject
-from pymsgraph.models.fields import QuerySetField
-from pymsgraph.models.query import QuerySet
+from pymsgraph.models.query import PY_TO_ODATA_QUERY, QuerySet
 from pymsgraph.utils import get_model_class
 
 from .model_fields import AssignedLicense, AssignedPlans
 
 if TYPE_CHECKING:
     from pymsgraph.models.directory_object import DirectoryObject
-
-    from pymsgraph.models.user import User
     from pymsgraph.models.group import Group
+    from pymsgraph.models.user import User, UserQuerySet
 
 
 class AssignedLicensesQuerySet(QuerySet[AssignedLicense]):
@@ -73,6 +71,77 @@ class AssignedLicensesQuerySet(QuerySet[AssignedLicense]):
             return kwargs
 
         await self._client.post(**kwargs)
+
+
+class AssignedLicensesQuerySetProxy:
+    def __init__(self, parent: UserQuerySet):
+        self._parent = parent
+
+    def filter(self, **kwargs: Any) -> UserQuerySet:
+        exprs = self._parent._params.setdefault("$filter", [])
+        for key, value in kwargs.items():
+            if "__" in key:
+                field, lookup = key.split("__", 1)
+            else:
+                field, lookup = key, "exact"
+
+            if field == "isnull":
+                if not isinstance(value, bool):
+                    raise ValueError(f"Value is not an instance of bool, {value!r}")
+                expr = (
+                    "assignedLicenses/$count eq 0"
+                    if value
+                    else "assignedLicenses/$count ne 0"
+                )
+                if expr not in exprs:
+                    exprs.append(expr)
+                continue
+
+            if field != "sku_id":
+                raise ValueError(f"Unsupported field for assignedLicenses: {field!r}")
+
+            try:
+                func = PY_TO_ODATA_QUERY[lookup]
+            except KeyError:
+                raise ValueError(f"Unsupported lookup: {lookup!r}") from None
+
+            clause = func("u/skuId", value)
+            expr = f"assignedLicenses/any(u:{clause})"
+            if expr not in exprs:
+                exprs.append(expr)
+        return self._parent
+
+    async def add(self, *args: str | AssignedLicense) -> None:
+        """
+        Add licenses to all users in this queryset.
+        """
+
+        c = self._parent._client
+        objects = list(AssignedLicensesQuerySet()._coerce_objects(args))
+        if not objects:
+            return
+
+        async for chunked_users in utils.achunks(self._parent.select("id"), 20):
+            requests: list[dict[str, Any]] = []
+            for i, u in enumerate(chunked_users, start=1):
+                requests.append(
+                    {
+                        "id": str(i),
+                        "method": "POST",
+                        "url": f"{u._endpoint}/assignLicense",
+                        "headers": {"Content-Type": "application/json"},
+                        "body": {
+                            "addLicenses": [
+                                {"skuId": obj.id, "disabledPlans": []}
+                                for obj in objects
+                            ],
+                            "removeLicenses": [],
+                        },
+                    }
+                )
+
+            batch_resp = await c.post("/$batch", body={"requests": requests})
+            utils.raise_batch_errors(batch_resp, action="add user queryset licenses")
 
 
 class AssignedPlansQuerySet(QuerySet[AssignedPlans]):

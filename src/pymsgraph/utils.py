@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import AsyncIterable, AsyncIterator, Iterable
 import importlib
 import re
 import secrets
@@ -104,6 +104,20 @@ def chunks(iterable: Iterable[T], size: int = 2) -> Iterator[list[T]]:
 
     batch: list[T] = []
     for item in iterable:
+        batch.append(item)
+        if len(batch) == size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
+
+
+async def achunks(aiterable: AsyncIterable[T], size: int = 2) -> AsyncIterator[list[T]]:
+    if size <= 2:
+        raise ValueError("Size must be > 2")
+
+    batch: list[T] = []
+    async for item in aiterable:
         batch.append(item)
         if len(batch) == size:
             yield batch

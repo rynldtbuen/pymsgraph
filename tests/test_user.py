@@ -6,7 +6,7 @@ import pytest
 
 from pymsgraph.models.directory_object import DirectoryObject
 from pymsgraph.models.group import Group
-from pymsgraph.models.user import User
+from pymsgraph.models.user import User, UserQuerySet
 from pymsgraph.models.user.model_fields import AssignedLicense, PasswordProfile
 from pymsgraph.models.user.query_fields import (
     AssignedLicensesQuerySet,
@@ -212,6 +212,36 @@ async def test_field_assigned_licenses_add_remove(make_client: "MakeClient"):
     u = c.users.make(id="123", display_name="Alice")
     await u.assigned_licenses.add("sku1")
     await u.assigned_licenses.remove("sku1")
+
+
+def test_qs_filter_assigned_licenses(users_qs: UserQuerySet):
+
+    qs = users_qs._clone()
+    params = (
+        qs._clone()
+        .assigned_licenses.filter(sku_id="cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46")
+        ._build_params()
+    )
+    assert (
+        params["$filter"]
+        == "(assignedLicenses/any(u:u/skuId eq 'cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46'))"
+    )
+
+    params = (
+        qs._clone()
+        .assigned_licenses.filter(sku_id__exact="cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46")
+        ._build_params()
+    )
+    assert (
+        params["$filter"]
+        == "(assignedLicenses/any(u:u/skuId eq 'cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46'))"
+    )
+
+    params = qs._clone().assigned_licenses.filter(isnull=True)._build_params()
+    assert params["$filter"] == "(assignedLicenses/$count eq 0)"
+
+    params = qs._clone().assigned_licenses.filter(isnull=False)._build_params()
+    assert params["$filter"] == "(assignedLicenses/$count ne 0)"
 
 
 @pytest.mark.asyncio
@@ -516,40 +546,6 @@ async def test_field_member_of_groups_add_remove_multiple(make_client: "MakeClie
 #     assert g.id == "g1"
 #     assert g.display_name == "Group One"
 #     assert len(r) == 1
-
-
-# def test_user_queryset_filter_licenses_sku_id(user_qs):
-#     qs = user_qs.filter(
-#         assigned_licenses__sku_id="cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46"
-#     )
-#     params = qs._build_params()
-#     assert (
-#         params["$filter"]
-#         == "(assignedLicenses/any(u:u/skuId eq 'cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46'))"
-#     )
-
-
-# def test_user_queryset_filter_licenses_sku_id_with_lookup(user_qs):
-#     qs = user_qs.filter(
-#         assigned_licenses__sku_id__exact="cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46"
-#     )
-#     params = qs._build_params()
-#     assert (
-#         params["$filter"]
-#         == "(assignedLicenses/any(u:u/skuId eq 'cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46'))"
-#     )
-
-
-# def test_user_queryset_filter_licenses_isnull(user_qs):
-#     qs = user_qs.filter(assigned_licenses__isnull=True)
-#     params = qs._build_params()
-#     assert params["$filter"] == "(assignedLicenses/$count eq 0)"
-
-
-# def test_user_queryset_filter_licenses_is_not_null(user_qs):
-#     qs = user_qs.filter(assigned_licenses__isnull=False)
-#     params = qs._build_params()
-#     assert params["$filter"] == "(assignedLicenses/$count ne 0)"
 
 
 # @pytest.mark.asyncio

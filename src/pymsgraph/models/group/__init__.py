@@ -17,6 +17,12 @@ from pymsgraph.models.query import QuerySet
 
 
 class Group(Model):
+    """
+    Graph group resource type
+
+    https://learn.microsoft.com/en-us/graph/api/resources/group?view=graph-rest-1.0
+    """
+
     endpoint = "/groups"
 
     # Properties

@@ -20,6 +20,7 @@ from pymsgraph.models.query import QuerySet
 from .model_fields import EmployeeOrgData, PasswordProfile
 from .query_fields import (
     AssignedLicensesQuerySet,
+    AssignedLicensesQuerySetProxy,
     AssignedPlansQuerySet,
     MemberOfQuerySet,
 )
@@ -231,15 +232,10 @@ class User(Model):
 
 class UserQuerySet(QuerySet["User"]):
     model_class = User
-    #     capabilities = Capabilities.read_write(search=True)
 
-    #     # @property
-    #     # def groups(self) -> groups.GroupsBulkQuerySet:
-    #     #     return groups.GroupsBulkQuerySet(self)
-
-    #     # @property
-    #     # def assigned_license(self) -> assigned_licenses.LicensesBulkQuerySet:
-    #     #     return assigned_licenses.LicensesBulkQuerySet(self)
+    @property
+    def assigned_licenses(self) -> AssignedLicensesQuerySetProxy:
+        return AssignedLicensesQuerySetProxy(self)
 
     #     def get_by_directory_ids(
     #         self,

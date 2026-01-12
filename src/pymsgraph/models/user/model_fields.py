@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pymsgraph.models.base import Model
 from pymsgraph.models.fields import BooleanField, CharField, DateTimeField, Field
+from pymsgraph.models.subscribed_sku import SubscribedSku
 
 
 class PasswordProfile(Model):
@@ -15,6 +16,10 @@ class AssignedLicense(Model):
 
     sku_id = CharField()
     disabled_plans = Field()
+
+    @property
+    def product_name(self):
+        return SubscribedSku.get_product_name(sku_id=self.sku_id)
 
 
 class AssignedPlans(Model):
