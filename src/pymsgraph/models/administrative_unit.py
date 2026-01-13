@@ -10,4 +10,4 @@ class AdministrativeUnit(DirectoryObject):
     https://learn.microsoft.com/en-us/graph/api/resources/administrativeunit?view=graph-rest-1.0
     """
 
-    endpoint = "/administrativeUnits"
+    PATH = "/administrativeUnits"

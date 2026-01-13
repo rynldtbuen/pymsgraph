@@ -33,7 +33,9 @@ class User(Model):
     https://learn.microsoft.com/en-us/graph/api/resources/user?view=graph-rest-1.0
     """
 
-    endpoint = "/users"
+    PATH = "/users"
+    SEARCH_FIELD = "display_name"
+    ORDER_BY_FIELDS = ("display_name", "user_principal_name")
 
     # Properties
     about_me = CharField()
@@ -182,7 +184,7 @@ class User(Model):
         auto_generate_password: bool = False,
     ) -> None:
 
-        ep = self._endpoint
+        path = self.path
         self._generated_password = None
 
         if auto_generate_password and not password:
@@ -203,10 +205,10 @@ class User(Model):
             }
         )
 
-        await self._client.patch(ep, body=body)
+        await self._client.patch(path, body=body)
 
-    def revoke_sign_in_sessions(self):
-        return self._client.post(f"{self._endpoint}/revokeSignInSessions")
+    async def revoke_sign_in_sessions(self):
+        return await self._client.post(f"{self.path}/revokeSignInSessions")
 
     def get_generated_password(self) -> str | None:
         """Return the auto-generated password (if any) and clear it immediately."""
@@ -218,7 +220,7 @@ class User(Model):
         if not force:
             raise RuntimeError("Call delete(force=True) to proceed.")
 
-        await self._client.delete(self._endpoint)
+        await self._client.delete(self.path)
 
         self._data.clear()
         self._dirty.clear()
@@ -292,11 +294,11 @@ class UserQuerySet(QuerySet["User"]):
                 force_change_password_next_sign_in=force_change_password_next_sign_in,
             ),
             client=self._client,
-            endpoint=self._endpoint,
+            path=self.path,
             **kwargs,
         )
         obj._validate_for_create()
-        data = await self._client.post(self._endpoint, body=obj.serialize())
+        data = await self._client.post(self.path, body=obj.serialize())
         if data:
             merged = dict(data)
             for attr_name, val in obj._data.items():

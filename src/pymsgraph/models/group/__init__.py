@@ -23,7 +23,7 @@ class Group(Model):
     https://learn.microsoft.com/en-us/graph/api/resources/group?view=graph-rest-1.0
     """
 
-    endpoint = "/groups"
+    PATH = "/groups"
 
     # Properties
     allow_external_senders = BooleanField()

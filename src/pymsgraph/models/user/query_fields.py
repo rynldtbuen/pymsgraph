@@ -32,7 +32,7 @@ class AssignedLicensesQuerySet(QuerySet[AssignedLicense]):
             return
 
         kwargs = {
-            "path": self._endpoint,
+            "path": self.path,
             "body": {
                 "addLicenses": [
                     {"skuId": obj.sku_id, "disabledPlans": []} for obj in objects
@@ -60,7 +60,7 @@ class AssignedLicensesQuerySet(QuerySet[AssignedLicense]):
             return
 
         kwargs = {
-            "path": self._endpoint,
+            "path": self.path,
             "body": {
                 "addLicenses": [],
                 "removeLicenses": [obj.sku_id for obj in objects],
@@ -121,7 +121,9 @@ class AssignedLicensesQuerySetProxy:
 
         c = self._parent._client
         objects = list(
-            AssignedLicensesQuerySet(self._parent._client)._coerce_objects(args)
+            AssignedLicensesQuerySet(self._parent._client)._coerce_objects(
+                args, key="sku_id"
+            )
         )
         if not objects:
             return
@@ -133,7 +135,7 @@ class AssignedLicensesQuerySetProxy:
                     {
                         "id": str(i),
                         "method": "POST",
-                        "url": f"{u._endpoint}/assignLicense",
+                        "url": f"{u.path}/assignLicense",
                         "headers": {"Content-Type": "application/json"},
                         "body": {
                             "addLicenses": [
@@ -160,7 +162,9 @@ class AssignedLicensesQuerySetProxy:
 
         c = self._parent._client
         objects = list(
-            AssignedLicensesQuerySet(self._parent._client)._coerce_objects(args)
+            AssignedLicensesQuerySet(self._parent._client)._coerce_objects(
+                args, key="sku_id"
+            )
         )
         if not objects:
             return
@@ -173,7 +177,7 @@ class AssignedLicensesQuerySetProxy:
                     {
                         "id": str(i),
                         "method": "POST",
-                        "url": f"{u._endpoint}/assignLicense",
+                        "url": f"{u.path}/assignLicense",
                         "headers": {"Content-Type": "application/json"},
                         "body": {
                             "addLicenses": [],
@@ -207,7 +211,7 @@ class GroupsQuerySet(QuerySet["Group"]):
                     {
                         "id": str(i),
                         "method": "POST",
-                        "url": f"{g.members._endpoint}/$ref",
+                        "url": f"{g.members.path}/$ref",
                         "headers": {"Content-Type": "application/json"},
                         "body": {
                             "@odata.id": f"{c.base_url}/directoryObjects/{obj.directory_object_id}"
@@ -234,7 +238,7 @@ class GroupsQuerySet(QuerySet["Group"]):
                     {
                         "id": str(i),
                         "method": "DELETE",
-                        "url": f"{g.members._endpoint}/{obj.directory_object_id}/$ref",
+                        "url": f"{g.members.path}/{obj.directory_object_id}/$ref",
                     }
                 )
             resp = await c.post("/$batch", body={"requests": requests})
@@ -245,11 +249,11 @@ class GroupsQuerySet(QuerySet["Group"]):
     #         otype = item.get("@odata.type")
     #         if otype and otype.lower() != "#microsoft.graph.group":
     #             continue
-    #         yield self.model_class(graph_data=item, qs=self)
+    #         yield self.model_class(graph_data=item, jqs=self)
 
 
 class MemberOfQuerySet(QuerySet["DirectoryObject"]):
-    endpoint = "/memberOf"
+    PATH = "/memberOf"
     _ODATA_TYPE_MAP = {
         "#microsoft.graph.group": "Group",
         "#microsoft.graph.directoryrole": "DirectoryRole",
@@ -269,9 +273,7 @@ class MemberOfQuerySet(QuerySet["DirectoryObject"]):
 
     def make_from_graph(self, data: dict[str, Any]) -> DirectoryObject:
         model_class = self._resolve_model_class(data)
-        return model_class.from_graph(
-            data, client=self._client, endpoint=self._endpoint
-        )
+        return model_class.from_graph(data, client=self._client, path=self.path)
 
     @property
     def groups(self) -> "GroupsQuerySet":
@@ -289,7 +291,7 @@ class MemberOfQuerySet(QuerySet["DirectoryObject"]):
 
         return GroupsQuerySet(
             self._client,
-            endpoint=f"{self._endpoint}/microsoft.graph.group",
+            path=f"{self.path}/microsoft.graph.group",
             model_class=cast(type["Group"], get_model_class("Group")),
             obj=parent_user,
             cached_data=cached,

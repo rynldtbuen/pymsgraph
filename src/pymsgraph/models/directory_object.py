@@ -10,4 +10,4 @@ class DirectoryObject(Model):
     https://learn.microsoft.com/en-us/graph/api/resources/directoryobject?view=graph-rest-1.0
     """
 
-    endpoint = "/directoryObjects"
+    PATH = "/directoryObjects"

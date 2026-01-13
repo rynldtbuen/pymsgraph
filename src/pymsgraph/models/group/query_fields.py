@@ -7,4 +7,4 @@ if TYPE_CHECKING:
 
 
 class MembersQuerySet(QuerySet["User"]):
-    endpoint = "/members"
+    PATH = "/members"

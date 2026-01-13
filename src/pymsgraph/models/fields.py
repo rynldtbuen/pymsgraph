@@ -77,7 +77,7 @@ class Field(BaseField, Generic[_T]):
         return obj._data.get(self.name)
 
     def __set__(self, obj: "Model", value: Any) -> None:
-        if (obj.read_only or self.read_only) and not obj._initializing:
+        if (self.read_only or obj.READ_ONLY) and not obj._initializing:
             raise AttributeError(f"{self.name} is read-only")
 
         prev_val = self.__get__(obj)
@@ -285,13 +285,13 @@ class QuerySetField(Field["_Tqs"]):
         self,
         queryset_class: type["_Tqs"],
         *,
-        endpoint: str | None = None,
+        path: str | None = None,
         model_class: "type[Model] | str | None" = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self.queryset_class = queryset_class
-        self.endpoint = endpoint
+        self.path = path
         qs_model_class: type[Model] | None = getattr(
             queryset_class, "model_class", None
         )
@@ -318,12 +318,12 @@ class QuerySetField(Field["_Tqs"]):
 
         queryset_class = self.queryset_class
 
-        endpoint = self.endpoint or queryset_class.endpoint or model_class.endpoint
-        if endpoint is None:
-            raise ValueError(f"{type(self)} endpoint is missing.")
-        endpoint = f"{obj._endpoint}/{endpoint.lstrip('/')}"
+        path = self.path or queryset_class.PATH or model_class.PATH
+        if path is None:
+            raise ValueError(f"{type(self)} path is missing.")
+        path = f"{obj.path}/{path.lstrip('/')}"
 
-        kwargs = {"endpoint": endpoint, "model_class": model_class, "obj": obj}
+        kwargs = {"path": path, "model_class": model_class, "obj": obj}
         if cached_data := obj._data.get(self.name):
             kwargs["cached_data"] = cached_data
         return queryset_class(getattr(obj, "_client", None), **kwargs)

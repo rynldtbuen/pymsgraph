@@ -12,7 +12,8 @@ class LicenseUnitsDetail(Model):
     https://learn.microsoft.com/en-us/graph/api/resources/licenseunitsdetail?view=graph-rest-1.0
     """
 
-    read_only = True
+    READ_ONLY = True
+    STANDALONE = True
 
     enabled = IntegerField()
     locked_out = IntegerField()
@@ -30,7 +31,8 @@ class ServicePlanInfo(Model):
     https://learn.microsoft.com/en-us/graph/api/resources/serviceplaninfo?view=graph-rest-1.0
     """
 
-    is_read_only = True
+    READ_ONLY = True
+    STANDALONE = True
 
     applies_to = CharField()
     provisioning_status = CharField()
@@ -48,8 +50,8 @@ class SubscribedSku(Model):
     https://learn.microsoft.com/en-us/graph/api/subscribedsku-list?view=graph-rest-1.0&tabs=http
     """
 
-    is_read_only = True
-    endpoint = "/subscribedSkus"
+    READ_ONLY = True
+    PATH = "/subscribedSkus"
 
     account_name = CharField()
     account_id = CharField()

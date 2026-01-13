@@ -3,15 +3,13 @@ from __future__ import annotations
 __all__ = ["Model"]
 
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Self, TypeVar
+from typing import TYPE_CHECKING, Any, Self
 
-from pymsgraph.models.fields import CharField, Field, BaseField
+from pymsgraph.models.fields import CharField, Field
 from pymsgraph.utils import to_snake_case
 
 if TYPE_CHECKING:
     from pymsgraph.client import Client
-
-_Tf = TypeVar("_Tf", bound=BaseField)
 
 
 class Model:
@@ -19,15 +17,17 @@ class Model:
     FIELD_NAME_MAP: dict[str, str]
     WRITE_ON_FIELDS: frozenset[str]
     DEFAULT_SELECT_FIELDS: tuple[str, ...]
+    SEARCH_FIELD: str | None = None
+    ORDER_BY_FIELDS: tuple[str, ...] | None
+    HAS_ID: bool = True
+    PATH: str | None = None
+    READ_ONLY: bool = False
 
-    read_only: bool = False
-    endpoint: str | None = None
-    standalone: bool = False
-
-    id = CharField(select_default=True)
+    id = CharField(read_only=True, select_default=True)
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
+
         fields: dict[str, Field] = {}
         required_fields: set[str] = set()
         field_name_map: dict[str, str] = {}
@@ -74,18 +74,31 @@ class Model:
         self,
         *,
         client: "Client | None" = None,
-        endpoint: str | None = None,
+        path: str | None = None,
         **kwargs: Any,
     ) -> None:
         self._data: dict[str, Any] = {}
         self._graph_data: dict[str, Any] = {}
         self._dirty: set[str] = set()
-        self._args: tuple[Any, ...] = (client, endpoint or self.endpoint)
+        self._args: tuple[Any, ...] = (client, path or self.PATH)
 
         self._initializing = True
         for k, v in kwargs.items():
             setattr(self, k, v)
         self._initializing = False
+
+    @property
+    def path(self) -> str:
+        if self.HAS_ID is None:
+            raise ValueError(f"{type(self).__name__} does not support item path")
+        # has_id = self.HAS_ID
+        # if has_id is None:
+        #     raise AttributeError(
+        #         f"{type(self).__name__} object has no attribute '{self.HAS_ID}'"
+        #     )
+        if e := self._args[1]:
+            return f"{e}/{self.id}"
+        raise AttributeError(f"{type(self).__name__} object has no attribute 'path'")
 
     def to_dict(self) -> dict[str, Any]:
         return {k: getattr(self, k, None) for k in self.FIELDS}
@@ -108,13 +121,15 @@ class Model:
         return data
 
     async def update(self) -> bool:
+        if self.READ_ONLY:
+            raise ValueError(f"{type(self).__name__} does not support update")
         if self.id is None:
             raise ValueError("id is required to update this object.")
 
         if not (body := self.serialize()):
             return False
 
-        await self._client.patch(self._endpoint, body=body)
+        await self._client.patch(self.path, body=body)
         self._dirty.clear()
         return True
 
@@ -127,16 +142,12 @@ class Model:
         data: dict[str, Any],
         *,
         client: "Client | None" = None,
-        endpoint: str | None = None,
+        path: str | None = None,
     ) -> Self:
         data = deepcopy(data)
-        obj = cls(
-            client=client,
-            endpoint=endpoint or cls.endpoint,
-        )
+        obj = cls(client=client, path=path or cls.PATH)
 
         obj._initializing = True
-
         for graph_attr_name, val in data.items():
             py_attr_name = to_snake_case(graph_attr_name)
             if cls.FIELDS.get(py_attr_name):
@@ -151,16 +162,6 @@ class Model:
         if c := self._args[0]:
             return c
         raise AttributeError(f"{type(self).__name__} object has no attribute '_client'")
-
-    @property
-    def _endpoint(self) -> str:
-        if self.id is None:
-            raise AttributeError(f"{type(self).__name__} object has no attribute 'id'")
-        if e := self._args[1]:
-            return f"{e}/{self.id}"
-        raise AttributeError(
-            f"{type(self).__name__} object has no attribute '_endpoint'"
-        )
 
     def _validate_for_create(self) -> None:
         missing: list[str] = []
@@ -178,3 +179,11 @@ class Model:
                             missing.append(name)
         if missing:
             raise ValueError(f"Missing required fields: {', '.join(missing)}")
+
+
+class PropertyModel(Model):
+    HAS_ID = False
+
+
+class ReadOnlyModel(Model):
+    READ_ONLY = True

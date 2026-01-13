@@ -10,4 +10,4 @@ class DirectoryRole(DirectoryObject):
     https://learn.microsoft.com/en-us/graph/api/resources/directoryrole?view=graph-rest-1.0
     """
 
-    endpoint = "/directoryRoles"
+    PATH = "/directoryRoles"

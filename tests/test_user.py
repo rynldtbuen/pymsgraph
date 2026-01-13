@@ -64,7 +64,7 @@ async def test_qs_create(make_client: "MakeClient"):
     assert u.user_principal_name == "alice@example.com"
     assert u.mail == "alice@example.com"
     assert u.account_enabled is True
-    assert u._endpoint == "/users/123"
+    assert u.path == "/users/123"
     assert u._dirty == set()
     assert u.password_profile is None
 
@@ -104,7 +104,7 @@ async def test_update(make_client: "MakeClient"):
     saved = await user.update()
     assert saved is True
     assert user._dirty == set()
-    assert user._endpoint == "/users/123"
+    assert user.path == "/users/123"
     assert len(r) == 1
 
 
@@ -160,7 +160,7 @@ def test_field_assigned_licenses(make_client: "MakeClient") -> None:
 
     qs = u.assigned_licenses
     assert isinstance(qs, AssignedLicensesQuerySet)
-    assert qs._endpoint == "/users/u1/assignLicense"
+    assert qs.path == "/users/u1/assignLicense"
     assert qs._model_class is AssignedLicense
 
 
@@ -443,12 +443,12 @@ def test_field_member_of_groups(make_client: "MakeClient") -> None:
 
     member_of_qs: MemberOfQuerySet = u.member_of
     assert isinstance(member_of_qs, MemberOfQuerySet)
-    assert member_of_qs._endpoint == "/users/u1/memberOf"
+    assert member_of_qs.path == "/users/u1/memberOf"
     assert member_of_qs._model_class is DirectoryObject
 
     groups_qs: GroupsQuerySet = u.member_of.groups
     assert isinstance(groups_qs, GroupsQuerySet)
-    assert groups_qs._endpoint == "/users/u1/memberOf/microsoft.graph.group"
+    assert groups_qs.path == "/users/u1/memberOf/microsoft.graph.group"
     assert groups_qs._model_class is Group
 
 
