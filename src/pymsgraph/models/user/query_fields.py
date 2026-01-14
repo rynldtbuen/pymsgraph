@@ -10,7 +10,6 @@ from pymsgraph.utils import get_model_class
 from .model_fields import AssignedLicense, AssignedPlans
 
 if TYPE_CHECKING:
-    from pymsgraph.models.directory_object import DirectoryObject
     from pymsgraph.models.group import Group
     from pymsgraph.models.user import User, UserQuerySet
 
@@ -288,6 +287,8 @@ class MemberOfQuerySet(QuerySet["DirectoryObject"]):
         "#microsoft.graph.directoryRole": "DirectoryRole",
         "#microsoft.graph.administrativeUnit": "AdministrativeUnit",
     }
+
+    model_class = DirectoryObject
 
     def _resolve_model_class(self, data: dict[str, Any]) -> type[DirectoryObject]:
         if (odata_type := data.get("@odata.type")) is None:

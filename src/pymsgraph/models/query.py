@@ -45,7 +45,6 @@ class QuerySet(Generic[_Tm]):
         self._all: bool = False
         self._kwargs: dict[str, Any] = kwargs
         self._seeded_objects: list[_Tm] | None = None
-        self._prefetch_related: set[str] = set()
 
     @property
     def path(self) -> str:
@@ -101,20 +100,18 @@ class QuerySet(Generic[_Tm]):
 
         return qs
 
-    def order_by(self, *args: str) -> Self:
-        if not args:
+    def order_by(self, *fields: str) -> Self:
+        if not fields:
             return self
-
-        allowed = getattr(self._model_class, "ORDER_BY_FIELDS", None)
-        if not allowed:
-            raise ValueError(f"{self._model_class.__name__} does not support order_by")
 
         qs = self._clone()
         expressions = qs._params.setdefault("$orderby", [])
 
-        for field in args:
+        for field in fields:
             normalized = field[1:] if field.startswith("-") else field
-            if normalized not in allowed:
+            if (field_obj := self._model_class.FIELDS.get(normalized)) is None:
+                raise ValueError(f"Unkown field: {normalized!r}")
+            elif not field_obj.order_by:
                 raise ValueError(f"Unsupported order_by field: {normalized!r}")
             expr = (field,)
             if field.startswith("-"):
@@ -177,20 +174,25 @@ class QuerySet(Generic[_Tm]):
         qs._headers["ConsistencyLevel"] = "eventual"
         return qs
 
-    def prefetch(self, *fields: str) -> Self:
-        """
-        Prefetch related collections for the current queryset results.
-        """
+    def prefetch(self, *fields: str) -> "QuerySet[_Tm]":
         if not fields:
             return self
-        supported = getattr(self.model_class, "prefetch_fields", set())
-        for f in fields:
-            if f not in supported:
-                raise ValueError(
-                    f"{self._model_class.__name__} does not support select_related({f!r})"
-                )
+
+        from pymsgraph.models.fields import QuerySetField
+
         qs = self._clone()
-        qs._prefetch_related = self._prefetch_related.union(fields)
+        prefetch_fields = set(qs._kwargs.get("prefetch", []))
+        for name in fields:
+            field_obj = self._model_class.FIELDS.get(name)
+            if field_obj is None:
+                raise ValueError(f"Unknown field {name!r}")
+            if not isinstance(field_obj, QuerySetField):
+                raise ValueError(f"{name!r} is not a related QuerySetField")
+            if not field_obj.prefetch:
+                raise ValueError(f"{name!r} does not support prefetch")
+            if name not in prefetch_fields:
+                prefetch_fields.add(name)
+        qs._kwargs["prefetch"] = prefetch_fields
         return qs
 
     def iterator(self, *, page_size: int | None = None) -> "Paginator[_Tm]":
@@ -198,9 +200,7 @@ class QuerySet(Generic[_Tm]):
             raise ValueError("Paginator is not available for seeded querysets")
         if (p := self._paginator) is None:
             # ctx = Context.make(self._ctx, queryset=self)
-            p = Paginator[_Tm](
-                self, page_size=page_size or self.page_size, **self._kwargs
-            )
+            p = Paginator[_Tm](self, page_size=page_size or self.page_size)
             self._paginator = p
         return p
 
@@ -400,6 +400,47 @@ class QuerySet(Generic[_Tm]):
             # rethrow original error for clarity
             raise
 
+    async def _prefetch_related(self, objects: list[_Tm], fields: list[str]) -> None:
+        if not objects or not fields:
+            return
+
+        requests: list[dict[str, Any]] = []
+        mapping: dict[str, tuple[_Tm, str]] = {}
+        req_id = 1
+
+        for obj in objects:
+            for field_name in fields:
+                qs = getattr(obj, field_name)
+                if not hasattr(qs, "path"):
+                    continue
+                req_id_str = str(req_id)
+                requests.append(
+                    {
+                        "id": req_id_str,
+                        "method": "GET",
+                        "url": qs.path,
+                    }
+                )
+                mapping[req_id_str] = (obj, field_name)
+                req_id += 1
+
+        for chunk in utils.chunks(requests, 20):
+            resp = await self._client.post("/$batch", body={"requests": chunk})
+            utils.raise_batch_errors(resp, action="prefetch related")
+            for r in resp.get("responses", []) or []:
+                rid = str(r.get("id"))
+                obj_field = mapping.get(rid)
+                if not obj_field:
+                    continue
+                obj, field_name = obj_field
+                body = r.get("body") or {}
+                obj._data[field_name] = body.get("value", [])
+                if hasattr(obj, "_prefetch_meta"):
+                    obj._prefetch_meta[field_name] = {
+                        "next_link": body.get("@odata.nextLink"),
+                        "count": body.get("@odata.count"),
+                    }
+
     def _clone(self) -> Self:
         obj = self.__class__(
             self._client, path=self.path, model_class=self._model_class
@@ -541,18 +582,19 @@ class QuerySet(Generic[_Tm]):
 
 class Paginator(Generic[_Tm]):
     def __init__(
-        self, queryset: QuerySet[_Tm], *, page_size: int | None = None, **kwargs: Any
+        self, queryset: QuerySet[_Tm], *, page_size: int | None = None
     ) -> None:
+        qs_kwargs = queryset._kwargs
+        self._qs_kwargs = qs_kwargs
+        self._queryset = queryset
+
         self._cached_objects: dict[int, list[_Tm]] = {}
-        self._cached_count: int | None = None
+        self._cached_count: int | None = qs_kwargs.get("prefetch_count")
         self._page_size = page_size or 50
         self._current_page_number: int = 1
-        self._next_link: str | None = None
+        self._next_link: str | None = qs_kwargs.get("prefetch_next_link")
 
-        self._queryset = queryset
-        self._kwargs = kwargs
-
-        cached_data = kwargs.get("cached_data")
+        cached_data = qs_kwargs.get("cached_data")
         if cached_data is not None:
             objects = self._cached_objects.setdefault(1, [])
             for data in cached_data:
@@ -653,6 +695,12 @@ class Paginator(Generic[_Tm]):
         for data in response.get("value", []):
             obj = queryset.make_from_graph(data)
             objects.append(obj)
+
+        prefetch_fields = self._qs_kwargs.get("prefetch", [])
+        if prefetch_fields:
+            await queryset._prefetch_related(objects, prefetch_fields)
+
+        for obj in objects:
             yield obj
 
         # increase _current_page_number only if page_number is greater than.

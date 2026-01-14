@@ -18,10 +18,9 @@ class Model:
     WRITE_ON_FIELDS: frozenset[str]
     DEFAULT_SELECT_FIELDS: tuple[str, ...]
     SEARCH_FIELD: str | None = None
-    ORDER_BY_FIELDS: tuple[str, ...] | None
     HAS_ID: bool = True
-    PATH: str | None = None
     READ_ONLY: bool = False
+    PATH: str | None = None
 
     id = CharField(read_only=True, select_default=True)
 
@@ -80,6 +79,7 @@ class Model:
         self._data: dict[str, Any] = {}
         self._graph_data: dict[str, Any] = {}
         self._dirty: set[str] = set()
+        self._prefetch_meta: dict[str, dict[str, Any]] = {}
         self._args: tuple[Any, ...] = (client, path or self.PATH)
 
         self._initializing = True

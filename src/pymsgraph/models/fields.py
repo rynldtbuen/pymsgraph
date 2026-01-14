@@ -20,7 +20,6 @@ __all__ = [
     "ListField",
     "ModelField",
     "QuerySetField",
-    "BaseField",
 ]
 
 _T = TypeVar("_T")
@@ -28,10 +27,7 @@ _Tm = TypeVar("_Tm", bound="Model")
 _Tqs = TypeVar("_Tqs", bound="QuerySet")
 
 
-class BaseField: ...
-
-
-class Field(BaseField, Generic[_T]):
+class Field(Generic[_T]):
     def __init__(
         self,
         *,
@@ -40,6 +36,7 @@ class Field(BaseField, Generic[_T]):
         read_only: bool = False,
         write_only: bool = False,
         select_default: bool = False,
+        order_by: bool = False,
         graph_attr_name: str | None = None,
     ) -> None:
         self.name: str
@@ -49,6 +46,7 @@ class Field(BaseField, Generic[_T]):
         self.read_only: bool = read_only
         self.write_only: bool = write_only
         self.select_default: bool = select_default
+        self.order_by = order_by
 
         if read_only and write_only:
             raise ValueError(
@@ -209,7 +207,7 @@ class DateTimeField(Field[datetime]):
 
 
 class ListField(Field[list[Any]]):
-    def __init__(self, item_type: type | None = None, **kwargs: Any) -> None:
+    def __init__(self, item_type: type = str, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.item_type = item_type
 
@@ -287,11 +285,13 @@ class QuerySetField(Field["_Tqs"]):
         *,
         path: str | None = None,
         model_class: "type[Model] | str | None" = None,
+        prefetch: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self.queryset_class = queryset_class
         self.path = path
+        self.prefetch = prefetch
         qs_model_class: type[Model] | None = getattr(
             queryset_class, "model_class", None
         )
@@ -330,4 +330,10 @@ class QuerySetField(Field["_Tqs"]):
         kwargs = {"path": path, "model_class": model_class, "obj": obj}
         if cached_data := obj._data.get(self.name):
             kwargs["cached_data"] = cached_data
+        if hasattr(obj, "_prefetch_meta"):
+            meta = obj._prefetch_meta.get(self.name, {})
+            if meta.get("next_link"):
+                kwargs["prefetch_next_link"] = meta["next_link"]
+            if meta.get("count") is not None:
+                kwargs["prefetch_count"] = int(meta["count"])
         return queryset_class(getattr(obj, "_client", None), **kwargs)

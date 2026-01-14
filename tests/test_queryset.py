@@ -1,3 +1,6 @@
+import json
+
+import httpx
 import pytest
 
 from pymsgraph.models.query import Q
@@ -147,3 +150,56 @@ async def test_with_objects_clean_params(users_qs) -> None:
     assert seeded._params == {}
     items = [u async for u in seeded]
     assert [u.id for u in items] == ["u1", "u2"]
+
+
+@pytest.mark.asyncio
+async def test_prefetch_members_populates_cache(make_client):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1.0/groups":
+            return httpx.Response(200, json={"value": [{"id": "g1"}]})
+        if request.method == "POST" and request.url.path == "/v1.0/$batch":
+            body = json.loads(request.content.decode())
+            assert body.get("requests") == [
+                {"id": "1", "method": "GET", "url": "/groups/g1/members"}
+            ]
+            return httpx.Response(
+                200,
+                json={
+                    "responses": [
+                        {
+                            "id": "1",
+                            "status": 200,
+                            "body": {
+                                "value": [
+                                    {
+                                        "@odata.type": "#microsoft.graph.user",
+                                        "id": "u1",
+                                    }
+                                ],
+                                "@odata.nextLink": "https://graph.microsoft.com/v1.0/groups/g1/members?$skip=1",
+                                "@odata.count": 2,
+                            },
+                        }
+                    ]
+                },
+            )
+
+        if request.method == "GET" and request.url.path == "/v1.0/groups/g1/members":
+            raise AssertionError("members should be served from cache")
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    c, _ = make_client(handler)
+    groups = [g async for g in c.groups.prefetch("members")]
+    assert len(groups) == 1
+    group = groups[0]
+
+    members_qs = group.members
+    paginator = members_qs.iterator()
+    assert (
+        paginator._next_link
+        == "https://graph.microsoft.com/v1.0/groups/g1/members?$skip=1"
+    )
+    assert paginator._cached_count == 2
+
+    members = [m async for m in members_qs]
+    assert [m.id for m in members] == ["u1"]
