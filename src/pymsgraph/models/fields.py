@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload, override
 
-from pymsgraph.models import query
+# from pymsgraph.models import query
 from pymsgraph.utils import get_model_class, to_camel_case
 
 if TYPE_CHECKING:
@@ -320,8 +320,12 @@ class QuerySetField(Field["_Tqs"]):
 
         path = self.path or queryset_class.PATH or model_class.PATH
         if path is None:
-            raise ValueError(f"{type(self)} path is missing.")
-        path = f"{obj.path}/{path.lstrip('/')}"
+            if not model_class.HAS_ID:
+                path = self.path
+            else:
+                raise ValueError(f"{type(self)} path is missing.")
+        else:
+            path = f"{obj.path}/{path.lstrip('/')}"
 
         kwargs = {"path": path, "model_class": model_class, "obj": obj}
         if cached_data := obj._data.get(self.name):

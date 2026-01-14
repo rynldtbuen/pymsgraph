@@ -290,7 +290,8 @@ class MemberOfQuerySet(QuerySet["DirectoryObject"]):
     }
 
     def _resolve_model_class(self, data: dict[str, Any]) -> type[DirectoryObject]:
-        odata_type = (data.get("@odata.type") or "").lower()
+        if (odata_type := data.get("@odata.type")) is None:
+            raise RuntimeError("@odata_type is required from graph data.")
         model_name = self._ODATA_TYPE_MAP.get(odata_type)
         if not model_name:
             raise RuntimeError(f"Unsupported member of model class, '{odata_type}'")

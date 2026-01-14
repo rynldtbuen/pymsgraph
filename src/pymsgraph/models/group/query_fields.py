@@ -10,8 +10,6 @@ if TYPE_CHECKING:
 
 
 class UsersQuerySet(QuerySet["User"]):
-    PATH = "/microsoft.graph.user"
-
     def make_from_graph(self, data: dict[str, Any]) -> "User":
         model_class = cast(type["User"], get_model_class("User"))
         return model_class.from_graph(data, client=self._client, path=model_class.PATH)
