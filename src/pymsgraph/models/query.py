@@ -43,6 +43,7 @@ class QuerySet(Generic[_Tm]):
         self._paginator: Paginator[_Tm] | None = None
         self._all: bool = False
         self._kwargs: dict[str, Any] = kwargs
+        self._seeded_objects: list[_Tm] | None = None
 
     @property
     def path(self) -> str:
@@ -62,6 +63,24 @@ class QuerySet(Generic[_Tm]):
                 expressions.append(expr)
         for key, value in kwargs.items():
             expr = qs._compile_filter_expr(key, value)
+            if expr not in expressions:
+                expressions.append(expr)
+
+        return qs
+
+    def exclude(self, *q_objects: "Q", **kwargs: Any) -> Self:
+        if not q_objects and not kwargs:
+            return self
+
+        qs = self._clone()
+        expressions: list[str] = qs._params.setdefault("$filter", [])
+
+        for q_obj in q_objects:
+            expr = f"not ({q_obj.to_odata_query()})"
+            if expr not in expressions:
+                expressions.append(expr)
+        for key, value in kwargs.items():
+            expr = f"not ({qs._compile_filter_expr(key, value)})"
             if expr not in expressions:
                 expressions.append(expr)
 
@@ -159,6 +178,8 @@ class QuerySet(Generic[_Tm]):
     def prefetch(self, *fields: str) -> "QuerySet[_Tm]": ...
 
     def iterator(self, *, page_size: int | None = None) -> "Paginator[_Tm]":
+        if self._seeded_objects is not None:
+            raise ValueError("Paginator is not available for seeded querysets")
         if (p := self._paginator) is None:
             # ctx = Context.make(self._ctx, queryset=self)
             p = Paginator[_Tm](
@@ -241,6 +262,80 @@ class QuerySet(Generic[_Tm]):
 
         return total_updated
 
+    async def values(self, *fields: str) -> list[dict[str, Any]]:
+        """
+        Return a list of dicts for selected fields.
+        """
+        if not fields:
+            raise ValueError("values() requires at least one field")
+
+        valid_fields: list[str] = []
+        for name in fields:
+            if name not in self._model_class.FIELDS:
+                raise ValueError(f"Unknown field {name!r}")
+            valid_fields.append(name)
+
+        selected = set(self._params.get("$select", []))
+        if selected.issuperset(valid_fields):
+            objects = self.all()
+        else:
+            objects = self.select(*valid_fields).all()
+
+        return [
+            {name: getattr(o, name) for name in valid_fields} async for o in objects
+        ]
+
+    def with_objects(
+        self,
+        *args: str | _Tm | "QuerySet[_Tm]",
+        key: str = "id",
+    ) -> Self:
+        """
+        Return a queryset seeded with preloaded objects.
+        """
+        qs = self.__class__(
+            self._client, path=self.path, model_class=self._model_class
+        )
+        objects = list(qs._coerce_objects(args, key=key))
+        if not objects:
+            return qs
+
+        qs._seeded_objects = objects
+        return qs
+
+    def make(self, **kwargs: Any) -> _Tm:
+        return self._model_class(**kwargs, client=self._client, path=self.path)
+
+    def make_from_graph(self, data: dict[str, Any]):
+        return self._model_class.from_graph(data, client=self._client, path=self.path)
+
+    def __aiter__(self) -> AsyncIterator[_Tm]:
+        """Execute the query and fetch results"""
+        if self._seeded_objects is not None:
+            async def _iter_seeded() -> AsyncIterator[_Tm]:
+                for obj in self._seeded_objects or []:
+                    yield obj
+
+            return _iter_seeded()
+        paginator = self.iterator()
+        if not self._all:
+            return paginator._fetch_page(1)
+        return paginator.all()
+
+    @property
+    def _client(self) -> "Client":
+        if c := self._args[0]:
+            return c
+        raise AttributeError(f"{type(self).__name__} object has no attribute '_client'")
+
+    @property
+    def _model_class(self) -> type[_Tm]:
+        if c := self._args[2]:
+            return c
+        raise AttributeError(
+            f"{type(self).__name__} object has no attribute '_model_class'"
+        )
+
     async def _bulk_patch(self, iterable: list[_Tm], payload: dict[str, Any]) -> None:
         requests: list[dict[str, Any]] = []
         for i, obj in enumerate(iterable, start=1):
@@ -263,39 +358,16 @@ class QuerySet(Generic[_Tm]):
             # rethrow original error for clarity
             raise
 
-    def make(self, **kwargs: Any) -> _Tm:
-        return self._model_class(**kwargs, client=self._client, path=self.path)
-
-    def make_from_graph(self, data: dict[str, Any]):
-        return self._model_class.from_graph(data, client=self._client, path=self.path)
-
-    def __aiter__(self) -> AsyncIterator[_Tm]:
-        """Execute the query and fetch results"""
-        paginator = self.iterator()
-        if not self._all:
-            return paginator._fetch_page(1)
-        return paginator.all()
-
-    @property
-    def _client(self) -> "Client":
-        if c := self._args[0]:
-            return c
-        raise AttributeError(f"{type(self).__name__} object has no attribute '_client'")
-
-    @property
-    def _model_class(self) -> type[_Tm]:
-        if c := self._args[2]:
-            return c
-        raise AttributeError(
-            f"{type(self).__name__} object has no attribute '_model_class'"
-        )
-
     def _clone(self) -> Self:
         obj = self.__class__(
             self._client, path=self.path, model_class=self._model_class
         )
         obj._params = deepcopy(self._params)
         obj._headers = dict(self._headers)
+        obj._kwargs = dict(self._kwargs)
+        obj._all = self._all
+        if self._seeded_objects is not None:
+            obj._seeded_objects = list(self._seeded_objects)
         return obj
 
     def _compile_filter_expr(self, key: str, value: Any) -> str:
@@ -362,7 +434,7 @@ class QuerySet(Generic[_Tm]):
                 params["$select"] = sorted(default_fields)
 
         if values := params.pop("$select", None):
-            if "id" not in values:
+            if self._model_class.HAS_ID and "id" not in values:
                 values = ["id"] + list(values)
             compiled_params["$select"] = ",".join([to_camel_case(v) for v in values])
 

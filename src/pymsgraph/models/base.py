@@ -32,7 +32,7 @@ class Model:
         required_fields: set[str] = set()
         field_name_map: dict[str, str] = {}
         write_fields: set[str] = set()
-        default_select: list[str] = []
+        default_select: set[str] = set()
 
         for base in cls.__mro__[1:]:
             base_fields = getattr(base, "FIELDS", None)
@@ -50,7 +50,7 @@ class Model:
                     if attr.required:
                         required_fields.add(name)
                     if attr.select_default:
-                        default_select.append(name)
+                        default_select.add(name)
 
         for name, attr in cls.__dict__.items():
             if isinstance(attr, Field):
@@ -62,7 +62,7 @@ class Model:
                 if attr.write_only:
                     write_fields.add(name)
                 if attr.select_default:
-                    default_select.append(name)
+                    default_select.add(name)
 
         cls.FIELDS = fields
         cls.REQUIRED_FIELDS = frozenset(required_fields)
@@ -89,13 +89,10 @@ class Model:
 
     @property
     def path(self) -> str:
-        if self.HAS_ID is None:
-            raise ValueError(f"{type(self).__name__} does not support item path")
-        # has_id = self.HAS_ID
-        # if has_id is None:
-        #     raise AttributeError(
-        #         f"{type(self).__name__} object has no attribute '{self.HAS_ID}'"
-        #     )
+        if not self.HAS_ID:
+            raise ValueError(f"{type(self).__name__} does not have a resource path")
+        if self.id is None:
+            raise AttributeError(f"{type(self).__name__} object has no attribute, 'id'")
         if e := self._args[1]:
             return f"{e}/{self.id}"
         raise AttributeError(f"{type(self).__name__} object has no attribute 'path'")
@@ -175,7 +172,7 @@ class Model:
                             self._data[name] = d
                             continue
                     else:
-                        if not val:
+                        if val is None:
                             missing.append(name)
         if missing:
             raise ValueError(f"Missing required fields: {', '.join(missing)}")

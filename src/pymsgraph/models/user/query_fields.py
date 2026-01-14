@@ -195,6 +195,9 @@ class AssignedPlansQuerySet(QuerySet[AssignedPlans]):
 
 
 class GroupsQuerySet(QuerySet["Group"]):
+    def make_from_graph(self, data: dict[str, Any]) -> "Group":
+        model_class = cast(type["Group"], get_model_class("Group"))
+        return model_class.from_graph(data, client=self._client, path=model_class.PATH)
 
     async def add(self, *args: "str | Group  | QuerySet[Group]") -> None:
         """
@@ -244,20 +247,46 @@ class GroupsQuerySet(QuerySet["Group"]):
             resp = await c.post("/$batch", body={"requests": requests})
             utils.raise_batch_errors(resp, action="remove user from groups")
 
-    # def _iter_objects(self, data: dict[str, Any]) -> Iterator["Group"]:
-    #     for item in data.get("value", []):
-    #         otype = item.get("@odata.type")
-    #         if otype and otype.lower() != "#microsoft.graph.group":
-    #             continue
-    #         yield self.model_class(graph_data=item, jqs=self)
+    async def copy_to(self, *args: "str | User | QuerySet[User]") -> None:
+        """
+        Copy groups in this queryset to other user(s).
+        """
+        c = self._client
+        users = list(c.users._coerce_objects(args))
+        if not users:
+            return
+
+        groups = [g async for g in self if g.group_type != g.DISTRIBUTION]
+        if not groups:
+            return
+
+        for user in users:
+            if not getattr(user, "id", None):
+                raise ValueError("User id is required for copy_to")
+            for chunk_groups in utils.chunks(groups, 20):
+                requests: list[dict[str, Any]] = []
+                for i, g in enumerate(chunk_groups, start=1):
+                    requests.append(
+                        {
+                            "id": str(i),
+                            "method": "POST",
+                            "url": f"{g.members.path}/$ref",
+                            "headers": {"Content-Type": "application/json"},
+                            "body": {
+                                "@odata.id": f"{c.base_url}/directoryObjects/{user.id}"
+                            },
+                        }
+                    )
+                resp = await c.post("/$batch", body={"requests": requests})
+                utils.raise_batch_errors(resp, action="copy user groups")
 
 
 class MemberOfQuerySet(QuerySet["DirectoryObject"]):
     PATH = "/memberOf"
     _ODATA_TYPE_MAP = {
         "#microsoft.graph.group": "Group",
-        "#microsoft.graph.directoryrole": "DirectoryRole",
-        "#microsoft.graph.administrativeunit": "AdministrativeUnit",
+        "#microsoft.graph.directoryRole": "DirectoryRole",
+        "#microsoft.graph.administrativeUnit": "AdministrativeUnit",
     }
 
     def _resolve_model_class(self, data: dict[str, Any]) -> type[DirectoryObject]:
@@ -273,7 +302,7 @@ class MemberOfQuerySet(QuerySet["DirectoryObject"]):
 
     def make_from_graph(self, data: dict[str, Any]) -> DirectoryObject:
         model_class = self._resolve_model_class(data)
-        return model_class.from_graph(data, client=self._client, path=self.path)
+        return model_class.from_graph(data, client=self._client, path=model_class.PATH)
 
     @property
     def groups(self) -> "GroupsQuerySet":

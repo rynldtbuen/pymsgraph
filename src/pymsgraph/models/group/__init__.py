@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pymsgraph.models.base import Model
+from pymsgraph.models.directory_object import DirectoryObject
 from pymsgraph.models.fields import (
     BooleanField,
     CharField,
@@ -16,13 +16,17 @@ from pymsgraph.models.group.query_fields import MembersQuerySet
 from pymsgraph.models.query import QuerySet
 
 
-class Group(Model):
+class Group(DirectoryObject):
     """
     Graph group resource type
 
     https://learn.microsoft.com/en-us/graph/api/resources/group?view=graph-rest-1.0
     """
 
+    MICROSOFT365 = "microsoft365"
+    DISTRIBUTION = "distribution"
+    SECURITY = "security"
+    SECURITY_MAIL_ENABLED = "security_mail_enabled"
     PATH = "/groups"
 
     # Properties
@@ -98,6 +102,7 @@ class Group(Model):
     transitive_member_of = ListField()
     transitive_members = ListField()
 
+    @property
     def group_type(self) -> str:
         gtypes = {*(self.group_types or [])}
         has_unified = "Unified" in gtypes
@@ -107,7 +112,7 @@ class Group(Model):
         if has_unified:
             return "microsoft365"
         if mail and security:
-            return "mail_enabled_security"
+            return "security_mail_enabled"
         if security and not mail:
             return "security"
         if mail and not security:

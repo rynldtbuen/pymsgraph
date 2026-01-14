@@ -543,6 +543,58 @@ async def test_field_member_of_groups_add_remove_multiple(make_client: "MakeClie
 
 
 @pytest.mark.asyncio
+async def test_field_member_of_groups_copy_to(make_client: "MakeClient") -> None:
+    seen_batches: list[list[dict[str, Any]]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if (
+            request.method == "GET"
+            and request.url.path == "/v1.0/users/u1/memberOf/microsoft.graph.group"
+        ):
+            return httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {
+                            "id": "g1",
+                            "displayName": "Dist",
+                            "mailEnabled": True,
+                            "securityEnabled": False,
+                        },
+                        {
+                            "id": "g2",
+                            "displayName": "Sec",
+                            "mailEnabled": False,
+                            "securityEnabled": True,
+                        },
+                    ]
+                },
+            )
+        if request.method == "POST" and request.url.path == "/v1.0/$batch":
+            body = json.loads(request.content.decode())
+            seen_batches.append(body.get("requests", []))
+            return httpx.Response(200, json={"responses": [{"id": "1", "status": 204}]})
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    c, _ = make_client(handler)
+    user = c.users.make(id="u1", display_name="User One")
+
+    await user.member_of.groups.copy_to("u2")
+
+    assert len(seen_batches) == 1
+    requests = seen_batches[0]
+    assert requests == [
+        {
+            "id": "1",
+            "method": "POST",
+            "url": "/groups/g2/members/$ref",
+            "headers": {"Content-Type": "application/json"},
+            "body": {"@odata.id": "https://graph.microsoft.com/v1.0/directoryObjects/u2"},
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_qs_get_by_id(make_client: "MakeClient"):
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"

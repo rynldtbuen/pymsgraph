@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pymsgraph.models.base import Model
+from pymsgraph.models.fields import CharField
 
 
 class DirectoryObject(Model):

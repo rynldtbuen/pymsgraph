@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, override
 
 from pymsgraph import utils
-from pymsgraph.models.base import Model
+from pymsgraph.models.directory_object import DirectoryObject
 from pymsgraph.models.fields import (
     BooleanField,
     CharField,
@@ -26,7 +26,7 @@ from .query_fields import (
 )
 
 
-class User(Model):
+class User(DirectoryObject):
     """
     Graph user resource type.
 
