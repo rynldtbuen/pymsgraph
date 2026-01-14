@@ -5,13 +5,14 @@ from collections.abc import AsyncIterator, Iterable
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Generic, Iterator, Self, TypeVar
 
-from pymsgraph.utils import to_camel_case
 from pymsgraph import utils
+from pymsgraph.utils import to_camel_case
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from pymsgraph.client import Client
     from pymsgraph.models.base import Model
-    from pymsgraph.models.fields import ListField, QuerySetField
 
 __all__ = ["QuerySet", "Q"]
 
@@ -44,6 +45,7 @@ class QuerySet(Generic[_Tm]):
         self._all: bool = False
         self._kwargs: dict[str, Any] = kwargs
         self._seeded_objects: list[_Tm] | None = None
+        self._prefetch_related: set[str] = set()
 
     @property
     def path(self) -> str:
@@ -175,7 +177,21 @@ class QuerySet(Generic[_Tm]):
         qs._headers["ConsistencyLevel"] = "eventual"
         return qs
 
-    def prefetch(self, *fields: str) -> "QuerySet[_Tm]": ...
+    def prefetch(self, *fields: str) -> Self:
+        """
+        Prefetch related collections for the current queryset results.
+        """
+        if not fields:
+            return self
+        supported = getattr(self.model_class, "prefetch_fields", set())
+        for f in fields:
+            if f not in supported:
+                raise ValueError(
+                    f"{self._model_class.__name__} does not support select_related({f!r})"
+                )
+        qs = self._clone()
+        qs._prefetch_related = self._prefetch_related.union(fields)
+        return qs
 
     def iterator(self, *, page_size: int | None = None) -> "Paginator[_Tm]":
         if self._seeded_objects is not None:
@@ -285,6 +301,33 @@ class QuerySet(Generic[_Tm]):
             {name: getattr(o, name) for name in valid_fields} async for o in objects
         ]
 
+    async def to_csv(
+        self,
+        path: str | Path,
+        *,
+        field_names: Iterable[str] | None = None,
+        include_header: bool = True,
+    ) -> None:
+        import csv
+        import json
+        from pathlib import Path
+
+        field_names = field_names or self._model_class.DEFAULT_SELECT_FIELDS
+
+        out_path = Path(path)
+        with out_path.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            if include_header:
+                writer.writerow(field_names)
+            async for obj in self.all():
+                row = []
+                for f in field_names:
+                    val = getattr(obj, f, None)
+                    if isinstance(val, (dict, list)):
+                        val = json.dumps(val, ensure_ascii=True)
+                    row.append(val)
+                writer.writerow(row)
+
     def with_objects(
         self,
         *args: str | _Tm | "QuerySet[_Tm]",
@@ -293,9 +336,7 @@ class QuerySet(Generic[_Tm]):
         """
         Return a queryset seeded with preloaded objects.
         """
-        qs = self.__class__(
-            self._client, path=self.path, model_class=self._model_class
-        )
+        qs = self.__class__(self._client, path=self.path, model_class=self._model_class)
         objects = list(qs._coerce_objects(args, key=key))
         if not objects:
             return qs
@@ -312,6 +353,7 @@ class QuerySet(Generic[_Tm]):
     def __aiter__(self) -> AsyncIterator[_Tm]:
         """Execute the query and fetch results"""
         if self._seeded_objects is not None:
+
             async def _iter_seeded() -> AsyncIterator[_Tm]:
                 for obj in self._seeded_objects or []:
                     yield obj
