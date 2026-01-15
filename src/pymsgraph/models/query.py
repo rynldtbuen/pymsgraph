@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import date, datetime, timezone
+import re
 from collections.abc import AsyncIterator, Iterable
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Generic, Iterator, Self, TypeVar
@@ -787,12 +789,41 @@ class Q:
         return " AND ".join(expressions)
 
 
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_ISO_DATETIME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T")
+
+
+def _format_datetime_literal(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.isoformat().replace("+00:00", "Z")
+
+
+def _str_to_odata_literal(value: str) -> str:
+    s = value.strip()
+    if _ISO_DATE_RE.match(s):
+        return f"{s}T00:00:00Z"
+    if _ISO_DATETIME_RE.match(s):
+        if s.endswith("Z"):
+            return s
+        try:
+            dt = datetime.fromisoformat(s)
+        except ValueError:
+            return "'" + s.replace("'", "''") + "'"
+        return _format_datetime_literal(dt)
+    return "'" + s.replace("'", "''") + "'"
+
+
 PY_TO_ODATA_LITERAL: dict[str, Any] = {
     "bool": lambda x: str(x).lower(),
     "nonetype": "null",
     "int": lambda x: str(x),
     "float": lambda x: str(x),
-    "str": lambda x: "'" + x.replace("'", "''") + "'",
+    "datetime": _format_datetime_literal,
+    "date": lambda x: f"{x.isoformat()}T00:00:00Z",
+    "str": _str_to_odata_literal,
 }
 
 

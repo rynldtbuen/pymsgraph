@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload, override
 
-# from pymsgraph.models import query
 from pymsgraph.utils import get_model_class, to_camel_case
 
 if TYPE_CHECKING:
@@ -177,6 +176,26 @@ class EmailField(CharField):
 
 
 class DateTimeField(Field[datetime]):
+    @overload
+    def __get__(
+        self, obj: None, owner: type["Model"] | None = None
+    ) -> "DateTimeField": ...
+
+    @overload
+    def __get__(
+        self, obj: "Model", owner: type["Model"] | None = None
+    ) -> datetime | None: ...
+
+    def __get__(
+        self, obj: "Model | None", owner: type["Model"] | None = None
+    ) -> "DateTimeField | datetime | None":
+        if obj is None:
+            return self
+        value = obj._data.get(self.name)
+        if isinstance(value, datetime) and value.tzinfo is not None:
+            return value.astimezone()
+        return value
+
     def __set__(self, obj: "Model", value: Any) -> None:
         if value is not None:
             if isinstance(value, str):
