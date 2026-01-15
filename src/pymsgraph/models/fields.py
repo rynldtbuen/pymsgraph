@@ -179,16 +179,16 @@ class DateTimeField(Field[datetime]):
     @overload
     def __get__(
         self, obj: None, owner: type["Model"] | None = None
-    ) -> "DateTimeField": ...
+    ) -> Field[datetime]: ...
 
     @overload
     def __get__(
         self, obj: "Model", owner: type["Model"] | None = None
-    ) -> datetime | None: ...
+    ) -> datetime: ...
 
     def __get__(
         self, obj: "Model | None", owner: type["Model"] | None = None
-    ) -> "DateTimeField | datetime | None":
+    ) -> Field[datetime] | datetime | None:
         if obj is None:
             return self
         value = obj._data.get(self.name)
