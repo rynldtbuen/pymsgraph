@@ -239,20 +239,28 @@ class ListField(Field[list[Any]]):
                     f"{self.name} must be a list (got {type(value).__name__})"
                 )
             items = list(value)
-            if self.item_type is not None:
+
+            if (item_type := self.item_type) is not None:
+                from pymsgraph.models.base import Model
+
                 coerced: list[Any] = []
-                for item in items:
-                    if item is None:
+                if issubclass(item_type, Model):
+                    for item in items:
+                        item = item_type.from_graph(data=item, client=obj._client)
                         coerced.append(item)
-                        continue
-                    if not isinstance(item, self.item_type):
-                        try:
-                            item = self.item_type(item)
-                        except Exception:
-                            raise TypeError(
-                                f"{self.name} items must be {self.item_type.__name__}"
-                            ) from None
-                    coerced.append(item)
+                else:
+                    for item in items:
+                        if item is None:
+                            coerced.append(item)
+                            continue
+                        if not isinstance(item, self.item_type):
+                            try:
+                                item = self.item_type(item)
+                            except Exception:
+                                raise TypeError(
+                                    f"{self.name} items must be {self.item_type.__name__}"
+                                ) from None
+                        coerced.append(item)
                 items = coerced
             value = items
         super().__set__(obj, value)

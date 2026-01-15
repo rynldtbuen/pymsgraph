@@ -1,6 +1,6 @@
 from pathlib import Path
 from typing import ClassVar
-from pymsgraph.models.fields import CharField, IntegerField, ModelField
+from pymsgraph.models.fields import CharField, IntegerField, ListField, ModelField
 from pymsgraph.models.base import ReadOnlyModel, PropertyModel
 from pymsgraph.models.query import QuerySet
 
@@ -54,8 +54,8 @@ class SubscribedSku(ReadOnlyModel):
     capability_status = CharField()
     consumed_units = IntegerField()
     applies_to = CharField()
-    prepaid_units = ModelField(LicenseUnitsDetail)
-    service_plans = ModelField(ServicePlanInfo)
+    prepaid_units = ModelField(model_class=LicenseUnitsDetail)
+    service_plans = ListField(ServicePlanInfo)
 
     PRODUCT_NAME_BY_SKU: ClassVar[dict[str, str]] = {}
     PRODUCT_NAMES_CSV_PATH: ClassVar[Path] = (
