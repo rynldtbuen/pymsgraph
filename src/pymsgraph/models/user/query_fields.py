@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from pymsgraph import utils
 from pymsgraph.models.directory_object import DirectoryObject
-from pymsgraph.models.query import PY_TO_ODATA_QUERY, QuerySet
+from pymsgraph.models.query import QuerySet
 from pymsgraph.utils import get_model_class
 
 from .model_fields import AssignedLicense, AssignedPlans
@@ -19,7 +19,7 @@ class AssignedLicensesQuerySet(QuerySet[AssignedLicense]):
 
     async def add(
         self,
-        *args: str | AssignedLicense | QuerySet[AssignedLicense],
+        *args: "str | AssignedLicense",
         as_batch: bool = False,
     ) -> dict[str, Any] | None:
         """
@@ -76,41 +76,41 @@ class AssignedLicensesQuerySetProxy:
     def __init__(self, parent: UserQuerySet):
         self._parent = parent
 
-    def filter(self, **kwargs: Any) -> UserQuerySet:
-        exprs = self._parent._params.setdefault("$filter", [])
-        for key, value in kwargs.items():
-            if "__" in key:
-                field, lookup = key.split("__", 1)
-            else:
-                field, lookup = key, "exact"
+    # def filter(self, **kwargs: Any) -> UserQuerySet:
+    #     exprs = self._parent._params.setdefault("$filter", [])
+    #     for key, value in kwargs.items():
+    #         if "__" in key:
+    #             field, lookup = key.split("__", 1)
+    #         else:
+    #             field, lookup = key, "exact"
 
-            if field == "isnull":
-                if not isinstance(value, bool):
-                    raise ValueError(f"Value is not an instance of bool, {value!r}")
-                expr = (
-                    "assignedLicenses/$count eq 0"
-                    if value
-                    else "assignedLicenses/$count ne 0"
-                )
-                if expr not in exprs:
-                    exprs.append(expr)
-                continue
+    #         if field == "isnull":
+    #             if not isinstance(value, bool):
+    #                 raise ValueError(f"Value is not an instance of bool, {value!r}")
+    #             expr = (
+    #                 "assignedLicenses/$count eq 0"
+    #                 if value
+    #                 else "assignedLicenses/$count ne 0"
+    #             )
+    #             if expr not in exprs:
+    #                 exprs.append(expr)
+    #             continue
 
-            if field != "sku_id":
-                raise ValueError(f"Unsupported field for assignedLicenses: {field!r}")
+    #         if field != "sku_id":
+    #             raise ValueError(f"Unsupported field for assignedLicenses: {field!r}")
 
-            try:
-                func = PY_TO_ODATA_QUERY[lookup]
-            except KeyError:
-                raise ValueError(f"Unsupported lookup: {lookup!r}") from None
+    #         try:
+    #             func = PY_TO_ODATA_QUERY[lookup]
+    #         except KeyError:
+    #             raise ValueError(f"Unsupported lookup: {lookup!r}") from None
 
-            clause = func("u/skuId", value)
-            expr = f"assignedLicenses/any(u:{clause})"
-            if expr not in exprs:
-                exprs.append(expr)
-        return self._parent
+    #         clause = func("u/skuId", value)
+    #         expr = f"assignedLicenses/any(u:{clause})"
+    #         if expr not in exprs:
+    #             exprs.append(expr)
+    #     return self._parent
 
-    async def add(self, *args: str | AssignedLicense, force=False) -> None:
+    async def add(self, *args: "str | AssignedLicense", force=False) -> None:
         """
         Add license(s) to all users in this queryset.
 

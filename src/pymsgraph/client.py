@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
 
 import httpx
 
+from pymsgraph.models.subscribed_sku import SubscribedSkuQuerySet
+
 try:
     import importlib.metadata as importlib_metadata
 except ImportError:  # pragma: no cover
@@ -36,21 +38,21 @@ def _default_user_agent() -> str:
 _Tqs = TypeVar("_Tqs", bound="QuerySet")
 
 
-class QuerySetDescriptor(Generic[_Tqs]):
+class RootQuerySetDescriptor(Generic[_Tqs]):
     def __init__(self, queryset_class: type[_Tqs]) -> None:
         self.queryset_class = queryset_class
 
     @overload
     def __get__(
         self, obj: None, owner: type["Client"] | None = None
-    ) -> "QuerySetDescriptor[_Tqs]": ...
+    ) -> "RootQuerySetDescriptor[_Tqs]": ...
 
     @overload
     def __get__(self, obj: "Client", owner: type["Client"] | None = None) -> _Tqs: ...
 
     def __get__(
         self, obj: "Client | None", owner: type["Client"] | None = None
-    ) -> "_Tqs | QuerySetDescriptor[_Tqs]":
+    ) -> "_Tqs | RootQuerySetDescriptor[_Tqs]":
         if obj is None:
             return self
 
@@ -89,42 +91,6 @@ class Client:
         if default_headers:
             self.default_headers.update(dict(default_headers))
 
-    # ---- internals ----
-    def _url(self, path: str) -> str:
-        return f"{self.base_url}/{path.lstrip('/')}"
-
-    def _headers(self, headers: Mapping[str, str] | None = None) -> dict[str, str]:
-        token = self.token_provider.get_access_token(self.scopes)
-        out = dict(self.default_headers)
-        out["Authorization"] = f"Bearer {token}"
-        if headers:
-            out.update(dict(headers))
-        return out
-
-    def _raise_for_status(self, resp: httpx.Response) -> None:
-        try:
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            # Try to enrich error with Graph JSON body if present
-            detail: Any
-            try:
-                detail = resp.json()
-            except Exception:
-                detail = resp.text
-            raise httpx.HTTPStatusError(
-                f"Graph API error {resp.status_code}: {detail}: {resp.url}",
-                request=e.request,
-                response=e.response,
-            ) from None
-
-    def _json_or_none(self, resp: httpx.Response) -> Any:
-        if resp.status_code == 204:
-            return None
-        if not resp.content:
-            return None
-        return resp.json()
-
-    # ---- public API used by models/queryset ----
     async def get(
         self,
         path: str | None = None,
@@ -224,7 +190,6 @@ class Client:
         self._raise_for_status(resp)
         return self._json_or_none(resp)
 
-    # ---- lifecycle ----
     async def close(self) -> None:
         if self._owns_http:
             await self.http.aclose()
@@ -235,5 +200,40 @@ class Client:
     async def __aexit__(self, exc_type, exc, tb) -> None:
         await self.close()
 
-    users = QuerySetDescriptor(UserQuerySet)
-    groups = QuerySetDescriptor(GroupQuerySet)
+    def _url(self, path: str) -> str:
+        return f"{self.base_url}/{path.lstrip('/')}"
+
+    def _headers(self, headers: Mapping[str, str] | None = None) -> dict[str, str]:
+        token = self.token_provider.get_access_token(self.scopes)
+        out = dict(self.default_headers)
+        out["Authorization"] = f"Bearer {token}"
+        if headers:
+            out.update(dict(headers))
+        return out
+
+    def _raise_for_status(self, resp: httpx.Response) -> None:
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            # Try to enrich error with Graph JSON body if present
+            detail: Any
+            try:
+                detail = resp.json()
+            except Exception:
+                detail = resp.text
+            raise httpx.HTTPStatusError(
+                f"Graph API error {resp.status_code}: {detail}: {resp.url}",
+                request=e.request,
+                response=e.response,
+            ) from None
+
+    def _json_or_none(self, resp: httpx.Response) -> Any:
+        if resp.status_code == 204:
+            return None
+        if not resp.content:
+            return None
+        return resp.json()
+
+    users = RootQuerySetDescriptor(UserQuerySet)
+    groups = RootQuerySetDescriptor(GroupQuerySet)
+    subscribed_skus = RootQuerySetDescriptor(SubscribedSkuQuerySet)

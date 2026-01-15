@@ -1,19 +1,16 @@
 from pathlib import Path
 from typing import ClassVar
 from pymsgraph.models.fields import CharField, IntegerField, ModelField
-from pymsgraph.models.base import Model
+from pymsgraph.models.base import ReadOnlyModel, PropertyModel
 from pymsgraph.models.query import QuerySet
 
 
-class LicenseUnitsDetail(Model):
+class LicenseUnitsDetail(ReadOnlyModel, PropertyModel):
     """
     Graph licenseUnitsDetail resource type
 
     https://learn.microsoft.com/en-us/graph/api/resources/licenseunitsdetail?view=graph-rest-1.0
     """
-
-    READ_ONLY = True
-    STANDALONE = True
 
     enabled = IntegerField()
     locked_out = IntegerField()
@@ -24,15 +21,12 @@ class LicenseUnitsDetail(Model):
         return f"<LicenseUnitsDetail: enabled={self.enabled}, locked_out={self.locked_out}, suspended={self.suspended}, warning={self.warning}>"
 
 
-class ServicePlanInfo(Model):
+class ServicePlanInfo(ReadOnlyModel, PropertyModel):
     """
     Graph servicePlanInfo resource type
 
     https://learn.microsoft.com/en-us/graph/api/resources/serviceplaninfo?view=graph-rest-1.0
     """
-
-    READ_ONLY = True
-    STANDALONE = True
 
     applies_to = CharField()
     provisioning_status = CharField()
@@ -43,7 +37,7 @@ class ServicePlanInfo(Model):
         return f"<ServicePlanInfo: {self.service_plan_id}, {self.service_plan_name}>"
 
 
-class SubscribedSku(Model):
+class SubscribedSku(ReadOnlyModel):
     """
     Graph subscribedSku resource type
 
@@ -55,11 +49,11 @@ class SubscribedSku(Model):
 
     account_name = CharField()
     account_id = CharField()
-    sku_id = CharField()  # skuId
-    sku_part_number = CharField()  # skuPartNumber
-    capability_status = CharField()  # capabilityStatus
-    consumed_units = IntegerField()  # consumedUnits (int)
-    applies_to = CharField()  # appliesTo (often "User")
+    sku_id = CharField()
+    sku_part_number = CharField()
+    capability_status = CharField()
+    consumed_units = IntegerField()
+    applies_to = CharField()
     prepaid_units = ModelField(LicenseUnitsDetail)
     service_plans = ModelField(ServicePlanInfo)
 
