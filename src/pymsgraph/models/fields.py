@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload, override
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload, override
 
 from pymsgraph.utils import get_model_class, to_camel_case
 
@@ -269,11 +269,20 @@ class ListField(Field[list[Any]]):
 class ModelField(Field[_Tm]):
     def __init__(
         self,
-        model_class: type[_Tm],
+        model_class: str | type[_Tm],
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
-        self.model_class = model_class
+
+        self._model_class = model_class
+
+    @property
+    def model_class(self) -> type[_Tm]:
+        m = self._model_class
+        if isinstance(m, str):
+            m = cast(type[_Tm], get_model_class(m))
+            self._model_class = m
+        return m
 
     def __set__(self, obj: "Model", value: Any) -> None:
         if value is None:

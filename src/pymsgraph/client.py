@@ -7,14 +7,17 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
 
 import httpx
 
-from pymsgraph.models.subscribed_sku import SubscribedSkuQuerySet
-
 try:
     import importlib.metadata as importlib_metadata
 except ImportError:  # pragma: no cover
     import importlib_metadata  # type: ignore
 
-from pymsgraph.models import UserQuerySet, GroupQuerySet
+from pymsgraph.models import (
+    GroupQuerySet,
+    SiteQuerySet,
+    SubscribedSkuQuerySet,
+    UserQuerySet,
+)
 
 if TYPE_CHECKING:
     from pymsgraph.auth import TokenProvider
@@ -126,24 +129,24 @@ class Client:
         data = self._json_or_none(resp)
         return data or {}
 
-    # async def put(
-    #     self,
-    #     path: str,
-    #     *,
-    #     content: bytes | str | None = None,
-    #     params: Mapping[str, Any] | None = None,
-    #     headers: Mapping[str, str] | None = None,
-    # ) -> dict[str, Any]:
-    #     content = content.encode() if isinstance(content, str) else content
-    #     resp = await self.http.put(
-    #         self._url(path),
-    #         params=params,
-    #         content=content,
-    #         headers=self._headers(headers),
-    #     )
-    #     self._raise_for_status(resp)
-    #     data = self._json_or_none(resp)
-    #     return data or {}
+    async def put(
+        self,
+        path: str,
+        *,
+        content: bytes | str | None = None,
+        params: Mapping[str, Any] | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> dict[str, Any]:
+        content = content.encode() if isinstance(content, str) else content
+        resp = await self.http.put(
+            self._url(path),
+            params=params,
+            content=content,
+            headers=self._headers(headers),
+        )
+        self._raise_for_status(resp)
+        data = self._json_or_none(resp)
+        return data or {}
 
     async def get_content(
         self,
@@ -234,6 +237,7 @@ class Client:
             return None
         return resp.json()
 
-    users = RootQuerySetDescriptor(UserQuerySet)
     groups = RootQuerySetDescriptor(GroupQuerySet)
     subscribed_skus = RootQuerySetDescriptor(SubscribedSkuQuerySet)
+    sites = RootQuerySetDescriptor(SiteQuerySet)
+    users = RootQuerySetDescriptor(UserQuerySet)

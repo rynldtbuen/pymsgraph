@@ -589,7 +589,9 @@ async def test_field_member_of_groups_copy_to(make_client: "MakeClient") -> None
             "method": "POST",
             "url": "/groups/g2/members/$ref",
             "headers": {"Content-Type": "application/json"},
-            "body": {"@odata.id": "https://graph.microsoft.com/v1.0/directoryObjects/u2"},
+            "body": {
+                "@odata.id": "https://graph.microsoft.com/v1.0/directoryObjects/u2"
+            },
         }
     ]
 

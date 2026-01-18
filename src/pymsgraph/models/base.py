@@ -90,6 +90,8 @@ class Model:
     @property
     def path(self) -> str:
         if not self.HAS_ID:
+            if (p := self.PATH) and (e := self._args[1]):
+                return f"{e}{p}"
             raise ValueError(f"{type(self).__name__} does not have a resource path")
         if self.id is None:
             raise AttributeError(f"{type(self).__name__} object has no attribute, 'id'")
@@ -117,18 +119,37 @@ class Model:
 
         return data
 
-    async def update(self) -> bool:
+    async def update(self, data: dict[str, Any] | None = None) -> bool:
         if self.READ_ONLY:
             raise ValueError(f"{type(self).__name__} does not support update")
-        if self.id is None:
-            raise ValueError("id is required to update this object.")
+
+        path = self.path
+        if data is not None:
+            for k, v in data.items():
+                try:
+                    self.FIELDS[k]
+                except KeyError:
+                    continue
+                setattr(self, k, v)
 
         if not (body := self.serialize()):
             return False
 
-        await self._client.patch(self.path, body=body)
+        await self._client.patch(path, body=body)
         self._dirty.clear()
         return True
+
+    async def delete(self, force: bool = False) -> None:
+        if self.READ_ONLY:
+            raise ValueError(f"{type(self).__name__} object does not support delete")
+
+        if not force:
+            raise RuntimeError("Call delete(force=True) to proceed.")
+
+        await self._client.delete(self.path)
+
+        self._data.clear()
+        self._dirty.clear()
 
     def refresh_from_graph(self, data: dict[str, Any]) -> None:
         self._data = self.__class__.from_graph(data)._data
@@ -146,7 +167,9 @@ class Model:
 
         obj._initializing = True
         for graph_attr_name, val in data.items():
-            py_attr_name = to_snake_case(graph_attr_name)
+            py_attr_name = cls.FIELD_NAME_MAP.get(
+                graph_attr_name, to_snake_case(graph_attr_name)
+            )
             if cls.FIELDS.get(py_attr_name):
                 setattr(obj, py_attr_name, val)
 

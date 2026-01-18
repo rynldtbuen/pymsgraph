@@ -16,6 +16,7 @@ from pymsgraph.models.fields import (
     QuerySetField,
 )
 from pymsgraph.models.query import QuerySet
+from pymsgraph.models.drive import Drive
 
 from .model_fields import EmployeeOrgData, PasswordProfile
 from .query_fields import (
@@ -134,7 +135,10 @@ class User(DirectoryObject):
     # TODO: data_security_and_governance = Field()
     # TODO: device_management_troubleshooting_events = ListField()
     # TODO: direct_reports = ListField()
-    # TODO: drive = Field()
+    @property
+    def drive(self) -> Drive:
+        return Drive(client=self._args[0], path=f"{self.path}/drive")
+
     # TODO: drives = ListField()
     # TODO: employee_experience = Field()
     # TODO: events = ListField()
@@ -214,15 +218,6 @@ class User(DirectoryObject):
         pwd = getattr(self, "_generated_password", None)
         self._generated_password = None
         return pwd
-
-    async def delete(self, *, force: bool = False) -> None:
-        if not force:
-            raise RuntimeError("Call delete(force=True) to proceed.")
-
-        await self._client.delete(self.path)
-
-        self._data.clear()
-        self._dirty.clear()
 
     @property
     def directory_object_id(self) -> str:
