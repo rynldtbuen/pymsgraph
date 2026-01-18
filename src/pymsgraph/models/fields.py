@@ -246,7 +246,7 @@ class ListField(Field[list[Any]]):
                 coerced: list[Any] = []
                 if issubclass(item_type, Model):
                     for item in items:
-                        item = item_type.from_graph(data=item, client=obj._client)
+                        item = item_type.from_graph(data=item, client=obj._args[0])
                         coerced.append(item)
                 else:
                     for item in items:
@@ -289,7 +289,7 @@ class ModelField(Field[_Tm]):
             super().__set__(obj, None)
             return
         if isinstance(value, dict):
-            value = self.model_class(**value)
+            value = self.model_class.from_graph(data=value, client=obj._args[0])
         if not isinstance(value, self.model_class):
             raise TypeError(
                 f"{self.name} must be {self.model_class.__name__} (got {type(value).__name__})"
