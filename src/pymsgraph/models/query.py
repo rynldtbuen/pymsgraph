@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import date, datetime, timezone
 import re
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Callable, Collection, Iterable
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Generic, Iterator, Self, TypeVar
 
@@ -280,15 +280,15 @@ class QuerySet(Generic[_Tm]):
 
         return total_updated
 
-    async def values(self, *fields: str) -> list[dict[str, Any]]:
+    async def values(self, *fieldnames: str) -> list[dict[str, Any]]:
         """
-        Return a list of dicts for selected fields.
+        Return a list of dicts for selected fieldnames.
         """
-        if not fields:
+        if not fieldnames:
             raise ValueError("values() requires at least one field")
 
         valid_fields: list[str] = []
-        for name in fields:
+        for name in fieldnames:
             if name not in self._model_class.FIELDS:
                 raise ValueError(f"Unknown field {name!r}")
             valid_fields.append(name)
@@ -303,41 +303,57 @@ class QuerySet(Generic[_Tm]):
             {name: getattr(o, name) for name in valid_fields} async for o in objects
         ]
 
+    def apply(self, predicate: Callable[[_Tm], bool]) -> AsyncIterator[_Tm]:
+        if predicate is None:
+            raise ValueError(
+                f"{type(self).__name__ } apply requires a callable predicate"
+            )
+
+        async def _iter() -> AsyncIterator[_Tm]:
+            async for obj in self.all():
+                if predicate(obj):
+                    yield obj
+
+        return _iter()
+
     async def to_csv(
         self,
         path: str | Path,
         *,
-        field_names: Iterable[str] | None = None,
-        include_header: bool = True,
+        fieldnames: Collection[str] | None = None,
     ) -> None:
         import csv
         import json
         from pathlib import Path
 
-        field_names = field_names or self._model_class.DEFAULT_SELECT_FIELDS
+        fieldnames = fieldnames or self._model_class.DEFAULT_SELECT_FIELDS
 
         out_path = Path(path)
         with out_path.open("w", encoding="utf-8", newline="") as f:
-            writer = csv.writer(f)
-            if include_header:
-                writer.writerow(field_names)
-            async for obj in self.all():
-                row = []
-                for f in field_names:
-                    val = getattr(obj, f, None)
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+
+            values = await self.values(*fieldnames)
+            for val in values:
+                row = {}
+                for k, v in val.items():
                     if isinstance(val, (dict, list)):
-                        val = json.dumps(val, ensure_ascii=True)
-                    row.append(val)
+                        v = json.dumps(val, ensure_ascii=True)
+                    row[k] = v
+
                 writer.writerow(row)
+
+    async def to_dataframe(self, *fieldnames: str):
+        import pandas as pd
+
+        fieldnames = fieldnames or self._model_class.DEFAULT_SELECT_FIELDS
+        values = await self.values(*fieldnames)
+        return pd.DataFrame(values)
 
     def with_objects(
         self,
         *args: str | _Tm | "QuerySet[_Tm]",
         key: str = "id",
     ) -> Self:
-        """
-        Return a queryset seeded with preloaded objects.
-        """
         qs = self.__class__(self._client, path=self.path, model_class=self._model_class)
         objects = list(qs._coerce_objects(args, key=key))
         if not objects:
