@@ -515,7 +515,7 @@ class QuerySet(Generic[_Tm]):
 
         if "$select" not in params:
             default_fields = getattr(self._model_class, "DEFAULT_SELECT_FIELDS", None)
-            if default_fields:
+            if default_fields and len(default_fields) > 1:
                 params["$select"] = sorted(default_fields)
 
         if values := params.pop("$select", None):

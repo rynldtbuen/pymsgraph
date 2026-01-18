@@ -244,6 +244,42 @@ async def test_field_items_qs_create(make_client: "MakeClient"):
     assert any(e["method"] == "POST" and e["path"].endswith("/items") for e in seen)
 
 
+@pytest.mark.asyncio
+async def test_site_by_path_list_by_name(make_client: "MakeClient"):
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        return httpx.Response(
+            200,
+            json={"value": [{"id": "i1"}, {"id": "i2"}]},
+        )
+
+    client, _ = make_client(handler)
+
+    site = client.sites.with_hostname("contoso.sharepoint.com").by_path(
+        "/sites/TestSite"
+    )
+    items = site.lists.by_name("Test List").items
+
+    assert (
+        items.path
+        == "/sites/contoso.sharepoint.com:/sites/TestSite:/lists/Test%20List/items"
+    )
+    assert [i.id async for i in items] == ["i1", "i2"]
+    assert seen == [
+        "/v1.0/sites/contoso.sharepoint.com:/sites/TestSite:/lists/Test List/items"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_site_by_path_requires_hostname(make_client: "MakeClient"):
+    client, _ = make_client(lambda req: httpx.Response(200, json={}))
+
+    with pytest.raises(ValueError):
+        client.sites.by_path("/sites/TestSite")
+
+
 # @pytest.mark.asyncio
 # async def test_list_item_delete_requires_force(make_client: "MakeClient"):
 #     def handler(request: httpx.Request) -> httpx.Response:

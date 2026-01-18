@@ -116,7 +116,7 @@ class DriveItem(BaseItem):
             path = f"{self.path}:/children"
         return DriveItemsQueryset(self._args[0], path=path)
 
-    def with_path(self, path: str) -> DriveItem:
+    def by_path(self, path: str) -> DriveItem:
         if self.id is None:
             raise ValueError("id is required when accessing known path on this object.")
         p = (path or "").strip()
@@ -239,7 +239,7 @@ class DriveItem(BaseItem):
 class DriveItemsQueryset(QuerySet[DriveItem]):
     model_class = DriveItem
 
-    def with_path(self, path: str) -> DriveItem:
+    def by_path(self, path: str) -> DriveItem:
         base_path = self.path
         if base_path.endswith(":/children"):
             raise ValueError("Can't no longer build a path by chaining known paths.")
@@ -251,7 +251,7 @@ class DriveItemsQueryset(QuerySet[DriveItem]):
         p_encoded = quote(p, safe="/")
         return DriveItem(client=self._args[0], path=f"{base_path}:{p_encoded}")
 
-    def with_id(self, id: str) -> DriveItem:
+    def by_id(self, id: str) -> DriveItem:
         base_path = self.path
         if base_path.endswith(":/children"):
             raise ValueError("Can't no longer build a path by chaining known paths.")

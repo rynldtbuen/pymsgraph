@@ -122,7 +122,7 @@ async def test_update_id_is_required(make_client: "MakeClient"):
     assert "job_title" in user._dirty
     assert "city" in user._dirty
 
-    with pytest.raises(ValueError):
+    with pytest.raises(AttributeError):
         await user.update()
 
 

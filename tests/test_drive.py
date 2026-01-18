@@ -13,57 +13,55 @@ def test_path():
     drive = Drive(id="123")
     items = drive.items
     assert items.path == "/drives/123/root/children"
-    assert items.with_path(path="/abc/def").path == "/drives/123/root:/abc/def"
-    assert (
-        items.with_path("/abc/def").items.path == "/drives/123/root:/abc/def:/children"
-    )
+    assert items.by_path(path="/abc/def").path == "/drives/123/root:/abc/def"
+    assert items.by_path("/abc/def").items.path == "/drives/123/root:/abc/def:/children"
 
-    item = drive.items.with_id("098")
+    item = drive.items.by_id("098")
     assert item.path == "/drives/123/items/098"
     assert item.items.path == "/drives/123/items/098/children"
-    assert item.items.with_id("765").path == "/drives/123/items/765"
+    assert item.items.by_id("765").path == "/drives/123/items/765"
     assert (
-        item.items.with_id("765").with_path("/abc/def").path
+        item.items.by_id("765").by_path("/abc/def").path
         == "/drives/123/items/765:/abc/def"
     )
     assert (
-        item.items.with_id("765").with_path("/abc/def").items.path
+        item.items.by_id("765").by_path("/abc/def").items.path
         == "/drives/123/items/765:/abc/def:/children"
     )
 
     with pytest.raises(ValueError):
-        item.with_path("/abc/def").items.with_id("0")
+        item.by_path("/abc/def").items.by_id("0")
 
     with pytest.raises(ValueError):
-        item.with_path("/abc/def").items.with_path("/0")
+        item.by_path("/abc/def").items.by_path("/0")
 
     items = User(id="123").drive.items
 
     assert items.path == "/users/123/drive/root/children"
-    assert items.with_id("098").path == "/users/123/drive/items/098"
-    assert items.with_id("098").items.path == "/users/123/drive/items/098/children"
+    assert items.by_id("098").path == "/users/123/drive/items/098"
+    assert items.by_id("098").items.path == "/users/123/drive/items/098/children"
     assert (
-        items.with_id("098").items.with_path("/abc/def").path
+        items.by_id("098").items.by_path("/abc/def").path
         == "/users/123/drive/items/098:/abc/def"
     )
     assert (
-        items.with_id("098").items.with_path("/abc/def").items.path
+        items.by_id("098").items.by_path("/abc/def").items.path
         == "/users/123/drive/items/098:/abc/def:/children"
     )
 
-    assert items.with_path("/abc/def").path == "/users/123/drive/root:/abc/def"
+    assert items.by_path("/abc/def").path == "/users/123/drive/root:/abc/def"
     assert (
-        items.with_path("/abc/def").items.path
+        items.by_path("/abc/def").items.path
         == "/users/123/drive/root:/abc/def:/children"
     )
 
     with pytest.raises(ValueError):
-        items.with_path("/abc/def").items.with_id("fail")
+        items.by_path("/abc/def").items.by_id("fail")
 
     with pytest.raises(ValueError):
-        items.with_path("/123/456").items.with_path("/fail")
+        items.by_path("/123/456").items.by_path("/fail")
 
-    items.with_path("/123/456")
+    items.by_path("/123/456")
 
 
 @pytest.mark.asyncio
@@ -114,7 +112,7 @@ async def test_user_driveitems_get_by_id(make_client: "MakeClient"):
     client, _ = make_client(handler)
 
     user = await client.users.get(id="u1")
-    item_ref = user.drive.items.with_id("item123")
+    item_ref = user.drive.items.by_id("item123")
     data = await client.get(item_ref.path)
     item = DriveItem.from_graph(data, client=client, path=item_ref.path)
 
@@ -142,7 +140,7 @@ async def test_user_driveitems_get_by_path(make_client: "MakeClient"):
 
     client, _ = make_client(handler)
     user = await client.users.get(id="u1")
-    item_ref = user.drive.items.with_path("/Reports/2024.xlsx")
+    item_ref = user.drive.items.by_path("/Reports/2024.xlsx")
     data = await client.get(item_ref.path)
     item = DriveItem.from_graph(data, client=client, path=item_ref.path)
 
@@ -169,7 +167,7 @@ async def test_driveitem_children(make_client: "MakeClient"):
 
     client, _ = make_client(handler)
     user = await client.users.get(id="u1")
-    item = user.drive.items.with_id("item123")
+    item = user.drive.items.by_id("item123")
     children = [c.id async for c in item.items]
 
     assert children == ["child1", "child2"]

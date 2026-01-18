@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import quote
 
 from pymsgraph.models.base import Model, PropertyModel
 from pymsgraph.models.common import BaseItem, SharePointIds
@@ -24,13 +25,12 @@ class ListItem(BaseItem):
     PATH = "/items"
 
     content_type = Field()
-    sharepoint_ids = ModelField(SharePointIds)
+    sharepoint_ids = ModelField(SharePointIds, read_only=True)
 
     # Navigation properties
     analytics = Field()
     document_set_versions = ListField()
     drive_item = Field()
-    # fields = ModelField()
     versions = ListField()
 
     @property
@@ -88,13 +88,27 @@ class List(BaseItem):
     def __repr__(self) -> str:  # pragma: no cover - trivial
         return f"<List: {self.display_name or self.name}>"
 
-    # @property
-    # def items(self) -> ListItemsQuerySet:
-    #     return ListItemsQuerySet(self._client, path=f"{self.path}/items")
-
 
 class ListQuerySet(QuerySet[List]):
     model_class = List
+
+    def by_name(self, name: str) -> "ListPath":
+        n = (name or "").strip()
+        if not n:
+            raise ValueError(f"{type(self).__name__} by_name requires a name.")
+        n_encoded = quote(n, safe="")
+        path = f"{self.path}/{n_encoded}"
+        return ListPath(client=self._client, path=path)
+
+
+class ListPath(PropertyModel):
+    items = QuerySetField(ListItemsQuerySet)
+
+    @property
+    def path(self) -> str:
+        if p := self._args[1]:
+            return p
+        raise AttributeError(f"{type(self).__name__} object has no attribute 'path'")
 
 
 class FieldValueSet(PropertyModel):

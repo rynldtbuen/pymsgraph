@@ -4,6 +4,7 @@ from typing import Any, Self, override
 from urllib.parse import quote
 
 from pymsgraph.models.common import BaseItem, SharePointIds, SiteCollection
+from pymsgraph.models.base import PropertyModel
 from pymsgraph.models.drive import Drive
 from pymsgraph.models.fields import (
     BooleanField,
@@ -59,6 +60,23 @@ class Site(BaseItem):
         return f"<Site: {self.display_name or self.name}>"
 
 
+class SitePath(PropertyModel):
+
+    @property
+    def path(self) -> str:
+        if p := self._args[1]:
+            return p
+        raise AttributeError(f"{type(self).__name__} object has no attribute 'path'")
+
+    @property
+    def drive(self):
+        return Drive(client=self._args[0], path=f"{self.path}/drive")
+
+    @property
+    def lists(self) -> ListQuerySet:
+        return ListQuerySet(client=self._args[0], path=f"{self.path}:/lists")
+
+
 class SiteQuerySet(QuerySet[Site]):
     model_class = Site
 
@@ -104,6 +122,25 @@ class SiteQuerySet(QuerySet[Site]):
             )
 
         return self.make_from_graph(data)
+
+    def by_path(self, path: str, *, hostname: str | None = None) -> SitePath:
+        p = (path or "").strip()
+        if not p:
+            raise ValueError(f"{type(self).__name__} by_path requires a path.")
+        if not p.startswith("/"):
+            p = "/" + p
+        p_encoded = quote(p, safe="/")
+        host = hostname or getattr(self._client, "_sharepoint_hostname", None)
+        if not host:
+            raise ValueError(
+                "SharePoint hostname is not cached; pass hostname= to by_path"
+            )
+        full_path = f"{self.path}/{host}:{p_encoded}"
+        return SitePath(client=self._client, path=full_path)
+
+    def with_hostname(self, hostname: str) -> Self:
+        setattr(self._client, "_sharepoint_hostname", hostname)
+        return self
 
     async def _get_hostname(self) -> str:
         """Resolve and cache the SharePoint hostname (e.g. contoso.sharepoint.com)."""

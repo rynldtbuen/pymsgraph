@@ -73,9 +73,7 @@ class SiteCollection(ReadOnlyModel, PropertyModel):
     https://learn.microsoft.com/en-us/graph/api/resources/sitecollection
     """
 
-    archival_details = fields.Field(graph_attr_name="archivalDetails", read_only=True)
-    data_location_code = fields.CharField(
-        graph_attr_name="dataLocationCode", read_only=True
-    )
+    archival_details = fields.Field(read_only=True)
+    data_location_code = fields.CharField(read_only=True)
     hostname = fields.CharField(read_only=True)
     root = fields.Field(read_only=True)
