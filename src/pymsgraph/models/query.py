@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import field
 from datetime import date, datetime, timezone
 import re
 from collections.abc import AsyncIterator, Callable, Collection, Iterable
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Generic, Iterator, Self, TypeVar
+from typing import TYPE_CHECKING, Any, Collection, Generic, Iterator, Self, TypeVar
 
 from pymsgraph import utils
 from pymsgraph.utils import to_camel_case
@@ -284,8 +285,27 @@ class QuerySet(Generic[_Tm]):
         """
         Return a list of dicts for selected fieldnames.
         """
+
+        def _coerce(val: Any) -> Any:
+            if isinstance(val, Model):
+                return val.to_dict()
+            if isinstance(val, list):
+                return [_coerce(v) for v in val]
+            if isinstance(val, dict):
+                return {k: _coerce(v) for k, v in val.items()}
+            return val
+
+        fieldnames = fieldnames or self._model_class.DEFAULT_SELECT_FIELDS or tuple()
         if not fieldnames:
-            raise ValueError("values() requires at least one field")
+            if (default_fieldnames := self._model_class.DEFAULT_SELECT_FIELDS) is None:
+                return [
+                    {k: _coerce(getattr(o, k)) for k in o._data.keys()}
+                    async for o in self.iterator().all()
+                ]
+            return [
+                {k: _coerce(getattr(o, k)) for k in default_fieldnames}
+                async for o in self.iterator().all()
+            ]
 
         valid_fields: list[str] = []
         for name in fieldnames:
@@ -294,13 +314,14 @@ class QuerySet(Generic[_Tm]):
             valid_fields.append(name)
 
         selected = set(self._params.get("$select", []))
-        if selected.issuperset(valid_fields):
-            objects = self.all()
+        if selected and selected.issuperset(valid_fields):
+            objects = self.iterator().all()
         else:
             objects = self.select(*valid_fields).all()
 
         return [
-            {name: getattr(o, name) for name in valid_fields} async for o in objects
+            {name: _coerce(getattr(o, name)) for name in valid_fields}
+            async for o in objects
         ]
 
     def apply(self, predicate: Callable[[_Tm], bool]) -> AsyncIterator[_Tm]:
@@ -310,7 +331,7 @@ class QuerySet(Generic[_Tm]):
             )
 
         async def _iter() -> AsyncIterator[_Tm]:
-            async for obj in self.all():
+            async for obj in self.iterator().all():
                 if predicate(obj):
                     yield obj
 
@@ -326,27 +347,45 @@ class QuerySet(Generic[_Tm]):
         import json
         from pathlib import Path
 
-        fieldnames = fieldnames or self._model_class.DEFAULT_SELECT_FIELDS
+        if fieldnames is not None and len(fieldnames) == 0:
+            fieldnames = None
+        fieldnames = fieldnames or self._model_class.DEFAULT_SELECT_FIELDS or None
+        if fieldnames is None:
+            values = await self.values()
+        else:
+            values = await self.values(*fieldnames)
+
+        if fieldnames is None:
+            ordered: list[str] = []
+            for row in values:
+                for key in row.keys():
+                    if key not in ordered:
+                        ordered.append(key)
+            fieldnames = tuple(ordered)
 
         out_path = Path(path)
         with out_path.open("w", encoding="utf-8", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
 
-            values = await self.values(*fieldnames)
             for val in values:
-                row = {}
+                row: dict[str, Any] = {}
                 for k, v in val.items():
-                    if isinstance(val, (dict, list)):
-                        v = json.dumps(val, ensure_ascii=True)
+                    if isinstance(v, Model):
+                        v = v.to_dict()
+                    if isinstance(v, (dict, list)):
+                        v = json.dumps(v, ensure_ascii=True)
                     row[k] = v
-
                 writer.writerow(row)
 
     async def to_dataframe(self, *fieldnames: str):
         import pandas as pd
 
-        fieldnames = fieldnames or self._model_class.DEFAULT_SELECT_FIELDS
-        values = await self.values(*fieldnames)
+        fieldnames = fieldnames or self._model_class.DEFAULT_SELECT_FIELDS or tuple()
+        if fieldnames:
+            values = await self.values()
+        else:
+            values = await self.values()
         return pd.DataFrame(values)
 
     def with_objects(
@@ -696,8 +735,13 @@ class Paginator(Generic[_Tm]):
             params = queryset._build_params()
             if params.get("$top") is None:
                 params["$top"] = str(self._page_size)
+
+            path = queryset.path
+            if (path_func := getattr(queryset, "_get_path", None)) is not None:
+                path: str = await path_func()
+
             response = await queryset._client.get(
-                queryset.path, params=params, headers=queryset._headers
+                path, params=params, headers=queryset._headers
             )
         else:
             if not self._next_link:

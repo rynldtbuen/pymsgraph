@@ -70,7 +70,7 @@ class SitePath(PropertyModel):
 
     @property
     def drive(self):
-        return Drive(client=self._args[0], path=f"{self.path}/drive")
+        return Drive(client=self._args[0], path=f"{self.path}:/drive")
 
     @property
     def lists(self) -> ListQuerySet:
@@ -123,24 +123,20 @@ class SiteQuerySet(QuerySet[Site]):
 
         return self.make_from_graph(data)
 
-    def by_path(self, path: str, *, hostname: str | None = None) -> SitePath:
+    def by_path(self, path: str) -> SitePath:
         p = (path or "").strip()
         if not p:
             raise ValueError(f"{type(self).__name__} by_path requires a path.")
         if not p.startswith("/"):
             p = "/" + p
         p_encoded = quote(p, safe="/")
-        host = hostname or getattr(self._client, "_sharepoint_hostname", None)
+        host = getattr(self, "_hostname", None) or getattr(
+            self._args[0], "_sharepoint_hostname", None
+        )
         if not host:
-            raise ValueError(
-                "SharePoint hostname is not cached; pass hostname= to by_path"
-            )
+            host = "HOSTNAME"
         full_path = f"{self.path}/{host}:{p_encoded}"
-        return SitePath(client=self._client, path=full_path)
-
-    def with_hostname(self, hostname: str) -> Self:
-        setattr(self._client, "_sharepoint_hostname", hostname)
-        return self
+        return SitePath(client=self._args[0], path=full_path)
 
     async def _get_hostname(self) -> str:
         """Resolve and cache the SharePoint hostname (e.g. contoso.sharepoint.com)."""
@@ -149,11 +145,10 @@ class SiteQuerySet(QuerySet[Site]):
         hostname = getattr(c, "_sharepoint_hostname", None)
         if hostname is None:
             root = await c.get("/sites/root")
-            hostname = (root.get("siteCollection") or {}).get("_sharepoint_hostname")
+            hostname = (root.get("siteCollection") or {}).get("hostname")
             if not hostname:
                 raise RuntimeError(
                     "Could not discover SharePoint hostname from /sites/root"
                 )
-
             setattr(c, "_sharepoint_hostname", hostname)
         return hostname

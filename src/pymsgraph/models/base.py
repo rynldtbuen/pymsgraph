@@ -16,7 +16,7 @@ class Model:
     REQUIRED_FIELDS: frozenset[str]
     FIELD_NAME_MAP: dict[str, str]
     WRITE_ON_FIELDS: frozenset[str]
-    DEFAULT_SELECT_FIELDS: tuple[str, ...]
+    DEFAULT_SELECT_FIELDS: tuple[str, ...] | None = None
     SEARCH_FIELD: str | None = None
     HAS_ID: bool = True
     READ_ONLY: bool = False
@@ -67,7 +67,8 @@ class Model:
         cls.REQUIRED_FIELDS = frozenset(required_fields)
         cls.FIELD_NAME_MAP = field_name_map
         cls.WRITE_FIELDS = frozenset(write_fields)
-        cls.DEFAULT_SELECT_FIELDS = tuple(sorted(default_select))
+        if len(default_select) > 1:
+            cls.DEFAULT_SELECT_FIELDS = tuple(sorted(default_select))
 
     def __init__(
         self,
@@ -100,7 +101,16 @@ class Model:
         raise AttributeError(f"{type(self).__name__} object has no attribute 'path'")
 
     def to_dict(self) -> dict[str, Any]:
-        return {k: getattr(self, k, None) for k in self.FIELDS}
+        def _coerce(val: Any) -> Any:
+            if isinstance(val, Model):
+                return val.to_dict()
+            if isinstance(val, list):
+                return [_coerce(v) for v in val]
+            if isinstance(val, dict):
+                return {k: _coerce(v) for k, v in val.items()}
+            return val
+
+        return {k: _coerce(getattr(self, k, None)) for k in self.FIELDS}
 
     def serialize(self) -> dict[str, Any]:
         data: dict[str, Any] = {}

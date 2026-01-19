@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 from pymsgraph.models.common import BaseItem, IdentitySet, SharePointIds
@@ -13,6 +13,9 @@ from pymsgraph.models.fields import (
     ModelField,
 )
 from pymsgraph.models.query import QuerySet
+
+if TYPE_CHECKING:
+    from pymsgraph.client import Client
 
 
 class Drive(BaseItem):
@@ -45,6 +48,36 @@ class Drive(BaseItem):
     @property
     def items(self) -> "DriveItemsQueryset":
         return DriveItemsQueryset(self._args[0], path=f"{self.path}/root/children")
+
+    def by_path(self, path: str):
+        p = (path or "").strip()
+        if not p.startswith("/"):
+            p = "/" + p
+        p_encoded = quote(p, safe="/")
+        return DriveItem(client=self._args[0], path=f"{self.path}/root:{p_encoded}")
+
+
+# class DrivePath(ReadOnlyModel, PropertyModel):
+#     @property
+#     def path(self) -> str:
+#         if p := self._args[1]:
+#             return p
+#         raise AttributeError(f"{type(self).__name__} object has no attribute 'path'")
+
+#     async def get(self) -> Drive:
+#         data = await self._client.get(self.path)
+#         return Drive.from_graph(data, client=self._client)
+
+
+async def _get_drive_from_site_known_path(client: "Client", base: str):
+    if "HOSTNAME" in base:
+        hostname = await client.sites._get_hostname()
+        base = base.replace("HOSTNAME", hostname)
+    data = await client.get(base)
+    drive = Drive.from_graph(data=data, client=client)
+    if drive.id is None:
+        raise RuntimeError("Unable to resolve drive id from site drive")
+    return drive
 
 
 class DriveItem(BaseItem):
@@ -100,11 +133,12 @@ class DriveItem(BaseItem):
     @property
     def path(self) -> str:
         if self.id is None:
-            if self._args[1] is None:
+            p = self._args[1]
+            if p is None:
                 raise AttributeError(
                     f"{type(self).__name__} object has no attribute 'path'"
                 )
-            return self._args[1]
+            return p
         return super().path
 
     @property
@@ -117,13 +151,32 @@ class DriveItem(BaseItem):
         return DriveItemsQueryset(self._args[0], path=path)
 
     def by_path(self, path: str) -> DriveItem:
-        if self.id is None:
-            raise ValueError("id is required when accessing known path on this object.")
         p = (path or "").strip()
         if not p.startswith("/"):
             p = "/" + p
         p_encoded = quote(p, safe="/")
-        return DriveItem(client=self._args[0], path=f"{self.path}:{p_encoded}")
+        p = self.path
+        if "/root:/" in p:
+            path = f"{p}{p_encoded}"
+        else:
+            path = f"{p}:{p_encoded}"
+        return DriveItem(client=self._args[0], path=path)
+
+    async def get(self) -> DriveItem:
+
+        p = self.path
+        di_p: str | None = None
+        if p.startswith("/sites/"):
+            if "/root:" in p:
+                base, _, tail = p.partition("/root:")
+                d = await _get_drive_from_site_known_path(self._client, base)
+                di_p = f"{d.path}/items"
+                p = f"{d.path}/root:{tail}"
+            else:
+                raise RuntimeError(f"Unknown path, {p}")
+        data = await self._client.get(p)
+
+        return DriveItem.from_graph(data, client=self._client, path=di_p or p)
 
     async def upload(
         self,
@@ -239,28 +292,40 @@ class DriveItem(BaseItem):
 class DriveItemsQueryset(QuerySet[DriveItem]):
     model_class = DriveItem
 
-    def by_path(self, path: str) -> DriveItem:
-        base_path = self.path
-        if base_path.endswith(":/children"):
-            raise ValueError("Can't no longer build a path by chaining known paths.")
-        if "/children" in base_path:
-            base_path = "/".join(base_path.split("/")[:-1])
-        p = (path or "").strip()
-        if not p.startswith("/"):
-            p = "/" + p
-        p_encoded = quote(p, safe="/")
-        return DriveItem(client=self._args[0], path=f"{base_path}:{p_encoded}")
-
-    def by_id(self, id: str) -> DriveItem:
-        base_path = self.path
-        if base_path.endswith(":/children"):
-            raise ValueError("Can't no longer build a path by chaining known paths.")
-        if ":" in base_path:
-            raise ValueError("Can't no longer build a path by chaining known paths.")
-        if "/children" in base_path:
-            base_path = "/".join(base_path.split("/")[:-2])
-        if "items" not in base_path:
-            path = f"{base_path}/items"
+    def make_from_graph(self, data: dict[str, Any]):
+        p = self.path
+        if p.startswith("/drives"):
+            if "/root" in p:
+                p = f"{'/'.join(self.path.split("/")[:3])}/items"
+            elif "/items" in p:
+                p = "/".join(self.path.split("/")[:4])
+            else:
+                raise RuntimeError(f"Unknown path, {p}")
+        elif p.startswith("/users"):
+            if "drive/root:" in p:
+                p = f"{p.split("/root:")[0]}/items"
+            elif "/items" in p:
+                p = f"{p.split("/items")[0]}/items"
+            else:
+                raise RuntimeError(f"Unknown path, {p}")
         else:
-            path = base_path
-        return DriveItem(client=self._args[0], path=path, id=id)
+            raise RuntimeError(f"Unknown path, {p}")
+
+        return self._model_class.from_graph(data, client=self._client, path=p)
+
+    async def _get_path(self):
+
+        p = self.path
+        if p.startswith("/sites/"):
+            if p.endswith("/root/children"):
+                base = p.split("/root/children")[0]
+                d = await _get_drive_from_site_known_path(self._client, base)
+                p = d.items.path
+            elif "/root:" in p:
+                base, _, tail = p.partition("/root:")
+                d = await _get_drive_from_site_known_path(self._client, base)
+                p = f"{d.path}/root:{tail}"
+            else:
+                raise RuntimeError(f"Unknown path, {p}")
+            self._args = self._args[0], p, self._args[2]
+        return p
