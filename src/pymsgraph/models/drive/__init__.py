@@ -31,7 +31,7 @@ class Drive(BaseItem):
     owner = ModelField(IdentitySet)
     quota = Field()
     system = Field()
-    root = ModelField("DriveItem", read_only=True)
+    # root = ModelField("DriveItem", read_only=True)
 
     def __repr__(self) -> str:
         return f"<Drive: {self.name or self.id}>"
@@ -46,8 +46,12 @@ class Drive(BaseItem):
         raise AttributeError(f"{type(self).__name__} object has no attribute 'path'")
 
     @property
-    def items(self) -> "DriveItemsQueryset":
-        return DriveItemsQueryset(self._args[0], path=f"{self.path}/root/children")
+    def root(self):
+        return DriveItem(client=self._args[0], path=f"{self.path}/root")
+
+    # @property
+    # def items(self) -> "DriveItemsQueryset":
+    #     return DriveItemsQueryset(self._args[0], path=f"{self.path}/root/children")
 
     def by_path(self, path: str):
         p = (path or "").strip()
@@ -144,7 +148,7 @@ class DriveItem(BaseItem):
     @property
     def items(self) -> DriveItemsQueryset:
         base_path = self.path
-        if ":" not in base_path:
+        if ":" not in base_path or base_path.endswith("root"):
             path = f"{self.path}/children"
         else:
             path = f"{self.path}:/children"
@@ -161,6 +165,12 @@ class DriveItem(BaseItem):
         else:
             path = f"{p}:{p_encoded}"
         return DriveItem(client=self._args[0], path=path)
+
+    def by_id(self, id: str) -> DriveItem:
+        p = self.path
+        if p.endswith("/root"):
+            p = f"{p.split('/root')[0]}/items"
+        return DriveItem(client=self._args[0], path=p, id=id)
 
     async def get(self) -> DriveItem:
 
@@ -306,6 +316,8 @@ class DriveItemsQueryset(QuerySet[DriveItem]):
                 p = f"{p.split("/root:")[0]}/items"
             elif "/items" in p:
                 p = f"{p.split("/items")[0]}/items"
+            elif p.endswith("/root/children"):
+                p = f"{p.split("/root/children")[0]}/items"
             else:
                 raise RuntimeError(f"Unknown path, {p}")
         else:
@@ -320,7 +332,7 @@ class DriveItemsQueryset(QuerySet[DriveItem]):
             if p.endswith("/root/children"):
                 base = p.split("/root/children")[0]
                 d = await _get_drive_from_site_known_path(self._client, base)
-                p = d.items.path
+                p = d.root.items.path
             elif "/root:" in p:
                 base, _, tail = p.partition("/root:")
                 d = await _get_drive_from_site_known_path(self._client, base)

@@ -11,57 +11,58 @@ if TYPE_CHECKING:
 
 def test_path():
     drive = Drive(id="123")
-    items = drive.items
+    items = drive.root.items
     assert items.path == "/drives/123/root/children"
-    assert items.by_path(path="/abc/def").path == "/drives/123/root:/abc/def"
-    assert items.by_path("/abc/def").items.path == "/drives/123/root:/abc/def:/children"
+    assert drive.by_path(path="/abc/def").path == "/drives/123/root:/abc/def"
+    assert drive.by_path("/abc/def").items.path == "/drives/123/root:/abc/def:/children"
 
-    item = drive.items.by_id("098")
+    item = DriveItem(id="098", path="/drives/123/items")
     assert item.path == "/drives/123/items/098"
     assert item.items.path == "/drives/123/items/098/children"
-    assert item.items.by_id("765").path == "/drives/123/items/765"
+    assert DriveItem(id="765", path="/drives/123/items").path == "/drives/123/items/765"
     assert (
-        item.items.by_id("765").by_path("/abc/def").path
+        DriveItem(id="765", path="/drives/123/items").by_path("/abc/def").path
         == "/drives/123/items/765:/abc/def"
     )
     assert (
-        item.items.by_id("765").by_path("/abc/def").items.path
+        DriveItem(id="765", path="/drives/123/items").by_path("/abc/def").items.path
         == "/drives/123/items/765:/abc/def:/children"
     )
 
-    with pytest.raises(ValueError):
-        item.by_path("/abc/def").items.by_id("0")
+    # DriveItemsQueryset does not support by_path chaining
 
-    with pytest.raises(ValueError):
-        item.by_path("/abc/def").items.by_path("/0")
-
-    items = User(id="123").drive.items
+    items = User(id="123").drive.root.items
 
     assert items.path == "/users/123/drive/root/children"
-    assert items.by_id("098").path == "/users/123/drive/items/098"
-    assert items.by_id("098").items.path == "/users/123/drive/items/098/children"
     assert (
-        items.by_id("098").items.by_path("/abc/def").path
+        DriveItem(id="098", path="/users/123/drive/items").path
+        == "/users/123/drive/items/098"
+    )
+    assert (
+        DriveItem(id="098", path="/users/123/drive/items").items.path
+        == "/users/123/drive/items/098/children"
+    )
+    assert (
+        DriveItem(id="098", path="/users/123/drive/items").by_path("/abc/def").path
         == "/users/123/drive/items/098:/abc/def"
     )
     assert (
-        items.by_id("098").items.by_path("/abc/def").items.path
+        DriveItem(id="098", path="/users/123/drive/items")
+        .by_path("/abc/def")
+        .items.path
         == "/users/123/drive/items/098:/abc/def:/children"
     )
 
-    assert items.by_path("/abc/def").path == "/users/123/drive/root:/abc/def"
     assert (
-        items.by_path("/abc/def").items.path
+        User(id="123").drive.by_path("/abc/def").path
+        == "/users/123/drive/root:/abc/def"
+    )
+    assert (
+        User(id="123").drive.by_path("/abc/def").items.path
         == "/users/123/drive/root:/abc/def:/children"
     )
 
-    with pytest.raises(ValueError):
-        items.by_path("/abc/def").items.by_id("fail")
-
-    with pytest.raises(ValueError):
-        items.by_path("/123/456").items.by_path("/fail")
-
-    items.by_path("/123/456")
+    User(id="123").drive.by_path("/123/456")
 
 
 @pytest.mark.asyncio
@@ -112,7 +113,7 @@ async def test_user_driveitems_get_by_id(make_client: "MakeClient"):
     client, _ = make_client(handler)
 
     user = await client.users.get(id="u1")
-    item_ref = user.drive.items.by_id("item123")
+    item_ref = DriveItem(id="item123", path="/users/u1/drive/items")
     data = await client.get(item_ref.path)
     item = DriveItem.from_graph(data, client=client, path=item_ref.path)
 
@@ -140,7 +141,7 @@ async def test_user_driveitems_get_by_path(make_client: "MakeClient"):
 
     client, _ = make_client(handler)
     user = await client.users.get(id="u1")
-    item_ref = user.drive.items.by_path("/Reports/2024.xlsx")
+    item_ref = user.drive.by_path("/Reports/2024.xlsx")
     data = await client.get(item_ref.path)
     item = DriveItem.from_graph(data, client=client, path=item_ref.path)
 
@@ -165,10 +166,9 @@ async def test_driveitem_children(make_client: "MakeClient"):
             )
         return httpx.Response(404)
 
-    client, _ = make_client(handler)
-    user = await client.users.get(id="u1")
-    item = user.drive.items.by_id("item123")
-    children = [c.id async for c in item.items]
+    c, _ = make_client(handler)
+    u = await c.users.get(id="u1")
+    children = [c.id async for c in u.drive.root.by_id("item123").items]
 
     assert children == ["child1", "child2"]
 
@@ -190,9 +190,9 @@ async def test_user_drive_root_items(make_client: "MakeClient"):
             )
         return httpx.Response(404)
 
-    client, _ = make_client(handler)
-    user = await client.users.get(id="u1")
-    items = [i.id async for i in user.drive.items]
+    c, _ = make_client(handler)
+    u = await c.users.get(id="u1")
+    items = [i.id async for i in u.drive.root.items]
     assert items == ["item1", "item2"]
 
 
@@ -403,3 +403,40 @@ async def test_driveitem_download(make_client: "MakeClient", tmp_path):
     assert data == b"hello"
     assert dest.read_bytes() == b"hello"
     assert "/v1.0/users/u1/drive/items/file1/content" in seen
+
+
+@pytest.mark.asyncio
+async def test_driveitem_get_site_path(make_client: "MakeClient"):
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        if request.url.path == "/v1.0/sites/contoso.sharepoint.com:/sites/Test:/drive":
+            return httpx.Response(
+                200,
+                json={
+                    "id": "drive123",
+                    "name": "Test Drive",
+                    "driveType": "documentLibrary",
+                },
+            )
+        if request.url.path == "/v1.0/drives/drive123/root:/Shared":
+            return httpx.Response(
+                200,
+                json={"id": "item1", "name": "Shared", "folder": {}},
+            )
+        return httpx.Response(404)
+
+    client, _ = make_client(handler)
+    item = DriveItem(
+        client=client,
+        path="/sites/contoso.sharepoint.com:/sites/Test:/drive/root:/Shared",
+    )
+
+    resolved = await item.get()
+
+    assert resolved.id == "item1"
+    assert resolved.name == "Shared"
+    assert resolved.path == "/drives/drive123/items/item1"
+    assert "/v1.0/sites/contoso.sharepoint.com:/sites/Test:/drive" in seen
+    assert "/v1.0/drives/drive123/root:/Shared" in seen
