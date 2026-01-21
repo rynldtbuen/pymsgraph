@@ -60,6 +60,7 @@ class SubscribedSku(ReadOnlyModel):
     PRODUCT_NAME_BY_SKU: ClassVar[dict[str, str]] = {}
     PRODUCT_NAMES_CSV_PATH: ClassVar[Path] = (
         Path(__file__).resolve().parents[3]
+        / "src"
         / "static"
         / "Product names and service plan identifiers for licensing.csv"
     )
@@ -92,7 +93,7 @@ class SubscribedSku(ReadOnlyModel):
 
             import csv
 
-            with csv_path.open("r", encoding="utf-8", newline="") as f:
+            with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
                 reader = csv.DictReader(f)
                 for row in reader:
                     display = (row.get("Product_Display_Name") or "").strip()

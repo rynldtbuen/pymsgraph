@@ -40,7 +40,7 @@ class Group(DirectoryObject):
     description = CharField()
     display_name = CharField(required=True, select_default=True)
     expiration_date_time = DateTimeField()
-    group_types = ListField(item_type=str, select_default=True)
+    group_types = ListField(select_default=True)
     has_members_with_license_errors = BooleanField()
     hide_from_address_lists = BooleanField()
     hide_from_outlook_clients = BooleanField()
