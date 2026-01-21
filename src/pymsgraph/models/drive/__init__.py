@@ -38,50 +38,42 @@ class Drive(BaseItem):
 
     @property
     def path(self) -> str:
-        if e := self._args[1]:
-            if e.endswith("drive"):
-                return e
-            if id := self.id:
-                return f"{e}/{id}"
-        raise AttributeError(f"{type(self).__name__} object has no attribute 'path'")
+        if self.id is None and (p := self._args[1]):
+            if p.endswith("drive"):
+                return p
+        return super().path
+        # if e := self._args[1]:
+        #     if e.endswith("drive"):
+        #         return e
+        #     if id := self.id:
+        #         return f"{e}/{id}"
+        # raise AttributeError(f"{type(self).__name__} object has no attribute 'path'")
 
     @property
     def root(self):
         return DriveItem(client=self._args[0], path=f"{self.path}/root")
 
-    # @property
-    # def items(self) -> "DriveItemsQueryset":
-    #     return DriveItemsQueryset(self._args[0], path=f"{self.path}/root/children")
+    async def get(self):
+        p = self.path
+        c = self._client
+        if "HOSTNAME" in p:
+            hostname = await c.sites._get_hostname()
+            p = p.replace("HOSTNAME", hostname)
+        data = await c.get(p)
+        return Drive.from_graph(data=data, client=c)
 
-    def by_path(self, path: str):
-        p = (path or "").strip()
-        if not p.startswith("/"):
-            p = "/" + p
-        p_encoded = quote(p, safe="/")
-        return DriveItem(client=self._args[0], path=f"{self.path}/root:{p_encoded}")
-
-
-# class DrivePath(ReadOnlyModel, PropertyModel):
-#     @property
-#     def path(self) -> str:
-#         if p := self._args[1]:
-#             return p
-#         raise AttributeError(f"{type(self).__name__} object has no attribute 'path'")
-
-#     async def get(self) -> Drive:
-#         data = await self._client.get(self.path)
-#         return Drive.from_graph(data, client=self._client)
+    @classmethod
+    async def from_path(cls, client: Client, path: str) -> Drive:
+        if "HOSTNAME" in path:
+            hostname = await client.sites._get_hostname()
+            path = path.replace("HOSTNAME", hostname)
+        data = await client.get(path)
+        return Drive.from_graph(data=data, client=client)
 
 
-async def _get_drive_from_site_known_path(client: "Client", base: str):
-    if "HOSTNAME" in base:
-        hostname = await client.sites._get_hostname()
-        base = base.replace("HOSTNAME", hostname)
-    data = await client.get(base)
-    drive = Drive.from_graph(data=data, client=client)
-    if drive.id is None:
-        raise RuntimeError("Unable to resolve drive id from site drive")
-    return drive
+class DriveQuerySetProxy:
+    def __init__(self, client: Client) -> None:
+        self._client = client
 
 
 class DriveItem(BaseItem):
@@ -136,50 +128,61 @@ class DriveItem(BaseItem):
 
     @property
     def path(self) -> str:
-        if self.id is None:
-            p = self._args[1]
-            if p is None:
-                raise AttributeError(
-                    f"{type(self).__name__} object has no attribute 'path'"
-                )
+        if self.id is None and (p := self._args[1]):
             return p
         return super().path
+        # p: str = self._args[1] or ""
+        # if ":" in p:
+        #     return p
+        # return super().path
 
     @property
     def items(self) -> DriveItemsQueryset:
         base_path = self.path
+        # id-based paths (no ":"), and /root should use /children
+        # e.g. /drives/{id}/root or /users/{id}/drive/root
         if ":" not in base_path or base_path.endswith("root"):
             path = f"{self.path}/children"
         else:
+            # colon-based paths need :/children suffix
+            # e.g. /drives/{id}/root:/folder -> /drives/{id}/root:/folder:/children
             path = f"{self.path}:/children"
         return DriveItemsQueryset(self._args[0], path=path)
 
     def by_path(self, path: str) -> DriveItem:
         p = (path or "").strip()
+        # normalize leading slash for relative paths
         if not p.startswith("/"):
             p = "/" + p
+        # encode path segments but keep "/" separators
         p_encoded = quote(p, safe="/")
         p = self.path
+        # if already rooted at /root:/, append directly
         if "/root:/" in p:
             path = f"{p}{p_encoded}"
         else:
+            # otherwise, build /{item-id}:/path
             path = f"{p}:{p_encoded}"
         return DriveItem(client=self._args[0], path=path)
 
     def by_id(self, id: str) -> DriveItem:
         p = self.path
+        # /drives/{drive-id}/root -> /drives/{drive-id}/items
+        # /users/{user-id}/drive/root -> /users/{user-id}/drive/items
         if p.endswith("/root"):
             p = f"{p.split('/root')[0]}/items"
         return DriveItem(client=self._args[0], path=p, id=id)
 
     async def get(self) -> DriveItem:
-
         p = self.path
         di_p: str | None = None
         if p.startswith("/sites/"):
+            # /sites/{hostname}:/path:/drive/root:/folder[:/children]
             if "/root:" in p:
+                # resolve site drive, then rebase to /drives/{id}/root:/path
                 base, _, tail = p.partition("/root:")
-                d = await _get_drive_from_site_known_path(self._client, base)
+                d = await Drive.from_path(self._client, base)
+                # store /drives/{id}/items so DriveItem paths are id-based
                 di_p = f"{d.path}/items"
                 p = f"{d.path}/root:{tail}"
             else:
@@ -305,18 +308,29 @@ class DriveItemsQueryset(QuerySet[DriveItem]):
     def make_from_graph(self, data: dict[str, Any]):
         p = self.path
         if p.startswith("/drives"):
+            # /drives/{drive-id}/root[/children]
+            # /drives/{drive-id}/root:/path[:/children]
             if "/root" in p:
+                # normalize to /drives/{drive-id}/items so child DriveItem uses id-based path
                 p = f"{'/'.join(self.path.split("/")[:3])}/items"
+            # /drives/{drive-id}/items/{item-id}[/children]
             elif "/items" in p:
+                # keep /drives/{drive-id}/items as the base for DriveItem paths
                 p = "/".join(self.path.split("/")[:4])
             else:
                 raise RuntimeError(f"Unknown path, {p}")
         elif p.startswith("/users"):
+            # /users/{user-id}/drive/root:/path[:/children]
             if "drive/root:" in p:
+                # normalize to /users/{user-id}/drive/items
                 p = f"{p.split("/root:")[0]}/items"
+            # /users/{user-id}/drive/items/{item-id}[/children]
             elif "/items" in p:
+                # keep /users/{user-id}/drive/items as the base for DriveItem paths
                 p = f"{p.split("/items")[0]}/items"
+            # /users/{user-id}/drive/root/children
             elif p.endswith("/root/children"):
+                # normalize to /users/{user-id}/drive/items
                 p = f"{p.split("/root/children")[0]}/items"
             else:
                 raise RuntimeError(f"Unknown path, {p}")
@@ -326,18 +340,23 @@ class DriveItemsQueryset(QuerySet[DriveItem]):
         return self._model_class.from_graph(data, client=self._client, path=p)
 
     async def _get_path(self):
-
         p = self.path
         if p.startswith("/sites/"):
+            c = self._client
+            # /sites/{hostname}:/path:/drive/root/children
             if p.endswith("/root/children"):
+                # resolve site drive, then use /drives/{id}/root/children
                 base = p.split("/root/children")[0]
-                d = await _get_drive_from_site_known_path(self._client, base)
+                d = await Drive.from_path(c, base)
                 p = d.root.items.path
+            # /sites/{hostname}:/path:/drive/root:/folder[:/children]
             elif "/root:" in p:
+                # resolve site drive, then rebase to /drives/{id}/root:/path
                 base, _, tail = p.partition("/root:")
-                d = await _get_drive_from_site_known_path(self._client, base)
+                d = await Drive.from_path(c, base)
                 p = f"{d.path}/root:{tail}"
             else:
                 raise RuntimeError(f"Unknown path, {p}")
-            self._args = self._args[0], p, self._args[2]
+            # cache resolved path for subsequent calls
+            self._args = c, p, self._args[2]
         return p

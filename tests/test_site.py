@@ -39,9 +39,7 @@ async def test_get_by_path_discovers_hostname_once(make_client: "MakeClient"):
         if request.url.path == "/v1.0/sites/root":
             return httpx.Response(
                 200,
-                json={
-                    "siteCollection": {"_sharepoint_hostname": "contoso.sharepoint.com"}
-                },
+                json={"siteCollection": {"hostname": "contoso.sharepoint.com"}},
             )
         assert request.url.path in {
             "/v1.0/sites/contoso.sharepoint.com:/sites/demo",

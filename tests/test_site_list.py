@@ -250,6 +250,11 @@ async def test_site_by_path_list_by_name(make_client: "MakeClient"):
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request.url.path)
+        if request.url.path == "/v1.0/sites/root":
+            return httpx.Response(
+                200,
+                json={"siteCollection": {"hostname": "contoso.sharepoint.com"}},
+            )
         return httpx.Response(
             200,
             json={"value": [{"id": "i1"}, {"id": "i2"}]},
@@ -257,27 +262,18 @@ async def test_site_by_path_list_by_name(make_client: "MakeClient"):
 
     client, _ = make_client(handler)
 
-    site = client.sites.with_hostname("contoso.sharepoint.com").by_path(
-        "/sites/TestSite"
-    )
-    items = site.lists.by_name("Test List").items
-
+    items = client.sites.by_path("/sites/TestSite").lists.by_name("Test List").items
+    async for it in items:
+        ...
     assert (
         items.path
         == "/sites/contoso.sharepoint.com:/sites/TestSite:/lists/Test%20List/items"
     )
     assert [i.id async for i in items] == ["i1", "i2"]
     assert seen == [
-        "/v1.0/sites/contoso.sharepoint.com:/sites/TestSite:/lists/Test List/items"
+        "/v1.0/sites/root",
+        "/v1.0/sites/contoso.sharepoint.com:/sites/TestSite:/lists/Test List/items",
     ]
-
-
-@pytest.mark.asyncio
-async def test_site_by_path_requires_hostname(make_client: "MakeClient"):
-    client, _ = make_client(lambda req: httpx.Response(200, json={}))
-
-    with pytest.raises(ValueError):
-        client.sites.by_path("/sites/TestSite")
 
 
 # @pytest.mark.asyncio

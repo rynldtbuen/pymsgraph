@@ -13,8 +13,11 @@ def test_path():
     drive = Drive(id="123")
     items = drive.root.items
     assert items.path == "/drives/123/root/children"
-    assert drive.by_path(path="/abc/def").path == "/drives/123/root:/abc/def"
-    assert drive.by_path("/abc/def").items.path == "/drives/123/root:/abc/def:/children"
+    assert drive.root.by_path(path="/abc/def").path == "/drives/123/root:/abc/def"
+    assert (
+        drive.root.by_path("/abc/def").items.path
+        == "/drives/123/root:/abc/def:/children"
+    )
 
     item = DriveItem(id="098", path="/drives/123/items")
     assert item.path == "/drives/123/items/098"
@@ -54,15 +57,15 @@ def test_path():
     )
 
     assert (
-        User(id="123").drive.by_path("/abc/def").path
+        User(id="123").drive.root.by_path("/abc/def").path
         == "/users/123/drive/root:/abc/def"
     )
     assert (
-        User(id="123").drive.by_path("/abc/def").items.path
+        User(id="123").drive.root.by_path("/abc/def").items.path
         == "/users/123/drive/root:/abc/def:/children"
     )
 
-    User(id="123").drive.by_path("/123/456")
+    User(id="123").drive.root.by_path("/123/456")
 
 
 @pytest.mark.asyncio
@@ -141,7 +144,7 @@ async def test_user_driveitems_get_by_path(make_client: "MakeClient"):
 
     client, _ = make_client(handler)
     user = await client.users.get(id="u1")
-    item_ref = user.drive.by_path("/Reports/2024.xlsx")
+    item_ref = user.drive.root.by_path("/Reports/2024.xlsx")
     data = await client.get(item_ref.path)
     item = DriveItem.from_graph(data, client=client, path=item_ref.path)
 

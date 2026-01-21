@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
 
 import httpx
 
+from pymsgraph.models.drive import DriveQuerySetProxy
+
 try:
     import importlib.metadata as importlib_metadata
 except ImportError:  # pragma: no cover

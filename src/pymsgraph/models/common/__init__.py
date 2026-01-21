@@ -1,5 +1,10 @@
+from typing import TYPE_CHECKING, Self
+
 from pymsgraph.models import fields
-from pymsgraph.models.base import ReadOnlyModel, PropertyModel
+from pymsgraph.models.base import PropertyModel, ReadOnlyModel
+
+if TYPE_CHECKING:
+    from pymsgraph.client import Client
 
 
 class Identity(ReadOnlyModel, PropertyModel):

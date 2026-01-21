@@ -28,6 +28,7 @@ class Group(DirectoryObject):
     SECURITY = "security"
     SECURITY_MAIL_ENABLED = "security_mail_enabled"
     PATH = "/groups"
+    SEARCH_FIELD = "display_name"
 
     # Properties
     allow_external_senders = BooleanField()
@@ -120,7 +121,7 @@ class Group(DirectoryObject):
         return "unknown"
 
     def __repr__(self) -> str:
-        return f"<Group: {self.display_name}, type={self.group_type}"
+        return f"<Group: {self.display_name}, type={self.group_type}>"
 
 
 class GroupQuerySet(QuerySet["Group"]):
