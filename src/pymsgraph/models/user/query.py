@@ -7,7 +7,7 @@ from pymsgraph.models.directory_object import DirectoryObject
 from pymsgraph.models.query import QuerySet
 from pymsgraph.utils import get_model_class
 
-from .model_fields import AssignedLicense, AssignedPlans
+from .common import AssignedLicense, AssignedPlans
 
 if TYPE_CHECKING:
     from pymsgraph.models.group import Group

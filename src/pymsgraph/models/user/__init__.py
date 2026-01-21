@@ -18,8 +18,8 @@ from pymsgraph.models.fields import (
 from pymsgraph.models.query import QuerySet
 from pymsgraph.models.drive import Drive
 
-from .model_fields import EmployeeOrgData, PasswordProfile
-from .query_fields import (
+from .common import EmployeeOrgData, PasswordProfile
+from .query import (
     AssignedLicensesQuerySet,
     AssignedLicensesQuerySetProxy,
     AssignedPlansQuerySet,
@@ -134,11 +134,7 @@ class User(DirectoryObject):
     # TODO: created_objects = ListField()
     # TODO: data_security_and_governance = Field()
     # TODO: device_management_troubleshooting_events = ListField()
-    # TODO: direct_reports = ListField()
-    @property
-    def drive(self) -> Drive:
-        return Drive(client=self._args[0], path=f"{self.path}/drive")
-
+    direct_reports = ListField(item_type="User", expand=True)
     # TODO: drives = ListField()
     # TODO: employee_experience = Field()
     # TODO: events = ListField()
@@ -151,8 +147,8 @@ class User(DirectoryObject):
     # TODO: mail_folders = ListField()
     # TODO: managed_app_registrations = ListField()
     # TODO: managed_devices = ListField()
-    # TODO: manager = Field()
-    member_of = QuerySetField(MemberOfQuerySet, prefetch=True)
+    manager = ModelField("User", expand=True)
+    member_of = QuerySetField(MemberOfQuerySet, prefetch=True, expand=True)
     # TODO: messages = ListField()
     # TODO: oauth2_permission_grants = ListField()
     # TODO: onenote = Field()
@@ -174,6 +170,16 @@ class User(DirectoryObject):
     # TODO: teamwork = Field()
     # TODO: todo = Field()
     # TODO: transitive_member_of = ListField()
+
+    @property
+    def path(self) -> str:
+        if self.id is None and self.user_principal_name:
+            return f"{self.PATH}/{self.user_principal_name}"
+        return super().path
+
+    @property
+    def drive(self) -> Drive:
+        return Drive(client=self._args[0], path=f"{self.path}/drive")
 
     def __repr__(self):
         return f"<User: {self.id}, {self.display_name}, {self.user_principal_name}>"

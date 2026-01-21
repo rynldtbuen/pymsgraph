@@ -86,7 +86,7 @@ def test_order_by_multiple(users_qs) -> None:
 def test_expand_single(users_qs) -> None:
     qs = users_qs.expand("manager", "display_name", "department")
     params = qs._build_params()
-    assert params["$expand"] == "manager($select=department,displayName)"
+    assert params["$expand"] == "manager($select=department,displayName,id)"
 
 
 def test_expand_multiple(users_qs) -> None:
@@ -95,7 +95,16 @@ def test_expand_multiple(users_qs) -> None:
     )
     params = qs._build_params()
     assert params["$expand"] == (
-        "manager($select=department,displayName),memberOf($select=displayName,mail)"
+        "manager($select=department,displayName,id),memberOf($select=displayName,id,mail)"
+    )
+
+
+def test_expand_defaults_to_related_select_fields(users_qs) -> None:
+    qs = users_qs.expand("manager")
+    params = qs._build_params()
+    assert (
+        params["$expand"]
+        == "manager($select=accountEnabled,displayName,id,mail,userPrincipalName)"
     )
 
 

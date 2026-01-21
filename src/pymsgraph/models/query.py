@@ -154,11 +154,25 @@ class QuerySet(Generic[_Tm]):
     def expand(self, field: str, *select: str) -> Self:
         qs = self._clone()
         expands: dict[str, set[str]] = qs._params.setdefault("$expand", {})
-        graph_field = to_camel_case(field)
+        explicit_select = bool(select)
+        if field_obj := qs._model_class.FIELDS.get(field):
+            if not field_obj.expand:
+                raise ValueError(f"Field {field!r} does not support expand")
+            graph_field = field_obj.graph_attr_name or to_camel_case(field)
+            model_class: type[Model] | None = getattr(field_obj, "model_class", None)
+            if not select and model_class is not None:
+                defaults = model_class.DEFAULT_SELECT_FIELDS
+                if defaults:
+                    select = tuple(defaults)
+        else:
+            raise ValueError(f"Unknown field {field!r}")
         if graph_field not in expands:
             expands[graph_field] = set()
         if select:
-            expands[graph_field].update(to_camel_case(s) for s in select)
+            selects = {to_camel_case(s) for s in select}
+            if explicit_select and "id" not in selects:
+                selects.add("id")
+            expands[graph_field].update(selects)
         return qs
 
     def all(self) -> Self:

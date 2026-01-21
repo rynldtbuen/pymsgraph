@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from ast import mod
 from datetime import datetime, timezone
+from turtle import mode
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload, override
 
 from pymsgraph.utils import get_model_class, to_camel_case
@@ -36,6 +38,7 @@ class Field(Generic[_T]):
         write_only: bool = False,
         select_default: bool = False,
         order_by: bool = False,
+        expand: bool = False,
         graph_attr_name: str | None = None,
     ) -> None:
         self.name: str
@@ -46,6 +49,7 @@ class Field(Generic[_T]):
         self.write_only: bool = write_only
         self.select_default: bool = select_default
         self.order_by = order_by
+        self.expand = expand
 
         if read_only and write_only:
             raise ValueError(
@@ -224,9 +228,26 @@ class DateTimeField(Field[datetime]):
 
 
 class ListField(Field[list[Any]]):
-    def __init__(self, item_type: type = str, **kwargs: Any) -> None:
+    def __init__(self, item_type: str | type = str, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self.item_type = item_type
+        self._item_type = item_type
+
+    @property
+    def item_type(self) -> type:
+        it: str | type | type[Model] = self._item_type
+        if isinstance(it, str):
+            it = get_model_class(it)
+            self._item_type = it
+        return it
+
+    @property
+    def model_class(self) -> type[Model] | None:
+        from pymsgraph.models.base import Model
+
+        it = self.item_type
+        if issubclass(it, Model):
+            return it
+        return None
 
     def __set__(self, obj: "Model", value: Any) -> None:
         if value is not None:
@@ -329,7 +350,15 @@ class QuerySetField(Field["_Tqs"]):
         qs_model_class: type[Model] | None = getattr(
             queryset_class, "model_class", None
         )
-        self.model_class = model_class or qs_model_class
+        self._model_class = model_class or qs_model_class
+
+    @property
+    def model_class(self) -> type[Model]:
+        if (model_class := self._model_class) is None:
+            raise ValueError(f"{type(self)} model_class is missing.")
+        if isinstance(model_class, str):
+            model_class = get_model_class(model_class)
+        return model_class
 
     @overload
     def __get__(
@@ -345,11 +374,7 @@ class QuerySetField(Field["_Tqs"]):
         if obj is None:
             return self
 
-        if (model_class := self.model_class) is None:
-            raise ValueError(f"{type(self)} model_class is missing.")
-        if isinstance(model_class, str):
-            model_class = get_model_class(model_class)
-
+        model_class = self.model_class
         queryset_class = self.queryset_class
 
         path = self.path or queryset_class.PATH or model_class.PATH

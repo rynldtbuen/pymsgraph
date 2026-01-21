@@ -7,8 +7,8 @@ import pytest
 from pymsgraph.models.directory_object import DirectoryObject
 from pymsgraph.models.group import Group
 from pymsgraph.models.user import User, UserQuerySet
-from pymsgraph.models.user.model_fields import AssignedLicense, PasswordProfile
-from pymsgraph.models.user.query_fields import (
+from pymsgraph.models.user.common import AssignedLicense, PasswordProfile
+from pymsgraph.models.user.query import (
     AssignedLicensesQuerySet,
     GroupsQuerySet,
     MemberOfQuerySet,
