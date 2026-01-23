@@ -25,7 +25,7 @@ _Tm = TypeVar("_Tm", bound="Model")
 class QuerySet(Generic[_Tm]):
     PATH: str | None = None
     model_class: type[_Tm] | None = None
-    page_size: int = 50
+    page_size: int | None = 50
 
     def __init__(
         self,
@@ -661,7 +661,7 @@ class Paginator(Generic[_Tm]):
 
         self._cached_objects: dict[int, list[_Tm]] = {}
         self._cached_count: int | None = qs_kwargs.get("prefetch_count")
-        self._page_size = page_size or 50
+        self._page_size = page_size or queryset.page_size
         self._current_page_number: int = 1
         self._next_link: str | None = qs_kwargs.get("prefetch_next_link")
 
@@ -747,7 +747,7 @@ class Paginator(Generic[_Tm]):
 
         if page_number == 1:
             params = queryset._build_params()
-            if params.get("$top") is None:
+            if params.get("$top") is None and self._page_size is not None:
                 params["$top"] = str(self._page_size)
 
             path = queryset.path

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast
 
 from pymsgraph import utils
 from pymsgraph.models.directory_object import DirectoryObject
 from pymsgraph.models.query import QuerySet
+from pymsgraph.models.subscribed_sku import SubscribedSku
 from pymsgraph.utils import get_model_class
 
 from .common import AssignedLicense, AssignedPlans
@@ -12,6 +14,7 @@ from .common import AssignedLicense, AssignedPlans
 if TYPE_CHECKING:
     from pymsgraph.models.group import Group
     from pymsgraph.models.user import User, UserQuerySet
+    from pymsgraph.models.subscribed_sku import SubscribedSku
 
 
 class AssignedLicensesQuerySet(QuerySet[AssignedLicense]):
@@ -26,7 +29,24 @@ class AssignedLicensesQuerySet(QuerySet[AssignedLicense]):
         Add license/s to this user.
         """
 
-        objects = self._coerce_objects(args, key="sku_id")
+        objects: list[AssignedLicense] = []
+        requested: dict[str, int] = {}
+        get_subscribed_sku_cache: Callable[[str], "SubscribedSku | None"] = (
+            await self._client.subscribed_skus._get_subscribed_skus_cache()
+        )
+        for obj in self._coerce_objects(args, key="sku_id"):
+            if obj.sku_id is None:
+                continue
+            subscribed_sku = get_subscribed_sku_cache(obj.sku_id)
+            if subscribed_sku is None:
+                raise ValueError(f"Unknown sku_id: {obj.sku_id}")
+
+            requested[obj.sku_id] = requested.get(obj.sku_id, 0) + 1
+            if requested[obj.sku_id] > subscribed_sku.available_units:
+                name = subscribed_sku.product_name
+                label = f"{obj.sku_id} ({name})" if name else obj.sku_id
+                raise ValueError(f"No available units for sku_id: {label}")
+            objects.append(obj)
         if not objects:
             return
 
@@ -73,7 +93,7 @@ class AssignedLicensesQuerySet(QuerySet[AssignedLicense]):
 
 
 class AssignedLicensesQuerySetProxy:
-    def __init__(self, parent: UserQuerySet):
+    def __init__(self, parent: "UserQuerySet"):
         self._parent = parent
 
     # def filter(self, **kwargs: Any) -> UserQuerySet:

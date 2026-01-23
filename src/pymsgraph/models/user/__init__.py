@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, override
+from collections.abc import Collection
+from typing import Any
 
 from pymsgraph import utils
 from pymsgraph.models.directory_object import DirectoryObject
@@ -216,13 +217,28 @@ class User(DirectoryObject):
 
         await self._client.patch(path, body=body)
 
+    async def assign_manager(self, manager: "str | User | DirectoryObject") -> None:
+        """
+        Assign a manager to this user.
+        """
+
+        if isinstance(manager, (User, DirectoryObject)):
+            manager_id = manager.id
+        else:
+            manager_id = manager
+
+        if not manager_id:
+            raise ValueError("Manager id is required.")
+
+        body = {"@odata.id": f"{self._client.base_url}/directoryObjects/{manager_id}"}
+        await self._client.put(f"{self.path}/manager/$ref", body=body)
+
     async def revoke_sign_in_sessions(self):
         return await self._client.post(f"{self.path}/revokeSignInSessions")
 
     def get_generated_password(self) -> str | None:
-        """Return the auto-generated password (if any) and clear it immediately."""
-        pwd = getattr(self, "_generated_password", None)
-        self._generated_password = None
+        pwd = getattr(self, "__generated_password", None)
+        setattr(self, "__generated_password", None)
         return pwd
 
     @property
@@ -238,6 +254,37 @@ class UserQuerySet(QuerySet["User"]):
     @property
     def assigned_licenses(self) -> AssignedLicensesQuerySetProxy:
         return AssignedLicensesQuerySetProxy(self)
+
+    async def assign_manager(self, manager: "str | User | DirectoryObject") -> None:
+        """
+        Assign manager to all users in this queryset (batched).
+        """
+
+        if isinstance(manager, (User, DirectoryObject)):
+            manager_id = getattr(manager, "id", None)
+        else:
+            manager_id = manager
+
+        if not manager_id:
+            raise ValueError("Manager id is required.")
+
+        c = self._client
+        manager_ref = {"@odata.id": f"{c.base_url}/directoryObjects/{manager_id}"}
+
+        async for chunked_users in utils.achunks(self.select("id"), 20):
+            requests: list[dict[str, Any]] = []
+            for i, u in enumerate(chunked_users, start=1):
+                requests.append(
+                    {
+                        "id": str(i),
+                        "method": "PUT",
+                        "url": f"{u.path}/manager/$ref",
+                        "headers": {"Content-Type": "application/json"},
+                        "body": manager_ref,
+                    }
+                )
+            batch_resp = await c.post("/$batch", body={"requests": requests})
+            utils.raise_batch_errors(batch_resp, action="assign manager to users")
 
     #     def get_by_directory_ids(
     #         self,
@@ -275,8 +322,11 @@ class UserQuerySet(QuerySet["User"]):
         password: str | None = None,
         force_change_password_next_sign_in: bool = True,
         auto_generate_password: bool = False,
+        assign_licenses: str | Collection[str] | None = None,
+        manager: str | User | DirectoryObject | None = None,
         **kwargs: Any,
     ) -> "User":
+
         if password is None:
             if not auto_generate_password:
                 raise ValueError(
@@ -297,8 +347,12 @@ class UserQuerySet(QuerySet["User"]):
             path=self.path,
             **kwargs,
         )
+
+        setattr(obj, "__generated_password", password)
+
         obj._validate_for_create()
         data = await self._client.post(self.path, body=obj.serialize())
+
         if data:
             merged = dict(data)
             for attr_name, val in obj._data.items():
@@ -309,44 +363,11 @@ class UserQuerySet(QuerySet["User"]):
                 merged.setdefault(graph_attr_name, field.to_graph(val))
             data = merged
             obj.refresh_from_graph(data)
+
+        if manager is not None:
+            await obj.assign_manager(manager)
+        if assign_licenses is not None:
+            if isinstance(assign_licenses, str):
+                assign_licenses = (assign_licenses,)
+            await obj.assigned_licenses.add(*assign_licenses)
         return obj
-
-
-#     def _prefetch_related(self, objs: list[User]) -> None:
-#         if "licenses" not in self._select_related:
-#             return
-
-#         rel = getattr(self.model_class, "licenses", None)
-#         graph_name = getattr(rel, "graph_name", "licenseDetails")
-
-#         users = [u for u in objs if getattr(u, "id", None)]
-#         if not users:
-#             return
-
-#         for batch in utils.chunks(users, 20):
-#             requests: list[dict[str, Any]] = []
-#             id_map: dict[str, User] = {}
-#             for idx, u in enumerate(batch, start=1):
-#                 req_id = str(idx)
-#                 id_map[req_id] = u
-#                 requests.append(
-#                     {
-#                         "id": req_id,
-#                         "method": "GET",
-#                         "url": f"{u.endpoint}/{graph_name}",
-#                     }
-#                 )
-
-#             resp = self._client.post("/$batch", json_body={"requests": requests})
-#             utils.raise_batch_errors(resp, action="prefetch user licenses")
-
-#             for r in resp.get("responses", []) or []:
-#                 req_id = str(r.get("id", ""))
-#                 user = id_map.get(req_id)
-#                 if not user:
-#                     continue
-#                 body = r.get("body") or {}
-#                 user._data["licenses"] = body.get("value", [])
-
-#     def enabled_with_assigned_licenses(self):
-#         return

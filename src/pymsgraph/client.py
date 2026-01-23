@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
 
 import httpx
 
-from pymsgraph.models.drive import DriveQuerySetProxy
+from pymsgraph import utils
 
 try:
     import importlib.metadata as importlib_metadata
@@ -96,6 +96,8 @@ class Client:
         if default_headers:
             self.default_headers.update(dict(default_headers))
 
+        self._cache = utils.SimpleCache()
+
     async def get(
         self,
         path: str | None = None,
@@ -136,14 +138,17 @@ class Client:
         path: str,
         *,
         content: bytes | str | None = None,
+        body: Mapping[str, Any] | None = None,
         params: Mapping[str, Any] | None = None,
         headers: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
-        content = content.encode() if isinstance(content, str) else content
+        if content is not None and body is not None:
+            raise ValueError("Provide either content or body, not both.")
         resp = await self.http.put(
             self._url(path),
             params=params,
-            content=content,
+            content=content.encode() if isinstance(content, str) else content,
+            json=dict(body) if body is not None else None,
             headers=self._headers(headers),
         )
         self._raise_for_status(resp)

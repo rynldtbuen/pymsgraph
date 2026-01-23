@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterable, AsyncIterator, Iterable
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable
 import importlib
 import re
 import secrets
 import string
+import time
 from typing import TYPE_CHECKING, Any, Iterator, TypeVar, cast
 
 
@@ -96,6 +97,40 @@ def get_model_class(model_name: str) -> type["Model"]:
 
 
 T = TypeVar("T")
+
+
+class SimpleCache:
+    def __init__(self) -> None:
+        self._store: dict[str, tuple[float, Any]] = {}
+
+    def get(self, key: str) -> Any | None:
+        item = self._store.get(key)
+        if item is None:
+            return None
+        expires_at, value = item
+        if expires_at and time.time() > expires_at:
+            self._store.pop(key, None)
+            return None
+        return value
+
+    def set(self, key: str, value: Any, *, ttl: int | float | None = None) -> None:
+        expires_at = time.time() + ttl if ttl else 0.0
+        self._store[key] = (expires_at, value)
+
+    async def get_or_set(
+        self,
+        key: str,
+        *,
+        ttl: int | float | None = None,
+        loader: Callable[[], Any],
+    ) -> Any:
+        if (cached := self.get(key)) is not None:
+            return cached
+        value = loader()
+        if hasattr(value, "__await__"):
+            value = await value
+        self.set(key, value, ttl=ttl)
+        return value
 
 
 def chunks(iterable: Iterable[T], size: int = 2) -> Iterator[list[T]]:

@@ -1,5 +1,6 @@
+from collections.abc import Callable
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 from pymsgraph.models.fields import CharField, IntegerField, ListField, ModelField
 from pymsgraph.models.base import ReadOnlyModel, PropertyModel
 from pymsgraph.models.query import QuerySet
@@ -69,6 +70,18 @@ class SubscribedSku(ReadOnlyModel):
     def product_name(self) -> str | None:
         return SubscribedSku.get_product_name(sku_id=self.sku_id)
 
+    @property
+    def available_units(self) -> int:
+        if self.prepaid_units is None:
+            return 0
+        enabled = int(self.prepaid_units.enabled or 0)
+        warning = int(self.prepaid_units.warning or 0)
+        consumed = int(self.consumed_units or 0)
+        return (enabled + warning) - consumed
+
+    def has_available_units(self) -> bool:
+        return self.available_units > 0
+
     def __repr__(self):
         return f"<SubscribedSku: {self.sku_id}>"
 
@@ -119,3 +132,23 @@ class SubscribedSku(ReadOnlyModel):
 
 class SubscribedSkuQuerySet(QuerySet[SubscribedSku]):
     model_class = SubscribedSku
+    page_size = None
+
+    async def _get_subscribed_skus_cache(
+        self,
+    ) -> Callable[[str], SubscribedSku | None]:
+        async def _load() -> dict[str, Any]:
+            return {
+                s.sku_id: s
+                async for s in self._client.subscribed_skus
+                if s.sku_id is not None
+            }
+
+        def _get(sku_id: str) -> SubscribedSku | None:
+            return cache.get(sku_id)
+
+        cache = await self._client._cache.get_or_set(
+            "subscribed_skus", ttl=120, loader=_load
+        )
+
+        return _get
