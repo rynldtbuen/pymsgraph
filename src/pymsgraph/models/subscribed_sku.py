@@ -1,9 +1,12 @@
 from collections.abc import Callable
+from json import load
 from pathlib import Path
+from re import sub
 from typing import Any, ClassVar
 from pymsgraph.models.fields import CharField, IntegerField, ListField, ModelField
 from pymsgraph.models.base import ReadOnlyModel, PropertyModel
 from pymsgraph.models.query import QuerySet
+from pymsgraph.utils import SimpleCache
 
 
 class LicenseUnitsDetail(ReadOnlyModel, PropertyModel):
@@ -58,7 +61,9 @@ class SubscribedSku(ReadOnlyModel):
     prepaid_units = ModelField(model_class=LicenseUnitsDetail)
     service_plans = ListField(ServicePlanInfo)
 
-    PRODUCT_NAME_BY_SKU: ClassVar[dict[str, str]] = {}
+    PRODUCT_NAME_SKU_ID_MAP: ClassVar[dict[str, str]] = {}
+    SKU_ID_PRODUCT_NAME_MAP: ClassVar[dict[str, str]] = {}
+    SKU_PART_NUMBER_PRODUCT_NAME_MAP: ClassVar[dict[str, str]] = {}
     PRODUCT_NAMES_CSV_PATH: ClassVar[Path] = (
         Path(__file__).resolve().parents[3]
         / "src"
@@ -86,69 +91,76 @@ class SubscribedSku(ReadOnlyModel):
         return f"<SubscribedSku: {self.sku_id}>"
 
     @classmethod
+    def _initialize_mapping(cls):
+        csv_path = Path(cls.PRODUCT_NAMES_CSV_PATH)
+        if not csv_path.is_file():
+            return
+
+        import csv
+
+        with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                display = (row.get("Product_Display_Name") or "").strip()
+                guid = (row.get("GUID") or "").strip()
+                if not display:
+                    continue
+                if guid:
+                    cls.SKU_ID_PRODUCT_NAME_MAP.setdefault(guid.lower(), display)
+                    cls.PRODUCT_NAME_SKU_ID_MAP.setdefault(
+                        display.lower(), guid.lower()
+                    )
+                part_number = (row.get("Product_Sku") or "").strip()
+                if part_number:
+                    cls.SKU_PART_NUMBER_PRODUCT_NAME_MAP.setdefault(
+                        part_number.lower(), display
+                    )
+
+    @classmethod
     def get_product_name(
         cls,
         *,
         sku_id: str | None = None,
         sku_part_number: str | None = None,
     ) -> str | None:
-        """
-        Resolve a human-friendly product name for a SKU id or sku part number.
 
-        Graph does not provide product names for subscribed SKUs, so this relies
-        on a local mapping (PRODUCT_NAME_BY_SKU) that you can extend.
-        """
-
-        def _load():
-            csv_path = Path(cls.PRODUCT_NAMES_CSV_PATH)
-            if not csv_path.is_file():
-                return
-
-            import csv
-
-            with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    display = (row.get("Product_Display_Name") or "").strip()
-                    guid = (row.get("GUID") or "").strip()
-                    if not display:
-                        continue
-                    if guid:
-                        cls.PRODUCT_NAME_BY_SKU.setdefault(guid.lower(), display)
-
-        if not cls.PRODUCT_NAME_BY_SKU:
-            _load()
-        if not sku_id and not sku_part_number:
-            raise ValueError("Provide sku_id or sku_part_number")
+        if not cls.SKU_ID_PRODUCT_NAME_MAP:
+            cls._initialize_mapping()
         if sku_id:
             key = sku_id.strip().lower()
-            if key in cls.PRODUCT_NAME_BY_SKU:
-                return cls.PRODUCT_NAME_BY_SKU[key]
+            return cls.SKU_ID_PRODUCT_NAME_MAP.get(key)
         if sku_part_number:
             key = sku_part_number.strip().lower()
-            return cls.PRODUCT_NAME_BY_SKU.get(key)
-        return None
+            return cls.SKU_PART_NUMBER_PRODUCT_NAME_MAP.get(key)
+        raise ValueError("Provide sku_id or sku_part_number")
+
+    @classmethod
+    def get_sku_id(cls, product_name: str) -> str | None:
+        if not product_name:
+            return None
+        if not cls.PRODUCT_NAME_SKU_ID_MAP:
+            cls._initialize_mapping()
+        key = " ".join(product_name.split()).lower()
+        return cls.PRODUCT_NAME_SKU_ID_MAP.get(key)
 
 
 class SubscribedSkuQuerySet(QuerySet[SubscribedSku]):
     model_class = SubscribedSku
     page_size = None
 
-    async def _get_subscribed_skus_cache(
-        self,
-    ) -> Callable[[str], SubscribedSku | None]:
-        async def _load() -> dict[str, Any]:
+    @property
+    def _cache(self) -> SimpleCache:
+        async def _loader() -> dict[str, Any]:
             return {
                 s.sku_id: s
                 async for s in self._client.subscribed_skus
                 if s.sku_id is not None
             }
 
-        def _get(sku_id: str) -> SubscribedSku | None:
-            return cache.get(sku_id)
+        if self._client is not None and hasattr(self._client, "_subscribed_sku_cache"):
+            return getattr(self._client, "_subscribed_sku_cache")
 
-        cache = await self._client._cache.get_or_set(
-            "subscribed_skus", ttl=120, loader=_load
-        )
-
-        return _get
+        cache = SimpleCache(loader=_loader)
+        if self._client is not None:
+            setattr(self._client, "_subscribed_sku_cache", cache)
+        return cache

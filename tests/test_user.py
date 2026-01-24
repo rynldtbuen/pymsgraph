@@ -193,6 +193,19 @@ async def test_field_assigned_licenses_list(
 @pytest.mark.asyncio
 async def test_field_assigned_licenses_add_remove(make_client: "MakeClient"):
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1.0/subscribedSkus":
+            return httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {
+                            "skuId": "sku1",
+                            "consumedUnits": 0,
+                            "prepaidUnits": {"enabled": 2, "warning": 0},
+                        }
+                    ]
+                },
+            )
         body = json.loads(request.content.decode())
         assert request.method == "POST"
         assert request.url.path == "/v1.0/users/123/assignLicense"
@@ -212,6 +225,45 @@ async def test_field_assigned_licenses_add_remove(make_client: "MakeClient"):
     u = c.users.make(id="123", display_name="Alice")
     await u.assigned_licenses.add("sku1")
     await u.assigned_licenses.remove("sku1")
+
+
+@pytest.mark.asyncio
+async def test_field_assigned_licenses_add_checks_available(make_client: "MakeClient"):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1.0/subscribedSkus":
+            return httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {
+                            "skuId": "sku1",
+                            "consumedUnits": 1,
+                            "prepaidUnits": {"enabled": 2, "warning": 0},
+                        }
+                    ]
+                },
+            )
+        if (
+            request.method == "POST"
+            and request.url.path == "/v1.0/users/123/assignLicense"
+        ):
+            body = json.loads(request.content.decode())
+            assert body == {
+                "addLicenses": [{"skuId": "sku1", "disabledPlans": []}],
+                "removeLicenses": [],
+            }
+            return httpx.Response(200, json={})
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    c, _ = make_client(handler)
+    u = c.users.make(id="123", display_name="Alice")
+
+    await u.assigned_licenses.add("sku1")
+
+    cached: Any | None = await c.subscribed_skus._cache.get("sku1")
+    if cached is None:
+        raise AssertionError("SubscribedSku not cached")
+    assert cached.consumed_units == 2
 
 
 def test_qs_filter_assigned_licenses(users_qs: UserQuerySet):

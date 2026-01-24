@@ -18,6 +18,7 @@ from pymsgraph.models.fields import (
 )
 from pymsgraph.models.query import QuerySet
 from pymsgraph.models.drive import Drive
+from pymsgraph.models.subscribed_sku import SubscribedSku
 
 from .common import EmployeeOrgData, PasswordProfile
 from .query import (
@@ -32,7 +33,7 @@ class User(DirectoryObject):
     """
     Graph user resource type.
 
-    https://learn.microsoft.com/en-us/graph/api/resources/user?view=graph-rest-1.0
+    https://learn.microsoft.com/en-us/graph/api/resources/user
     """
 
     PATH = "/users"
@@ -230,6 +231,14 @@ class User(DirectoryObject):
         if not manager_id:
             raise ValueError("Manager id is required.")
 
+        if isinstance(manager_id, str) and "@" in manager_id and not utils.is_guid(
+            manager_id
+        ):
+            mgr = await self._client.users.get(user_principal_name=manager_id)
+            manager_id = mgr.id
+            if not manager_id:
+                raise ValueError("Manager id is required.")
+
         body = {"@odata.id": f"{self._client.base_url}/directoryObjects/{manager_id}"}
         await self._client.put(f"{self.path}/manager/$ref", body=body)
 
@@ -367,7 +376,22 @@ class UserQuerySet(QuerySet["User"]):
         if manager is not None:
             await obj.assign_manager(manager)
         if assign_licenses is not None:
-            if isinstance(assign_licenses, str):
+            if isinstance(assign_licenses, (str, bytes)) or not isinstance(
+                assign_licenses, Collection
+            ):
                 assign_licenses = (assign_licenses,)
-            await obj.assigned_licenses.add(*assign_licenses)
+
+            resolved: list[str] = []
+            for item in assign_licenses:
+                if utils.is_guid(item):
+                    resolved.append(item)
+                else:
+                    sku_id = SubscribedSku.get_sku_id(product_name=item)
+                    if sku_id is not None:
+                        resolved.append(sku_id)
+                    else:
+                        raise ValueError(f"Unknown license: {item!r}")
+            if resolved:
+                await obj.assigned_licenses.add(*resolved)
+
         return obj

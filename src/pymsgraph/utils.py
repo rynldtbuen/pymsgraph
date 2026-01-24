@@ -6,11 +6,14 @@ import re
 import secrets
 import string
 import time
-from typing import TYPE_CHECKING, Any, Iterator, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Iterator, TypeVar
+import uuid
 
 
 if TYPE_CHECKING:
     from pymsgraph.models.base import Model
+
+T = TypeVar("T")
 
 
 def generate_password(length: int = 12) -> str:
@@ -87,50 +90,56 @@ def get_model_class(model_name: str) -> type["Model"]:
     return getattr(mod, model_name)
 
 
-# def get_queryset_class(queryset_path: str):
-#     module_name, _, cls_name = queryset_path.rpartition(".")
-#     if not module_name or not cls_name:
-#         raise ImportError(f"Invalid qs_path, '{queryset_path}'")
-
-#     mod = importlib.import_module(f"pymsgraph.models.{module_name}")
-#     return getattr(mod, cls_name)
-
-
-T = TypeVar("T")
-
-
 class SimpleCache:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        loader: Callable[[], Any] | None = None,
+        ttl: int | float = 600,
+    ) -> None:
         self._store: dict[str, tuple[float, Any]] = {}
+        self._loader = loader
+        self._loaded = False
+        self._ttl = ttl
 
-    def get(self, key: str) -> Any | None:
-        item = self._store.get(key)
-        if item is None:
-            return None
-        expires_at, value = item
-        if expires_at and time.time() > expires_at:
-            self._store.pop(key, None)
-            return None
+    async def get(self, key: str) -> Any | None:
+        async def _load():
+            if not self._loaded and (loader := self._loader):
+                data = await loader()
+                expires_at = time.time() + self._ttl
+                if isinstance(data, dict):
+                    for k, v in data.items():
+                        self._store[str(k)] = (expires_at, v)
+                else:
+                    self._store[key] = (expires_at, data)
+                self._loaded = True
+
+        def _get():
+            item = self._store.get(key)
+            if item is None:
+                return (0, None)
+            return item
+
+        await _load()
+
+        expires_at, value = _get()
+
+        if time.time() > expires_at:
+            if self._loader is None:
+                self._store.pop(key, None)
+                return None
+
+            self._store.clear()
+            await _load()
+            _, value = _get()
+
         return value
 
     def set(self, key: str, value: Any, *, ttl: int | float | None = None) -> None:
-        expires_at = time.time() + ttl if ttl else 0.0
+        if self._loader:
+            raise RuntimeError("Cannot set value on a cache with a loader")
+        expires_at = time.time() + (ttl or self._ttl)
         self._store[key] = (expires_at, value)
-
-    async def get_or_set(
-        self,
-        key: str,
-        *,
-        ttl: int | float | None = None,
-        loader: Callable[[], Any],
-    ) -> Any:
-        if (cached := self.get(key)) is not None:
-            return cached
-        value = loader()
-        if hasattr(value, "__await__"):
-            value = await value
-        self.set(key, value, ttl=ttl)
-        return value
 
 
 def chunks(iterable: Iterable[T], size: int = 2) -> Iterator[list[T]]:
@@ -161,96 +170,12 @@ async def achunks(aiterable: AsyncIterable[T], size: int = 2) -> AsyncIterator[l
         yield batch
 
 
-# def coerce_objects(
-#     *args: str | TModel | Iterable[str] | Iterable[TModel] | QuerySet[TModel],
-#     queryset: QuerySet[TModel],  # pyright: ignore[reportRedeclaration]
-#     key: str = "id",
-# ) -> Iterator[TModel]:
-#     def _is_iterable_but_not_str(x: Any) -> bool:
-#         return isinstance(x, Iterable) and not isinstance(
-#             x, (str, bytes, bytearray, dict)
-#         )
-
-#     def _iter_flatten(
-#         *args: str | TModel | Iterable[str] | Iterable[TModel] | QuerySet[TModel],
-#     ) -> Iterator[TModel]:
-#         for arg in args:
-#             if isinstance(arg, str):
-#                 yield queryset.make(**{key: arg})
-#             elif isinstance(arg, Model):
-#                 yield arg
-#             elif _is_iterable_but_not_str(arg):
-#                 yield from _iter_flatten(*arg)
-#             elif isinstance(arg, QuerySet):
-#                 yield from arg
-#             else:
-#                 continue
-
-#     from pymsgraph.models.base import Model
-#     from pymsgraph.query import QuerySet
-
-#     # if isinstance(model_class, str):
-#     #     model_class: type[TModel] = cast(type[TModel], get_model_class(model_class))
-
-#     seen: set[str] = set()
-
-#     for obj in _iter_flatten(*args):
-#         try:
-#             val = getattr(obj, key)
-#         except AttributeError:
-#             continue
-#         if val not in seen:
-#             yield obj
-#         seen.add(val)
-
-
-# def compile_collection_lookup(
-#     *,
-#     field_name: str,
-#     element_field: bool | str | None = None,
-#     var: str = "x",
-# ) -> Callable[[str, Any], str]:
-#     """
-#     Build an any() lookup for a collection.
-
-#     - scalar collection: otherMails/any(x:endswith(x,'@edu'))
-#     - object collection: assignedLicenses/any(u:u/skuId eq <value>)
-#     """
-
-#     def _compile(lookup: str, value: Any) -> str:
-#         graph_field = snake_to_camel(field_name)
-#         if lookup == "isnull":
-#             if not isinstance(value, bool):
-#                 raise ValueError(f"Value is not an instance of bool, {value!r}")
-#             return (
-#                 f"{graph_field}/$count eq 0" if value else f"{graph_field}/$count ne 0"
-#             )
-
-#         if element_field:
-#             if element_field is True:
-#                 if "__" in lookup:
-#                     element, op = lookup.split("__", 1)
-#                 else:
-#                     element, op = lookup, "exact"
-#                 if not element:
-#                     raise ValueError(f"Unsupported lookup for collection: {lookup!r}")
-#             else:
-#                 element = str(element_field)
-#                 if lookup.startswith(f"{element}__"):
-#                     op = lookup.split("__", 1)[1] or "exact"
-#                 elif lookup == element:
-#                     op = "exact"
-#                 else:
-#                     raise ValueError(f"Unsupported lookup for {element}: {lookup!r}")
-
-#             ef_graph = snake_to_camel(element)
-#             clause = compile_lookup(f"{var}/{ef_graph}", op, value)
-#             return f"{graph_field}/any({var}:{clause})"
-
-#         clause = compile_lookup(var, lookup or "exact", value)
-#         return f"{graph_field}/any({var}:{clause})"
-
-#     return _compile
+def is_guid(value: str) -> bool:
+    try:
+        uuid.UUID(value)
+        return True
+    except ValueError:
+        return False
 
 
 def raise_batch_errors(batch_payload: dict[str, Any], *, action: str) -> None:

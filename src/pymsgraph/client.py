@@ -96,8 +96,6 @@ class Client:
         if default_headers:
             self.default_headers.update(dict(default_headers))
 
-        self._cache = utils.SimpleCache()
-
     async def get(
         self,
         path: str | None = None,

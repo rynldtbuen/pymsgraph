@@ -29,32 +29,30 @@ class AssignedLicensesQuerySet(QuerySet[AssignedLicense]):
         Add license/s to this user.
         """
 
-        objects: list[AssignedLicense] = []
-        requested: dict[str, int] = {}
-        get_subscribed_sku_cache: Callable[[str], "SubscribedSku | None"] = (
-            await self._client.subscribed_skus._get_subscribed_skus_cache()
-        )
+        available: dict[str, "SubscribedSku"] = {}
+        subscribed_sku_cache = self._client.subscribed_skus._cache
         for obj in self._coerce_objects(args, key="sku_id"):
             if obj.sku_id is None:
                 continue
-            subscribed_sku = get_subscribed_sku_cache(obj.sku_id)
+            subscribed_sku = await subscribed_sku_cache.get(obj.sku_id)
             if subscribed_sku is None:
                 raise ValueError(f"Unknown sku_id: {obj.sku_id}")
 
-            requested[obj.sku_id] = requested.get(obj.sku_id, 0) + 1
-            if requested[obj.sku_id] > subscribed_sku.available_units:
+            if not subscribed_sku.has_available_units():
                 name = subscribed_sku.product_name
                 label = f"{obj.sku_id} ({name})" if name else obj.sku_id
                 raise ValueError(f"No available units for sku_id: {label}")
-            objects.append(obj)
-        if not objects:
+            available[obj.sku_id] = subscribed_sku
+
+        if not available:
             return
 
         kwargs = {
             "path": self.path,
             "body": {
                 "addLicenses": [
-                    {"skuId": obj.sku_id, "disabledPlans": []} for obj in objects
+                    {"skuId": sku_id, "disabledPlans": []}
+                    for sku_id in available.keys()
                 ],
                 "removeLicenses": [],
             },
@@ -64,6 +62,11 @@ class AssignedLicensesQuerySet(QuerySet[AssignedLicense]):
             return kwargs
 
         await self._client.post(**kwargs)
+        for subscribed_sku in available.values():
+            current = subscribed_sku._data.get(
+                "consumed_units", subscribed_sku.consumed_units or 0
+            )
+            subscribed_sku._data["consumed_units"] = int(current) + 1
 
     async def remove(
         self,
