@@ -359,6 +359,24 @@ async def test_qs_assigned_licenses_proxy_add_remove(make_client: "MakeClient"):
     batch_requests: list[list[dict[str, Any]]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1.0/subscribedSkus":
+            return httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {
+                            "skuId": "sku1",
+                            "consumedUnits": 0,
+                            "prepaidUnits": {"enabled": 10, "warning": 0},
+                        },
+                        {
+                            "skuId": "sku2",
+                            "consumedUnits": 0,
+                            "prepaidUnits": {"enabled": 10, "warning": 0},
+                        },
+                    ]
+                },
+            )
         if request.method == "GET" and request.url.path == "/v1.0/users":
             return httpx.Response(200, json={"value": [{"id": "u1"}, {"id": "u2"}]})
 
@@ -370,9 +388,10 @@ async def test_qs_assigned_licenses_proxy_add_remove(make_client: "MakeClient"):
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
     c, _ = make_client(handler)
-    qs = c.users.filter(display_name="Alice")
+    qs = c.users
 
-    await qs.assigned_licenses.add("sku1")
+    result = await qs.assigned_licenses.add("sku1")
+    assert result == {"sku1": {"assigned": 2, "skipped": 0}}
     await qs.assigned_licenses.remove("sku2")
 
     # Two batch calls: add then remove

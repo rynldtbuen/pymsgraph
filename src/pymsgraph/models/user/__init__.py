@@ -341,7 +341,7 @@ class UserQuerySet(QuerySet["User"]):
         force_change_password_next_sign_in: bool = True,
         auto_generate_password: bool = False,
         assign_licenses: str | Collection[str] | None = None,
-        manager: str | None,
+        manager: str | None = None,
         **kwargs: Any,
     ) -> "User":
 
