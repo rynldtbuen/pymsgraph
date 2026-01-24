@@ -266,6 +266,31 @@ async def test_field_assigned_licenses_add_checks_available(make_client: "MakeCl
     assert cached.consumed_units == 2
 
 
+@pytest.mark.asyncio
+async def test_field_assigned_licenses_add_insufficient(make_client: "MakeClient"):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1.0/subscribedSkus":
+            return httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {
+                            "skuId": "sku1",
+                            "consumedUnits": 2,
+                            "prepaidUnits": {"enabled": 2, "warning": 0},
+                        }
+                    ]
+                },
+            )
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    c, _ = make_client(handler)
+    u = c.users.make(id="123", display_name="Alice")
+
+    with pytest.raises(ValueError, match="No available units"):
+        await u.assigned_licenses.add("sku1")
+
+
 def test_qs_filter_assigned_licenses(users_qs: UserQuerySet):
 
     qs = users_qs._clone()
