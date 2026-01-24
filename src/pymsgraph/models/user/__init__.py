@@ -218,27 +218,20 @@ class User(DirectoryObject):
 
         await self._client.patch(path, body=body)
 
-    async def assign_manager(self, manager: "str | User | DirectoryObject") -> None:
+    async def assign_manager(self, manager_id: str) -> None:
         """
         Assign a manager to this user.
         """
 
-        if isinstance(manager, (User, DirectoryObject)):
-            manager_id = manager.id
-        else:
-            manager_id = manager
-
-        if not manager_id:
-            raise ValueError("Manager id is required.")
-
-        if isinstance(manager_id, str) and "@" in manager_id and not utils.is_guid(
-            manager_id
-        ):
-            mgr = await self._client.users.get(user_principal_name=manager_id)
-            manager_id = mgr.id
-            if not manager_id:
-                raise ValueError("Manager id is required.")
-
+        if "@" in manager_id and not utils.is_guid(manager_id):
+            manager_id = await self._client.users._cache.get(manager_id) or ""
+            if manager_id is None:
+                manager = await self._client.users.get(id=manager_id)
+                if manager.id is None:
+                    raise ValueError(
+                        f"Unable to resolve manager id from '{manager_id}'."
+                    )
+                manager_id = manager.id
         body = {"@odata.id": f"{self._client.base_url}/directoryObjects/{manager_id}"}
         await self._client.put(f"{self.path}/manager/$ref", body=body)
 
@@ -261,8 +254,24 @@ class UserQuerySet(QuerySet["User"]):
     model_class = User
 
     @property
+    def _cache(self) -> utils.SimpleCache:
+        if self._client is not None and hasattr(self._client, "_user_cache"):
+            return getattr(self._client, "_user_cache")
+
+        cache = utils.SimpleCache()
+        if self._client is not None:
+            setattr(self._client, "_user_cache", cache)
+        return cache
+
+    @property
     def assigned_licenses(self) -> AssignedLicensesQuerySetProxy:
         return AssignedLicensesQuerySetProxy(self)
+
+    async def get(self, id: str | None = None, **kwargs: Any) -> "User":
+        user = await super().get(id, **kwargs)
+        if user.user_principal_name and user.id:
+            self._cache.set(user.user_principal_name.lower(), user.id, ttl=86400)
+        return user
 
     async def assign_manager(self, manager: "str | User | DirectoryObject") -> None:
         """
@@ -332,7 +341,7 @@ class UserQuerySet(QuerySet["User"]):
         force_change_password_next_sign_in: bool = True,
         auto_generate_password: bool = False,
         assign_licenses: str | Collection[str] | None = None,
-        manager: str | User | DirectoryObject | None = None,
+        manager: str | None,
         **kwargs: Any,
     ) -> "User":
 
