@@ -21,10 +21,4 @@ class AppRoleAssignment(ReadOnlyModel):
     resource_id = CharField()
 
     def __repr__(self) -> str:
-        return (
-            f"<AppRoleAssignment: {self.principal_display_name or self.principal_id}>"
-        )
-
-
-class AppRoleAssignmentQuerySet(QuerySet[AppRoleAssignment]):
-    model_class = AppRoleAssignment
+        return f"<AppRoleAssignment: {self.resource_display_name}, {self.principal_display_name}>"

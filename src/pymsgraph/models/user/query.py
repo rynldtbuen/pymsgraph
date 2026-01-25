@@ -6,6 +6,11 @@ from typing import TYPE_CHECKING, Any, cast
 from pymsgraph import utils
 from pymsgraph.models.directory_object import DirectoryObject
 from pymsgraph.models.query import QuerySet
+from pymsgraph.models.service_principal.query import (
+    AppRoleAssignmentQuerySet as _AppRoleAssignmentQuerySet,
+)
+from pymsgraph.models.service_principal import ServicePrincipal
+from pymsgraph.models.service_principal.common import AppRoleAssignment
 from pymsgraph.models.subscribed_sku import SubscribedSku
 from pymsgraph.utils import get_model_class
 
@@ -13,8 +18,9 @@ from .common import AssignedLicense, AssignedPlans
 
 if TYPE_CHECKING:
     from pymsgraph.models.group import Group
-    from pymsgraph.models.user import User, UserQuerySet
+    from pymsgraph.models.service_principal.common import AppRoleAssignment
     from pymsgraph.models.subscribed_sku import SubscribedSku
+    from pymsgraph.models.user import User, UserQuerySet
 
 
 class AssignedLicensesQuerySet(QuerySet[AssignedLicense]):
@@ -225,6 +231,104 @@ class AssignedLicensesQuerySetProxy:
                 )
 
 
+class AppRoleAssignmentsQuerySetProxy:
+    def __init__(self, parent: "UserQuerySet"):
+        self._parent = parent
+
+    async def add(self, *args: "AppRoleAssignment | dict[str, str]") -> None:
+        """
+        Assign app roles to all users in this queryset.
+        """
+
+        c = self._parent._client
+        assignments = list(AppRoleAssignmentQuerySet(c)._coerce_objects(args))
+        if not assignments:
+            return
+        for obj in assignments:
+            if not obj.resource_id or not obj.app_role_id:
+                raise ValueError("resource_id and app_role_id are required.")
+
+        async for chunked_users in utils.achunks(self._parent.select("id"), 20):
+            requests: list[dict[str, Any]] = []
+            for u in chunked_users:
+                for obj in assignments:
+                    requests.append(
+                        {
+                            "id": str(len(requests) + 1),
+                            "method": "POST",
+                            "url": f"/servicePrincipals/{obj.resource_id}/appRoleAssignedTo",
+                            "headers": {"Content-Type": "application/json"},
+                            "body": {
+                                "principalId": u.id,
+                                "resourceId": obj.resource_id,
+                                "appRoleId": obj.app_role_id,
+                            },
+                        }
+                    )
+            for chunked_requests in utils.chunks(requests, 20):
+                batch_resp = await c.post("/$batch", body={"requests": chunked_requests})
+                utils.raise_batch_errors(
+                    batch_resp, action="add user app role assignments"
+                )
+
+    async def remove(self, *args: "AppRoleAssignment | dict[str, str]") -> None:
+        """
+        Remove app roles from all users in this queryset.
+        """
+
+        c = self._parent._client
+        assignments = list(AppRoleAssignmentQuerySet(c)._coerce_objects(args))
+        if not assignments:
+            return
+        criteria = set()
+        for obj in assignments:
+            if not obj.resource_id or not obj.app_role_id:
+                raise ValueError("resource_id and app_role_id are required.")
+            criteria.add((obj.resource_id, obj.app_role_id))
+
+        async for chunked_users in utils.achunks(self._parent.select("id"), 20):
+            requests: list[dict[str, Any]] = []
+            for u in chunked_users:
+                requests.append(
+                    {
+                        "id": str(len(requests) + 1),
+                        "method": "GET",
+                        "url": f"{u.path}/appRoleAssignments",
+                    }
+                )
+            batch_resp = await c.post("/$batch", body={"requests": requests})
+            utils.raise_batch_errors(
+                batch_resp, action="list user app role assignments"
+            )
+
+            delete_requests: list[dict[str, Any]] = []
+            for resp in batch_resp.get("responses", []) or []:
+                body = resp.get("body") or {}
+                for item in body.get("value", []) or []:
+                    resource_id = item.get("resourceId")
+                    app_role_id = item.get("appRoleId")
+                    if (resource_id, app_role_id) not in criteria:
+                        continue
+                    assignment_id = item.get("id")
+                    if not assignment_id or not resource_id:
+                        continue
+                    delete_requests.append(
+                        {
+                            "id": str(len(delete_requests) + 1),
+                            "method": "DELETE",
+                            "url": f"/servicePrincipals/{resource_id}/appRoleAssignedTo/{assignment_id}",
+                        }
+                    )
+
+            for chunked_requests in utils.chunks(delete_requests, 20):
+                batch_delete = await c.post(
+                    "/$batch", body={"requests": chunked_requests}
+                )
+                utils.raise_batch_errors(
+                    batch_delete, action="remove user app role assignments"
+                )
+
+
 class AssignedPlansQuerySet(QuerySet[AssignedPlans]):
     model_class = AssignedPlans
 
@@ -363,3 +467,72 @@ class MemberOfQuerySet(QuerySet["DirectoryObject"]):
             obj=parent_user,
             cached_data=cached,
         )
+
+
+class AppRoleAssignmentQuerySet(_AppRoleAssignmentQuerySet):
+    async def add(
+        self, *args: "AppRoleAssignment | dict[str, str]"
+    ) -> "AppRoleAssignment | list[AppRoleAssignment] | None":
+        """
+        Assign app roles to this user using /servicePrincipals/{id}/appRoleAssignedTo.
+        """
+
+        parent_user = self._kwargs.get("obj")
+        if parent_user is None or parent_user.id is None:
+            raise ValueError("AppRoleAssignmentQuerySet has no parent user bound.")
+
+        c = self._client
+        objects = self._coerce_objects(args)
+
+        for chunked_objects in utils.chunks(objects, 20):
+            requests: list[dict[str, Any]] = []
+            for i, obj in enumerate(chunked_objects, start=1):
+                if not obj.resource_id or not obj.app_role_id:
+                    raise ValueError("resource_id and app_role_id are required.")
+                requests.append(
+                    {
+                        "id": str(i),
+                        "method": "POST",
+                        "url": f"/servicePrincipals/{obj.resource_id}/appRoleAssignedTo",
+                        "headers": {"Content-Type": "application/json"},
+                        "body": {
+                            "principalId": parent_user.id,
+                            "resourceId": obj.resource_id,
+                            "appRoleId": obj.app_role_id,
+                        },
+                    }
+                )
+            batch_resp = await c.post("/$batch", body={"requests": requests})
+            utils.raise_batch_errors(batch_resp, action="add user app role assignments")
+
+    async def remove(
+        self, *args: "AppRoleAssignment | dict[str, str]"
+    ) -> None:
+        """
+        Remove app role assignments from this user using
+        /servicePrincipals/{id}/appRoleAssignedTo/{assignmentId}.
+        """
+
+        parent_user = self._kwargs.get("obj")
+        if parent_user is None or parent_user.id is None:
+            raise ValueError("AppRoleAssignmentQuerySet has no parent user bound.")
+
+        c = self._client
+        objects = self._coerce_objects(args)
+
+        for chunked_objects in utils.chunks(objects, 20):
+            requests: list[dict[str, Any]] = []
+            for i, obj in enumerate(chunked_objects, start=1):
+                if not obj.id or not obj.resource_id:
+                    raise ValueError("id and resource_id are required to remove.")
+                requests.append(
+                    {
+                        "id": str(i),
+                        "method": "DELETE",
+                        "url": f"/servicePrincipals/{obj.resource_id}/appRoleAssignedTo/{obj.id}",
+                    }
+                )
+            batch_resp = await c.post("/$batch", body={"requests": requests})
+            utils.raise_batch_errors(
+                batch_resp, action="remove user app role assignments"
+            )

@@ -624,7 +624,9 @@ class QuerySet(Generic[_Tm]):
         return [i async for i in async_gen]
 
     def _coerce_objects(
-        self, args: tuple[str | _Tm | QuerySet[_Tm], ...], key: str = "id"
+        self,
+        args: tuple[str | _Tm | QuerySet[_Tm] | dict[str, Any], ...],
+        key: str = "id",
     ) -> Iterator[_Tm]:
         def _iter_flatten(iterable) -> Iterator[_Tm]:
             for item in iterable:
@@ -632,12 +634,19 @@ class QuerySet(Generic[_Tm]):
                     yield self.make_from_graph(data={key: item})
                 elif isinstance(item, self._model_class):
                     yield item
+                elif isinstance(item, dict):
+                    yield self._model_class(**item)
                 elif isinstance(item, QuerySet):
-                    objects = asyncio.run(self._iter_objects(item))
+                    try:
+                        asyncio.get_running_loop()
+                    except RuntimeError:
+                        objects = asyncio.run(self._iter_objects(item))
+                    else:
+                        raise RuntimeError(
+                            "Cannot coerce QuerySet in async context; iterate it and pass objects instead."
+                        )
                     for obj in objects:
                         yield obj
-                else:
-                    continue
 
         seen: set[str] = set()
 

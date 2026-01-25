@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Collection
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pymsgraph import utils
 from pymsgraph.models.directory_object import DirectoryObject
+from pymsgraph.models.drive import Drive
 from pymsgraph.models.fields import (
     BooleanField,
     CharField,
@@ -17,16 +18,20 @@ from pymsgraph.models.fields import (
     QuerySetField,
 )
 from pymsgraph.models.query import QuerySet
-from pymsgraph.models.drive import Drive
 from pymsgraph.models.subscribed_sku import SubscribedSku
 
 from .common import EmployeeOrgData, PasswordProfile
 from .query import (
+    AppRoleAssignmentQuerySet,
+    AppRoleAssignmentsQuerySetProxy,
     AssignedLicensesQuerySet,
     AssignedLicensesQuerySetProxy,
     AssignedPlansQuerySet,
     MemberOfQuerySet,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class User(DirectoryObject):
@@ -122,7 +127,7 @@ class User(DirectoryObject):
     # Navigation properties
     # TODO: activities = ListField()
     # TODO: agreement_acceptances = ListField()
-    # TODO: app_role_assignments = ListField()
+    app_role_assignments = QuerySetField(AppRoleAssignmentQuerySet)
     # TODO: authentication = Field()
     # TODO: calendar = Field()
     # TODO: calendar_groups = ListField()
@@ -267,6 +272,10 @@ class UserQuerySet(QuerySet["User"]):
     def assigned_licenses(self) -> AssignedLicensesQuerySetProxy:
         return AssignedLicensesQuerySetProxy(self)
 
+    @property
+    def app_role_assignments(self) -> AppRoleAssignmentsQuerySetProxy:
+        return AppRoleAssignmentsQuerySetProxy(self)
+
     async def get(self, id: str | None = None, **kwargs: Any) -> "User":
         user = await super().get(id, **kwargs)
         if user.user_principal_name and user.id:
@@ -303,6 +312,74 @@ class UserQuerySet(QuerySet["User"]):
                 )
             batch_resp = await c.post("/$batch", body={"requests": requests})
             utils.raise_batch_errors(batch_resp, action="assign manager to users")
+
+    async def reset_password(
+        self,
+        path: "str | Path",
+        *,
+        password: str | None = None,
+        auto_generate_password: bool = False,
+        force_change_password_next_sign_in: bool = True,
+        force_change_password_next_sign_in_with_mfa: bool | None = None,
+    ) -> None:
+        """
+        Reset passwords for all users in this queryset (batched) and export to CSV.
+        """
+
+        import csv
+        from pathlib import Path
+
+        if not password and not auto_generate_password:
+            raise ValueError(
+                "'password' is required when resetting passwords. "
+                "Set auto_generate_password=True to generate one per user."
+            )
+
+        out_path = Path(path)
+        fieldnames = (
+            "password",
+            "display_name",
+            "user_principal_name",
+            "mobile_phone",
+            "id",
+        )
+
+        with out_path.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            qs = self.select(*fieldnames[1:])
+
+            async for chunked_users in utils.achunks(qs, 20):
+                requests: list[dict[str, Any]] = []
+                for i, u in enumerate(chunked_users, start=1):
+                    password_profile = PasswordProfile(
+                        password=password or utils.generate_password(14),
+                        force_change_password_next_sign_in=force_change_password_next_sign_in,
+                        force_change_password_next_sign_in_with_mfa=force_change_password_next_sign_in_with_mfa,
+                    )
+                    requests.append(
+                        {
+                            "id": str(i),
+                            "method": "PATCH",
+                            "url": u.path,
+                            "headers": {"Content-Type": "application/json"},
+                            "body": {"passwordProfile": password_profile.serialize()},
+                        }
+                    )
+                    writer.writerow(
+                        {
+                            "password": password_profile.password,
+                            "display_name": u.display_name,
+                            "user_principal_name": u.user_principal_name,
+                            "mobile_phone": u.mobile_phone,
+                            "id": u.id,
+                        }
+                    )
+
+                batch_resp = await self._client.post(
+                    "/$batch", body={"requests": requests}
+                )
+                utils.raise_batch_errors(batch_resp, action="reset user passwords")
 
     #     def get_by_directory_ids(
     #         self,

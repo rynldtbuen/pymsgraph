@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -9,10 +10,12 @@ from pymsgraph.models.group import Group
 from pymsgraph.models.user import User, UserQuerySet
 from pymsgraph.models.user.common import AssignedLicense, PasswordProfile
 from pymsgraph.models.user.query import (
+    AppRoleAssignmentQuerySet,
     AssignedLicensesQuerySet,
     GroupsQuerySet,
     MemberOfQuerySet,
 )
+from pymsgraph.models.service_principal.common import AppRoleAssignment
 
 if TYPE_CHECKING:
     from tests.conftest import MakeClient
@@ -162,6 +165,132 @@ def test_field_assigned_licenses(make_client: "MakeClient") -> None:
     assert isinstance(qs, AssignedLicensesQuerySet)
     assert qs.path == "/users/u1/assignLicense"
     assert qs._model_class is AssignedLicense
+
+
+def test_field_app_role_assignments(make_client: "MakeClient") -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"value": []})
+
+    c, _ = make_client(handler)
+    u = c.users.make(id="u1")
+
+    qs = u.app_role_assignments
+    assert isinstance(qs, AppRoleAssignmentQuerySet)
+    assert qs.path == "/users/u1/appRoleAssignments"
+    assert qs._model_class is AppRoleAssignment
+
+
+@pytest.mark.asyncio
+async def test_field_app_role_assignments_list(make_client: "MakeClient") -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("No HTTP call expected")
+
+    client, _ = make_client(handler)
+    user = client.users._model_class.from_graph(
+        {
+            "id": "u1",
+            "appRoleAssignments": [
+                {
+                    "appRoleId": "role1",
+                    "principalDisplayName": "Ada Lovelace",
+                    "principalId": "u1",
+                    "principalType": "User",
+                    "resourceDisplayName": "Contoso App",
+                    "resourceId": "res1",
+                }
+            ],
+        },
+        client=client,
+    )
+
+    items = [obj async for obj in user.app_role_assignments]
+
+    assert len(items) == 1
+    assert isinstance(items[0], AppRoleAssignment)
+    assert items[0].app_role_id == "role1"
+    assert items[0].principal_display_name == "Ada Lovelace"
+    assert items[0].principal_id == "u1"
+    assert items[0].principal_type == "User"
+    assert items[0].resource_display_name == "Contoso App"
+    assert items[0].resource_id == "res1"
+
+
+@pytest.mark.asyncio
+async def test_field_app_role_assignments_add(make_client: "MakeClient") -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path == "/v1.0/$batch":
+            body = json.loads(request.content.decode())
+            assert body == {
+                "requests": [
+                    {
+                        "id": "1",
+                        "method": "POST",
+                        "url": "/servicePrincipals/sp1/appRoleAssignedTo",
+                        "headers": {"Content-Type": "application/json"},
+                        "body": {
+                            "principalId": "u1",
+                            "resourceId": "sp1",
+                            "appRoleId": "role1",
+                        },
+                    }
+                ]
+            }
+            return httpx.Response(
+                200,
+                json={
+                    "responses": [
+                        {
+                            "id": "1",
+                            "status": 201,
+                            "body": {
+                                "id": "ara1",
+                                "appRoleId": "role1",
+                                "principalDisplayName": "Alice",
+                                "principalId": "u1",
+                                "principalType": "User",
+                                "resourceDisplayName": "Contoso App",
+                                "resourceId": "sp1",
+                            },
+                        }
+                    ]
+                },
+            )
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    c, _ = make_client(handler)
+    user = c.users.make(id="u1")
+
+    await user.app_role_assignments.add({"resource_id": "sp1", "app_role_id": "role1"})
+
+    # assert assignment is not None
+    # assert assignment.resource_id == "sp1"
+    # assert assignment.principal_id == "u1"
+
+
+@pytest.mark.asyncio
+async def test_field_app_role_assignments_remove(make_client: "MakeClient") -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path == "/v1.0/$batch":
+            body = json.loads(request.content.decode())
+            assert body == {
+                "requests": [
+                    {
+                        "id": "1",
+                        "method": "DELETE",
+                        "url": "/servicePrincipals/sp1/appRoleAssignedTo/ara1",
+                    }
+                ]
+            }
+            return httpx.Response(
+                200,
+                json={"responses": [{"id": "1", "status": 204}]},
+            )
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    c, _ = make_client(handler)
+    user = c.users.make(id="u1")
+
+    await user.app_role_assignments.remove({"id": "ara1", "resource_id": "sp1"})
 
 
 @pytest.mark.asyncio
@@ -419,6 +548,195 @@ async def test_qs_assigned_licenses_proxy_add_remove(make_client: "MakeClient"):
             "addLicenses": [],
             "removeLicenses": ["sku2"],
         }
+
+
+@pytest.mark.asyncio
+async def test_qs_reset_password(
+    make_client: "MakeClient", tmp_path: "Path"
+) -> None:
+    batch_requests: list[list[dict[str, Any]]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1.0/users":
+            return httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {
+                            "id": "u1",
+                            "displayName": "Alice",
+                            "userPrincipalName": "alice@example.com",
+                            "mobilePhone": "111",
+                        },
+                        {
+                            "id": "u2",
+                            "displayName": "Bob",
+                            "userPrincipalName": "bob@example.com",
+                            "mobilePhone": "222",
+                        },
+                    ]
+                },
+            )
+
+        if request.method == "POST" and request.url.path == "/v1.0/$batch":
+            body = json.loads(request.content.decode())
+            batch_requests.append(body.get("requests", []))
+            return httpx.Response(200, json={"responses": [{"id": "1", "status": 204}]})
+
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    c, _ = make_client(handler)
+    out = tmp_path / "reset_passwords.csv"
+
+    await c.users.reset_password(
+        str(out),
+        password="Pass@word1",
+        force_change_password_next_sign_in=False,
+    )
+
+    assert len(batch_requests) == 1
+    requests = batch_requests[0]
+    assert {req["method"] for req in requests} == {"PATCH"}
+    assert {req["url"] for req in requests} == {"/users/u1", "/users/u2"}
+    for req in requests:
+        profile = req.get("body", {}).get("passwordProfile", {})
+        assert profile.get("password") == "Pass@word1"
+        assert profile.get("forceChangePasswordNextSignIn") is False
+
+    import csv
+
+    with out.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.DictReader(f))
+
+    assert [r["id"] for r in rows] == ["u1", "u2"]
+    assert [r["display_name"] for r in rows] == ["Alice", "Bob"]
+    assert [r["user_principal_name"] for r in rows] == [
+        "alice@example.com",
+        "bob@example.com",
+    ]
+    assert [r["mobile_phone"] for r in rows] == ["111", "222"]
+    assert all(r["password"] == "Pass@word1" for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_qs_app_role_assignments_proxy_add(make_client: "MakeClient") -> None:
+    batch_requests: list[list[dict[str, Any]]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1.0/users":
+            return httpx.Response(200, json={"value": [{"id": "u1"}, {"id": "u2"}]})
+
+        if request.method == "POST" and request.url.path == "/v1.0/$batch":
+            body = json.loads(request.content.decode())
+            batch_requests.append(body.get("requests", []))
+            return httpx.Response(200, json={"responses": [{"id": "1", "status": 201}]})
+
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    c, _ = make_client(handler)
+    qs = c.users
+
+    await qs.app_role_assignments.add({"resource_id": "sp1", "app_role_id": "role1"})
+
+    assert len(batch_requests) == 1
+    add_requests = batch_requests[0]
+    assert {req["method"] for req in add_requests} == {"POST"}
+    assert {req["url"] for req in add_requests} == {
+        "/servicePrincipals/sp1/appRoleAssignedTo",
+    }
+    bodies = {tuple(sorted(req.get("body", {}).items())) for req in add_requests}
+    assert bodies == {
+        tuple(
+            sorted(
+                {
+                    "principalId": "u1",
+                    "resourceId": "sp1",
+                    "appRoleId": "role1",
+                }.items()
+            )
+        ),
+        tuple(
+            sorted(
+                {
+                    "principalId": "u2",
+                    "resourceId": "sp1",
+                    "appRoleId": "role1",
+                }.items()
+            )
+        ),
+    }
+
+
+@pytest.mark.asyncio
+async def test_qs_app_role_assignments_proxy_remove(make_client: "MakeClient") -> None:
+    batch_requests: list[list[dict[str, Any]]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1.0/users":
+            return httpx.Response(200, json={"value": [{"id": "u1"}, {"id": "u2"}]})
+
+        if request.method == "POST" and request.url.path == "/v1.0/$batch":
+            body = json.loads(request.content.decode())
+            batch_requests.append(body.get("requests", []))
+
+            requests = body.get("requests", [])
+            if requests and requests[0].get("method") == "GET":
+                return httpx.Response(
+                    200,
+                    json={
+                        "responses": [
+                            {
+                                "id": "1",
+                                "status": 200,
+                                "body": {
+                                    "value": [
+                                        {
+                                            "id": "ara1",
+                                            "resourceId": "sp1",
+                                            "appRoleId": "role1",
+                                        }
+                                    ]
+                                },
+                            },
+                            {
+                                "id": "2",
+                                "status": 200,
+                                "body": {
+                                    "value": [
+                                        {
+                                            "id": "ara2",
+                                            "resourceId": "sp1",
+                                            "appRoleId": "role1",
+                                        }
+                                    ]
+                                },
+                            },
+                        ]
+                    },
+                )
+            return httpx.Response(200, json={"responses": [{"id": "1", "status": 204}]})
+
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    c, _ = make_client(handler)
+    qs = c.users
+
+    await qs.app_role_assignments.remove({"resource_id": "sp1", "app_role_id": "role1"})
+
+    assert len(batch_requests) == 2
+    list_requests, delete_requests = batch_requests
+
+    assert {req["method"] for req in list_requests} == {"GET"}
+    assert {req["url"] for req in list_requests} == {
+        "/users/u1/appRoleAssignments",
+        "/users/u2/appRoleAssignments",
+    }
+
+    assert {req["method"] for req in delete_requests} == {"DELETE"}
+    assert {req["url"] for req in delete_requests} == {
+        "/servicePrincipals/sp1/appRoleAssignedTo/ara1",
+        "/servicePrincipals/sp1/appRoleAssignedTo/ara2",
+    }
 
 
 @pytest.mark.asyncio
