@@ -17,8 +17,6 @@ if TYPE_CHECKING:
     from pymsgraph.client import Client
     from pymsgraph.models.base import Model
 
-__all__ = ["QuerySet", "Q"]
-
 _Tm = TypeVar("_Tm", bound="Model")
 
 
@@ -48,6 +46,10 @@ class QuerySet(Generic[_Tm]):
         self._all: bool = False
         self._kwargs: dict[str, Any] = kwargs
         self._seeded_objects: list[_Tm] | None = None
+        self._union_qs: tuple[list[QuerySet[_Tm]], Callable[[_Tm], Any] | None] = (
+            [],
+            None,
+        )
 
     @property
     def path(self) -> str:
@@ -220,6 +222,25 @@ class QuerySet(Generic[_Tm]):
             p = Paginator[_Tm](self, page_size=page_size or self.page_size)
             self._paginator = p
         return p
+
+    def union(
+        self,
+        *others: "QuerySet[_Tm]",
+        key: Callable[[_Tm], Any] | None = None,
+    ) -> Self:
+        if key is not None and not callable(key):
+            raise TypeError("Union key must be a callable.")
+
+        prev_key = self._union_qs[1]
+        if prev_key is not None and key is not None and key != prev_key:
+            raise ValueError("Union key already set; cannot change key.")
+
+        qs = self.__class__(self._client, path=self.path, model_class=self._model_class)
+        union_list = list(self._union_qs[0])
+        union_list.append(self)
+        union_list.extend(others)
+        qs._union_qs = (union_list, key or prev_key)
+        return qs
 
     async def exists(self) -> bool:
         return bool(await self.count())
@@ -397,7 +418,7 @@ class QuerySet(Generic[_Tm]):
 
         fieldnames = fieldnames or self._model_class.DEFAULT_SELECT_FIELDS or tuple()
         if fieldnames:
-            values = await self.values()
+            values = await self.values(*fieldnames)
         else:
             values = await self.values()
         return pd.DataFrame(values)
@@ -422,14 +443,31 @@ class QuerySet(Generic[_Tm]):
         return self._model_class.from_graph(data, client=self._client, path=self.path)
 
     def __aiter__(self) -> AsyncIterator[_Tm]:
-        """Execute the query and fetch results"""
-        if self._seeded_objects is not None:
+        if (objects := self._seeded_objects) is not None:
 
             async def _iter_seeded() -> AsyncIterator[_Tm]:
-                for obj in self._seeded_objects or []:
+                for obj in objects or []:
                     yield obj
 
             return _iter_seeded()
+
+        querysets, key = self._union_qs
+        if querysets:
+            key_fn = key or (lambda o: getattr(o, "id", None))
+
+            async def _iter_union() -> AsyncIterator[_Tm]:
+                seen: set[Any] = set()
+                for qs in querysets:
+                    iter_objects = qs.all() if self._all else qs
+                    async for obj in iter_objects:
+                        k = key_fn(obj)
+                        if k in seen:
+                            continue
+                        seen.add(k)
+                        yield obj
+
+            return _iter_union()
+
         paginator = self.iterator()
         if not self._all:
             return paginator._fetch_page(1)
@@ -522,6 +560,7 @@ class QuerySet(Generic[_Tm]):
         obj._all = self._all
         if self._seeded_objects is not None:
             obj._seeded_objects = list(self._seeded_objects)
+        obj._union_qs = (list(self._union_qs[0]), self._union_qs[1])
         return obj
 
     def _compile_filter_expr(self, key: str, value: Any) -> str:

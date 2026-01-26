@@ -1,10 +1,14 @@
 import json
+from typing import TYPE_CHECKING
 
 import httpx
 import pytest
 
 from pymsgraph.models.query import Q
 from pymsgraph.models.user import User
+
+if TYPE_CHECKING:
+    from tests.conftest import MakeClient
 
 
 def test_filter_single(users_qs) -> None:
@@ -212,3 +216,34 @@ async def test_prefetch_members_populates_cache(make_client):
 
     members = [m async for m in members_qs]
     assert [m.id for m in members] == ["u1"]
+
+
+@pytest.mark.asyncio
+async def test_union_queryset_all_pages(make_client: "MakeClient"):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1.0/users":
+            url_text = str(request.url)
+            top = request.url.params.get("$top")
+            if "skip=1" in url_text:
+                return httpx.Response(200, json={"value": [{"id": "u3"}]})
+            if top == "1":
+                return httpx.Response(
+                    200,
+                    json={
+                        "value": [{"id": "u1"}],
+                        "@odata.nextLink": "https://graph.microsoft.com/v1.0/users?$top=1&$skip=1",
+                    },
+                )
+            if top == "2":
+                return httpx.Response(200, json={"value": [{"id": "u2"}]})
+
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    c, _ = make_client(handler)
+    qs1 = c.users.top(1)
+    qs2 = c.users.top(2)
+
+    combined = qs1.union(qs2)
+    items = [u async for u in combined.all()]
+
+    assert [u.id for u in items] == ["u1", "u3", "u2"]
