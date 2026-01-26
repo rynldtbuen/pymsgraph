@@ -198,14 +198,14 @@ class User(DirectoryObject):
         force_change_password_next_sign_in: bool = True,
         force_change_password_next_sign_in_with_mfa: bool | None = None,
         auto_generate_password: bool = False,
-    ) -> None:
+        as_batch_request: bool = False,
+        request_id: str | None = None,
+    ) -> None | dict[str, Any]:
 
         path = self.path
-        self._generated_password = None
 
         if auto_generate_password and not password:
             password = utils.generate_password(14)
-            self._generated_password = password
 
         if not password:
             raise ValueError(
@@ -213,17 +213,31 @@ class User(DirectoryObject):
                 "Set auto_generate_password=True to generate one."
             )
 
-        body = self.FIELDS["password_profile"].to_graph(
-            {
-                "password": password,
-                "force_change_password_next_sign_in": force_change_password_next_sign_in,
-                "force_change_password_next_sign_in_with_mfa": force_change_password_next_sign_in_with_mfa,
-            }
+        setattr(self, "__generated_password", password)
+
+        password_profile = PasswordProfile(
+            password=password,
+            force_change_password_next_sign_in=force_change_password_next_sign_in,
+            force_change_password_next_sign_in_with_mfa=force_change_password_next_sign_in_with_mfa,
         )
 
-        await self._client.patch(path, body=body)
+        if as_batch_request:
+            return {
+                "id": request_id,
+                "method": "PATCH",
+                "url": self.path,
+                "headers": {"Content-Type": "application/json"},
+                "body": {"passwordProfile": password_profile.serialize()},
+            }
 
-    async def assign_manager(self, manager_id: str) -> None:
+        await self._client.patch(path, body=password_profile.serialize())
+
+    async def assign_manager(
+        self,
+        manager_id: str,
+        as_batch_request: bool = False,
+        request_id: str | None = None,
+    ) -> None | dict[str, Any]:
         """
         Assign a manager to this user.
         """
@@ -237,7 +251,17 @@ class User(DirectoryObject):
                         f"Unable to resolve manager id from '{manager_id}'."
                     )
                 manager_id = manager.id
+
         body = {"@odata.id": f"{self._client.base_url}/directoryObjects/{manager_id}"}
+
+        if as_batch_request:
+            return {
+                "id": request_id,
+                "method": "PUT",
+                "url": f"{self.path}/manager/$ref",
+                "headers": {"Content-Type": "application/json"},
+                "body": body,
+            }
         await self._client.put(f"{self.path}/manager/$ref", body=body)
 
     async def revoke_sign_in_sessions(self):
@@ -282,34 +306,24 @@ class UserQuerySet(QuerySet["User"]):
             self._cache.set(user.user_principal_name.lower(), user.id, ttl=86400)
         return user
 
-    async def assign_manager(self, manager: "str | User | DirectoryObject") -> None:
+    async def assign_manager(self, manager_id: str) -> None:
         """
         Assign manager to all users in this queryset (batched).
         """
-
-        if isinstance(manager, (User, DirectoryObject)):
-            manager_id = getattr(manager, "id", None)
-        else:
-            manager_id = manager
 
         if not manager_id:
             raise ValueError("Manager id is required.")
 
         c = self._client
-        manager_ref = {"@odata.id": f"{c.base_url}/directoryObjects/{manager_id}"}
 
         async for chunked_users in utils.achunks(self.select("id"), 20):
             requests: list[dict[str, Any]] = []
             for i, u in enumerate(chunked_users, start=1):
-                requests.append(
-                    {
-                        "id": str(i),
-                        "method": "PUT",
-                        "url": f"{u.path}/manager/$ref",
-                        "headers": {"Content-Type": "application/json"},
-                        "body": manager_ref,
-                    }
+                request = await u.assign_manager(
+                    manager_id, as_batch_request=True, request_id=str(i)
                 )
+                requests.append(request)  # pyright: ignore[reportArgumentType]
+
             batch_resp = await c.post("/$batch", body={"requests": requests})
             utils.raise_batch_errors(batch_resp, action="assign manager to users")
 
@@ -329,12 +343,6 @@ class UserQuerySet(QuerySet["User"]):
         import csv
         from pathlib import Path
 
-        if not password and not auto_generate_password:
-            raise ValueError(
-                "'password' is required when resetting passwords. "
-                "Set auto_generate_password=True to generate one per user."
-            )
-
         out_path = Path(path)
         fieldnames = (
             "password",
@@ -352,23 +360,18 @@ class UserQuerySet(QuerySet["User"]):
             async for chunked_users in utils.achunks(qs, 20):
                 requests: list[dict[str, Any]] = []
                 for i, u in enumerate(chunked_users, start=1):
-                    password_profile = PasswordProfile(
-                        password=password or utils.generate_password(14),
+                    request = await u.reset_password(
+                        password=password,
+                        auto_generate_password=auto_generate_password,
                         force_change_password_next_sign_in=force_change_password_next_sign_in,
                         force_change_password_next_sign_in_with_mfa=force_change_password_next_sign_in_with_mfa,
+                        as_batch_request=True,
+                        request_id=str(i),
                     )
-                    requests.append(
-                        {
-                            "id": str(i),
-                            "method": "PATCH",
-                            "url": u.path,
-                            "headers": {"Content-Type": "application/json"},
-                            "body": {"passwordProfile": password_profile.serialize()},
-                        }
-                    )
+                    requests.append(request)  # pyright: ignore[reportArgumentType]
                     writer.writerow(
                         {
-                            "password": password_profile.password,
+                            "password": u.get_generated_password(),
                             "display_name": u.display_name,
                             "user_principal_name": u.user_principal_name,
                             "mobile_phone": u.mobile_phone,
@@ -481,3 +484,111 @@ class UserQuerySet(QuerySet["User"]):
                 await obj.assigned_licenses.add(*resolved)
 
         return obj
+
+    async def create_many(
+        self,
+        *args: dict[str, Any],
+        auto_generate_password: bool = False,
+        force_change_password_next_sign_in: bool = True,
+        path: str | Path | None = None,
+        encoding: str = "utf-8",
+        export_path: str | Path | None = None,
+        export_encoding: str = "utf-8",
+    ) -> "UserQuerySet":
+        """
+        Create users in bulk from dicts or a CSV path (batched).
+        """
+
+        import csv
+        from pathlib import Path
+
+        items: list[dict[str, Any]] = list(args)
+        if path:
+            path = Path(path)
+            if not path.exists():
+                raise ValueError(f"CSV path does not exist: {path}")
+            with path.open("r", encoding=encoding, newline="") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    items.append(dict(row))
+        if not items:
+            return self.with_objects()
+
+        created: list[User] = []
+        for chunk_items in utils.chunks(items, 20):
+            requests: list[dict[str, Any]] = []
+            mapping: dict[str, User] = {}
+
+            for i, raw in enumerate(chunk_items, start=1):
+                data: dict[str, Any] = {}
+                for key, val in raw.items():
+                    if val is None:
+                        continue
+                    if isinstance(val, str) and not val.strip():
+                        continue
+                    k = key if key in User.FIELDS else utils.to_snake_case(key)
+                    data[k] = val
+
+                password = data.pop("password", None)
+                if not password and auto_generate_password:
+                    password = utils.generate_password(14)
+                if not password:
+                    raise ValueError(
+                        "'password' is required when creating a user. "
+                        "Set auto_generate_password=True to generate one."
+                    )
+
+                data["password_profile"] = dict(
+                    password=password,
+                    force_change_password_next_sign_in=force_change_password_next_sign_in,
+                )
+
+                obj = User(client=self._client, path=self.path, **data)
+                setattr(obj, "__generated_password", password)
+                obj._validate_for_create()
+
+                requests.append(
+                    {
+                        "id": str(i),
+                        "method": "POST",
+                        "url": self.path,
+                        "headers": {"Content-Type": "application/json"},
+                        "body": obj.serialize(),
+                    }
+                )
+                mapping[str(i)] = obj
+
+            batch_resp = await self._client.post("/$batch", body={"requests": requests})
+            utils.raise_batch_errors(batch_resp, action="create users")
+
+            for resp in batch_resp.get("responses", []) or []:
+                obj = mapping.get(str(resp.get("id")))
+                if obj is None:
+                    continue
+                body = resp.get("body") or {}
+                if body:
+                    merged = dict(body)
+                    for attr_name, val in obj._data.items():
+                        field = obj.FIELDS.get(attr_name)
+                        if field is None or field.write_only:
+                            continue
+                        graph_attr_name = field.graph_attr_name or attr_name
+                        merged.setdefault(graph_attr_name, field.to_graph(val))
+                    obj.refresh_from_graph(merged)
+                created.append(obj)
+
+        qs = self.with_objects(*created)
+
+        if export_path:
+            await qs.to_csv(
+                export_path,
+                fieldnames=(
+                    "id",
+                    "display_name",
+                    "user_principal_name",
+                    lambda o: {"password": getattr(o, "__generated_password", None)},
+                ),
+                encoding=export_encoding,
+            )
+
+        return qs

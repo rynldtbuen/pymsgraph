@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import field
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 import re
 from collections.abc import AsyncIterator, Callable, Collection, Iterable
 from copy import deepcopy
@@ -316,10 +316,13 @@ class QuerySet(Generic[_Tm]):
 
         return total_updated
 
-    async def values(self, *fieldnames: str) -> list[dict[str, Any]]:
+    async def values(
+        self, *fieldnames: str | Callable[[_Tm], dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """
         Return a list of dicts for selected fieldnames.
         """
+        from pymsgraph.models.base import Model
 
         def _coerce(val: Any) -> Any:
             if isinstance(val, Model):
@@ -343,21 +346,41 @@ class QuerySet(Generic[_Tm]):
             ]
 
         valid_fields: list[str] = []
+        value_fns: list[Callable[[_Tm], dict[str, Any]]] = []
         for name in fieldnames:
-            if name not in self._model_class.FIELDS:
-                raise ValueError(f"Unknown field {name!r}")
-            valid_fields.append(name)
+            if isinstance(name, str):
+                if name not in self._model_class.FIELDS:
+                    raise ValueError(f"Unknown field {name!r}")
+                valid_fields.append(name)
+                continue
+            if not callable(name):
+                raise TypeError(
+                    "values() fieldnames must be str or callable returning dict"
+                )
+            value_fns.append(name)
 
-        selected = set(self._params.get("$select", []))
-        if selected and selected.issuperset(valid_fields):
-            objects = self.iterator().all()
+        if valid_fields:
+            selected = set(self._params.get("$select", []))
+            if selected and selected.issuperset(valid_fields):
+                objects = self.iterator().all()
+            else:
+                objects = self.select(*valid_fields).all()
         else:
-            objects = self.select(*valid_fields).all()
+            objects = self.iterator().all()
 
-        return [
-            {name: _coerce(getattr(o, name)) for name in valid_fields}
-            async for o in objects
-        ]
+        rows: list[dict[str, Any]] = []
+        async for obj in objects:
+            row = {name: _coerce(getattr(obj, name)) for name in valid_fields}
+            for fn in value_fns:
+                extra = fn(obj)
+                if extra is None:
+                    continue
+                if not isinstance(extra, dict):
+                    raise ValueError("values() callable must return a dict")
+                for k, v in extra.items():
+                    row[k] = _coerce(v)
+            rows.append(row)
+        return rows
 
     def apply(self, predicate: Callable[[_Tm], bool]) -> AsyncIterator[_Tm]:
         if predicate is None:
@@ -376,42 +399,29 @@ class QuerySet(Generic[_Tm]):
         self,
         path: str | Path,
         *,
-        fieldnames: Collection[str] | None = None,
+        fieldnames: (  # pyright: ignore[reportRedeclaration]
+            Collection[str | Callable[[_Tm], dict[str, Any]]] | None
+        ) = None,
+        encoding: str = "utf-8",
     ) -> None:
         import csv
-        import json
         from pathlib import Path
 
-        if fieldnames is not None and len(fieldnames) == 0:
-            fieldnames = None
-        fieldnames = fieldnames or self._model_class.DEFAULT_SELECT_FIELDS or None
-        if fieldnames is None:
-            values = await self.values()
-        else:
-            values = await self.values(*fieldnames)
+        values = await self.values(*(fieldnames or []))
+        fieldnames: list[str] = []
 
-        if fieldnames is None:
-            ordered: list[str] = []
-            for row in values:
-                for key in row.keys():
-                    if key not in ordered:
-                        ordered.append(key)
-            fieldnames = tuple(ordered)
+        for val in values:
+            for key in val.keys():
+                if key not in fieldnames:
+                    fieldnames.append(key)
 
         out_path = Path(path)
-        with out_path.open("w", encoding="utf-8", newline="") as f:
+        with out_path.open("w", encoding=encoding, newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
             writer.writeheader()
 
             for val in values:
-                row: dict[str, Any] = {}
-                for k, v in val.items():
-                    if isinstance(v, Model):
-                        v = v.to_dict()
-                    if isinstance(v, (dict, list)):
-                        v = json.dumps(v, ensure_ascii=True)
-                    row[k] = v
-                writer.writerow(row)
+                writer.writerow(val)
 
     async def to_dataframe(self, *fieldnames: str):
         import pandas as pd

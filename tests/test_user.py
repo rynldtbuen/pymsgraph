@@ -181,6 +181,78 @@ def test_field_app_role_assignments(make_client: "MakeClient") -> None:
 
 
 @pytest.mark.asyncio
+async def test_assign_manager(make_client: "MakeClient") -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if (
+            request.method == "PUT"
+            and request.url.path == "/v1.0/users/u1/manager/$ref"
+        ):
+            body = json.loads(request.content.decode())
+            assert body == {
+                "@odata.id": "https://graph.microsoft.com/v1.0/directoryObjects/m1"
+            }
+            return httpx.Response(204, json={})
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    c, _ = make_client(handler)
+    user = c.users.make(id="u1")
+
+    await user.assign_manager("m1")
+
+
+@pytest.mark.asyncio
+async def test_assign_manager_uses_cache(make_client: "MakeClient") -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if (
+            request.method == "PUT"
+            and request.url.path == "/v1.0/users/u1/manager/$ref"
+        ):
+            body = json.loads(request.content.decode())
+            assert body == {
+                "@odata.id": "https://graph.microsoft.com/v1.0/directoryObjects/m1"
+            }
+            return httpx.Response(204, json={})
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    c, _ = make_client(handler)
+    user = c.users.make(id="u1")
+    c.users._cache.set("manager@example.com", "m1")
+
+    await user.assign_manager("manager@example.com")
+
+
+@pytest.mark.asyncio
+async def test_qs_assign_manager(make_client: "MakeClient") -> None:
+    batch_requests: list[list[dict[str, Any]]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1.0/users":
+            return httpx.Response(200, json={"value": [{"id": "u1"}, {"id": "u2"}]})
+
+        if request.method == "POST" and request.url.path == "/v1.0/$batch":
+            body = json.loads(request.content.decode())
+            batch_requests.append(body.get("requests", []))
+            return httpx.Response(200, json={"responses": [{"id": "1", "status": 204}]})
+
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    c, _ = make_client(handler)
+    await c.users.assign_manager("m1")
+
+    assert len(batch_requests) == 1
+    requests = batch_requests[0]
+    assert {req["method"] for req in requests} == {"PUT"}
+    assert {req["url"] for req in requests} == {
+        "/users/u1/manager/$ref",
+        "/users/u2/manager/$ref",
+    }
+    for req in requests:
+        assert req["body"] == {
+            "@odata.id": "https://graph.microsoft.com/v1.0/directoryObjects/m1"
+        }
+
+
+@pytest.mark.asyncio
 async def test_field_app_role_assignments_list(make_client: "MakeClient") -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise AssertionError("No HTTP call expected")
@@ -551,9 +623,7 @@ async def test_qs_assigned_licenses_proxy_add_remove(make_client: "MakeClient"):
 
 
 @pytest.mark.asyncio
-async def test_qs_reset_password(
-    make_client: "MakeClient", tmp_path: "Path"
-) -> None:
+async def test_qs_reset_password(make_client: "MakeClient", tmp_path: "Path") -> None:
     batch_requests: list[list[dict[str, Any]]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:

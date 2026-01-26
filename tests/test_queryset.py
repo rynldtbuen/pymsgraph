@@ -247,3 +247,132 @@ async def test_union_queryset_all_pages(make_client: "MakeClient"):
     items = [u async for u in combined.all()]
 
     assert [u.id for u in items] == ["u1", "u3", "u2"]
+
+
+@pytest.mark.asyncio
+async def test_values_with_callable_fields(make_client: "MakeClient"):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1.0/users":
+            return httpx.Response(
+                200,
+                json={
+                    "value": [{"id": "u1", "displayName": "Ada", "surname": "Lovelace"}]
+                },
+            )
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    c, _ = make_client(handler)
+    rows = await c.users.values(
+        "display_name",
+        "surname",
+        lambda u: {"full_name": f"{u.display_name} {u.surname}"},
+    )
+
+    assert rows == [
+        {"display_name": "Ada", "surname": "Lovelace", "full_name": "Ada Lovelace"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_values_uses_existing_select(make_client: "MakeClient"):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1.0/users":
+            return httpx.Response(
+                200,
+                json={"value": [{"id": "u1", "displayName": "Ada", "surname": "L"}]},
+            )
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    c, requests = make_client(handler)
+    qs = c.users.select("display_name", "surname")
+    rows = await qs.values("display_name", "surname")
+
+    assert rows == [{"display_name": "Ada", "surname": "L"}]
+    assert len(requests) == 1
+    assert "displayName" in requests[0]["url"]
+    assert "surname" in requests[0]["url"]
+
+
+@pytest.mark.asyncio
+async def test_values_overrides_select_when_missing_fields(make_client: "MakeClient"):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1.0/users":
+            url = str(request.url)
+            assert "surname" in url
+            return httpx.Response(
+                200,
+                json={"value": [{"id": "u1", "displayName": "Ada", "surname": "L"}]},
+            )
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    c, requests = make_client(handler)
+    qs = c.users.select("display_name")
+    rows = await qs.values("display_name", "surname")
+
+    assert rows == [{"display_name": "Ada", "surname": "L"}]
+    assert len(requests) == 1
+    assert "surname" in requests[0]["url"]
+
+
+@pytest.mark.asyncio
+async def test_values_uses_cached_objects_when_selected(make_client: "MakeClient"):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1.0/users":
+            return httpx.Response(
+                200,
+                json={"value": [{"id": "u1", "displayName": "Ada"}]},
+            )
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    c, requests = make_client(handler)
+    qs = c.users.select("display_name")
+
+    # Prime paginator cache
+    _ = [u async for u in qs]
+
+    rows = await qs.values("display_name")
+    assert rows == [{"display_name": "Ada"}]
+    assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_to_csv_writes_headers_and_rows(make_client: "MakeClient", tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1.0/users":
+            return httpx.Response(
+                200,
+                json={"value": [{"id": "u1", "displayName": "Ada", "mail": "a@x.com"}]},
+            )
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    c, _ = make_client(handler)
+    out_path = tmp_path / "users.csv"
+
+    await c.users.to_csv(out_path, fieldnames=("display_name", "mail"))
+
+    content = out_path.read_text(encoding="utf-8").splitlines()
+    assert content[0] == "display_name,mail"
+    assert content[1] == "Ada,a@x.com"
+
+
+@pytest.mark.asyncio
+async def test_to_csv_with_callable_fieldnames(make_client: "MakeClient", tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1.0/users":
+            return httpx.Response(
+                200,
+                json={"value": [{"id": "u1", "display_name": "Ada", "surname": "L"}]},
+            )
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    c, _ = make_client(handler)
+    out_path = tmp_path / "users_callable.csv"
+
+    await c.users.to_csv(
+        out_path,
+        fieldnames=(lambda u: {"full_name": f"{u.display_name} {u.surname}"},),
+    )
+
+    content = out_path.read_text(encoding="utf-8").splitlines()
+    assert content[0] == "full_name"
+    assert content[1] == "Ada L"
