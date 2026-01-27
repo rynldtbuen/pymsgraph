@@ -43,7 +43,7 @@ class AssignedLicensesQuerySet(QuerySet[AssignedLicense]):
                 if sku_id is not None:
                     _args.append(sku_id)
                 else:
-                    raise ValueError(f"Unknown license: {arg!r}")
+                    _args.append(arg)
             else:
                 _args.append(arg)
 

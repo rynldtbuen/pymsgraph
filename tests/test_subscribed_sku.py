@@ -75,7 +75,7 @@ def test_subscribed_sku_product_name_from_csv(tmp_path):
     )
 
     # reset mapping and point loader to temp CSV
-    SubscribedSku.PRODUCT_NAME_BY_SKU.clear()
+    SubscribedSku.PRODUCT_NAME_SKU_ID_MAP.clear()
     SubscribedSku.PRODUCT_NAMES_CSV_PATH = csv_path
 
     name = SubscribedSku.get_product_name(sku_id="abc123-0000-0000-0000-000000000000")

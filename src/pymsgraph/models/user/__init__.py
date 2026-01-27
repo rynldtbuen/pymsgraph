@@ -244,7 +244,9 @@ class User(DirectoryObject):
 
         if "@" in manager_id and not utils.is_guid(manager_id):
             cache_manager_id = await self._client.users._cache.get(manager_id) or ""
-            if not cache_manager_id:
+            if cache_manager_id:
+                manager_id = cache_manager_id
+            else:
                 manager = await self._client.users.get(id=manager_id)
                 if manager.id is None:
                     raise ValueError(
