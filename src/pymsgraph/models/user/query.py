@@ -29,15 +29,27 @@ class AssignedLicensesQuerySet(QuerySet[AssignedLicense]):
     async def add(
         self,
         *args: "str | AssignedLicense",
-        as_batch: bool = False,
+        as_batch_request: bool = False,
+        request_id: str | None = None,
     ) -> dict[str, Any] | None:
         """
         Add license/s to this user.
         """
 
+        _args: list[str | AssignedLicense] = []
+        for arg in args:
+            if isinstance(arg, str) and not utils.is_guid(arg):
+                sku_id = SubscribedSku.get_sku_id(product_name=arg)
+                if sku_id is not None:
+                    _args.append(sku_id)
+                else:
+                    raise ValueError(f"Unknown license: {arg!r}")
+            else:
+                _args.append(arg)
+
         available: dict[str, "SubscribedSku"] = {}
         subscribed_sku_cache = self._client.subscribed_skus._cache
-        for obj in self._coerce_objects(args, key="sku_id"):
+        for obj in self._coerce_objects(args=tuple(_args), key="sku_id"):
             if obj.sku_id is None:
                 continue
             subscribed_sku = await subscribed_sku_cache.get(obj.sku_id)
@@ -64,8 +76,8 @@ class AssignedLicensesQuerySet(QuerySet[AssignedLicense]):
             },
         }
 
-        if as_batch:
-            return kwargs
+        if as_batch_request:
+            return {"id": request_id, **kwargs}
 
         await self._client.post(**kwargs)
         for subscribed_sku in available.values():
@@ -266,7 +278,9 @@ class AppRoleAssignmentsQuerySetProxy:
                         }
                     )
             for chunked_requests in utils.chunks(requests, 20):
-                batch_resp = await c.post("/$batch", body={"requests": chunked_requests})
+                batch_resp = await c.post(
+                    "/$batch", body={"requests": chunked_requests}
+                )
                 utils.raise_batch_errors(
                     batch_resp, action="add user app role assignments"
                 )
@@ -505,9 +519,7 @@ class AppRoleAssignmentQuerySet(_AppRoleAssignmentQuerySet):
             batch_resp = await c.post("/$batch", body={"requests": requests})
             utils.raise_batch_errors(batch_resp, action="add user app role assignments")
 
-    async def remove(
-        self, *args: "AppRoleAssignment | dict[str, str]"
-    ) -> None:
+    async def remove(self, *args: "AppRoleAssignment | dict[str, str]") -> None:
         """
         Remove app role assignments from this user using
         /servicePrincipals/{id}/appRoleAssignedTo/{assignmentId}.

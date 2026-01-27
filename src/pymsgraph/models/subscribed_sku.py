@@ -136,8 +136,6 @@ class SubscribedSku(ReadOnlyModel):
 
     @classmethod
     def get_sku_id(cls, product_name: str) -> str | None:
-        if not product_name:
-            return None
         if not cls.PRODUCT_NAME_SKU_ID_MAP:
             cls._initialize_mapping()
         key = " ".join(product_name.split()).lower()

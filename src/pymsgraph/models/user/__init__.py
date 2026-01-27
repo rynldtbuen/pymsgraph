@@ -243,8 +243,8 @@ class User(DirectoryObject):
         """
 
         if "@" in manager_id and not utils.is_guid(manager_id):
-            manager_id = await self._client.users._cache.get(manager_id) or ""
-            if manager_id is None:
+            cache_manager_id = await self._client.users._cache.get(manager_id) or ""
+            if not cache_manager_id:
                 manager = await self._client.users.get(id=manager_id)
                 if manager.id is None:
                     raise ValueError(
@@ -495,9 +495,6 @@ class UserQuerySet(QuerySet["User"]):
         export_path: str | Path | None = None,
         export_encoding: str = "utf-8",
     ) -> "UserQuerySet":
-        """
-        Create users in bulk from dicts or a CSV path (batched).
-        """
 
         import csv
         from pathlib import Path
@@ -592,3 +589,9 @@ class UserQuerySet(QuerySet["User"]):
             )
 
         return qs
+
+    def disabled_with_assigned_licenses(self):
+        return self.filter(account_enabled=False, assigned_licenses__is_null=False)
+
+    def enabled_with_no_assigned_licenses(self):
+        return self.filter(account_enabled=True, assigned_licenses__is_null=True)
