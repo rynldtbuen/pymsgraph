@@ -17,6 +17,7 @@ class Model:
     FIELD_NAME_MAP: dict[str, str]
     WRITE_ON_FIELDS: frozenset[str]
     DEFAULT_SELECT_FIELDS: tuple[str, ...] | None = None
+    DEFAULT_EXPAND_FIELDS: tuple[str, ...] | None = None
     SEARCH_FIELD: str | None = None
     HAS_ID: bool = True
     READ_ONLY: bool = False
