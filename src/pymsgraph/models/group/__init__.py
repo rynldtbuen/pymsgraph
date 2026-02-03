@@ -12,7 +12,7 @@ from pymsgraph.models.fields import (
     ListField,
     QuerySetField,
 )
-from pymsgraph.models.group.query_fields import MembersQuerySet
+from pymsgraph.models.group.query import MembersQuerySet
 from pymsgraph.models.query import QuerySet
 
 
@@ -74,34 +74,34 @@ class Group(DirectoryObject):
     visibility = CharField()
 
     # Navigation properties
-    # TODO: accepted_senders = ListField()
-    # TODO: app_role_assignments = ListField()
-    # TODO: calendar = Field()
-    # TODO: calendar_view = ListField()
-    # TODO: conversations = ListField()
-    # TODO: created_on_behalf_of = Field()
-    # TODO: drive = Field()
-    # TODO: drives = ListField()
-    # TODO: events = ListField()
-    # TODO: extensions = ListField()
-    # TODO: group_lifecycle_policies = ListField()
-    # TODO: member_of = ListField()
+    # accepted_senders = ListField()
+    # app_role_assignments = ListField()
+    # calendar = Field()
+    # calendar_view = ListField()
+    # conversations = ListField()
+    # created_on_behalf_of = Field()
+    # drive = Field()
+    # drives = ListField()
+    # events = ListField()
+    # extensions = ListField()
+    # group_lifecycle_policies = ListField()
+    # member_of = ListField()
     members = QuerySetField(MembersQuerySet, model_class="User", prefetch=True)
-    # TODO: members_with_license_errors = ListField()
-    # TODO: on_premises_sync_behavior = Field()
-    # TODO: onenote = Field()
-    # TODO: owners = ListField()
-    # TODO: permission_grants = ListField()
-    # TODO: photo = Field()
-    # TODO: photos = ListField()
-    # TODO: planner = Field()
-    # TODO: rejected_senders = ListField()
-    # TODO: settings = ListField()
-    # TODO: sites = ListField()
-    # TODO: team = Field()
-    # TODO: threads = ListField()
-    # TODO: transitive_member_of = ListField()
-    # TODO: transitive_members = ListField()
+    # members_with_license_errors = ListField()
+    # on_premises_sync_behavior = Field()
+    # onenote = Field()
+    # owners = ListField()
+    # permission_grants = ListField()
+    # photo = Field()
+    # photos = ListField()
+    # planner = Field()
+    # rejected_senders = ListField()
+    # settings = ListField()
+    # sites = ListField()
+    # team = Field()
+    # threads = ListField()
+    # transitive_member_of = ListField()
+    # transitive_members = ListField()
 
     @property
     def group_type(self) -> str:

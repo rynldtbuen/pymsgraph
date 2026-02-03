@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from pymsgraph.models.group import Group
-from pymsgraph.models.group.query_fields import UsersQuerySet
+from pymsgraph.models.group.query import UsersQuerySet
 from pymsgraph.models.user import User
 
 if TYPE_CHECKING:

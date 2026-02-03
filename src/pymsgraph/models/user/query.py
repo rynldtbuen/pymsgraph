@@ -114,7 +114,7 @@ class AssignedLicensesQuerySet(QuerySet[AssignedLicense]):
 
 
 class AssignedLicensesQuerySetProxy:
-    def __init__(self, parent: "UserQuerySet"):
+    def __init__(self, parent: "QuerySet[User]"):
         self._parent = parent
 
     async def add(
@@ -244,7 +244,7 @@ class AssignedLicensesQuerySetProxy:
 
 
 class AppRoleAssignmentsQuerySetProxy:
-    def __init__(self, parent: "UserQuerySet"):
+    def __init__(self, parent: "QuerySet[User]"):
         self._parent = parent
 
     async def add(self, *args: "AppRoleAssignment | dict[str, str]") -> None:

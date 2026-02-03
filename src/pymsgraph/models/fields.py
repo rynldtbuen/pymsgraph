@@ -1,13 +1,22 @@
 from __future__ import annotations
 
-from ast import mod
 from datetime import datetime, timezone
-from turtle import mode
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload, override
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Collection,
+    Generic,
+    TypeVar,
+    cast,
+    overload,
+    override,
+)
 
 from pymsgraph.utils import get_model_class, to_camel_case
 
 if TYPE_CHECKING:
+    from pymsgraph.client import Client
     from pymsgraph.models.base import Model
     from pymsgraph.models.query import QuerySet
 
@@ -19,6 +28,7 @@ __all__ = [
     "Field",
     "IntegerField",
     "ListField",
+    "ListProxyField",
     "ModelField",
     "QuerySetField",
 ]
@@ -287,15 +297,160 @@ class ListField(Field[list[Any]]):
         super().__set__(obj, value)
 
 
+# class _ListProxy(Generic[_T]):
+#     def __init__(self, obj: "Model", field: "ListField") -> None:
+#         self._obj = obj
+#         self._field = field
+
+#     def _items(self) -> list[_T]:
+#         current = self._field.__get__(self._obj)
+#         if current is None:
+#             return []
+#         return list(current)
+
+#     def __iter__(self):
+#         return iter(self._items())
+
+#     def __len__(self) -> int:
+#         return len(self._items())
+
+#     def __getitem__(self, index):
+#         return self._items()[index]
+
+#     def add(self, *items: _T) -> None:
+#         updated = self._items()
+#         for item in items:
+#             updated.append(item)
+#         self._field.__set__(self._obj, updated)
+
+#     def remove(self, *items: _T) -> None:
+#         updated = self._items()
+#         for item in items:
+#             updated.remove(item)
+#         self._field.__set__(self._obj, updated)
+
+#     def to_list(self) -> list[_T]:
+#         return self._items()
+
+#     def __repr__(self) -> str:
+#         return repr(self._items())
+
+
+class ListProxy:
+    model_class: type[Model] | None = None
+
+    def __init__(
+        self,
+        client: "Client",
+        *,
+        path: str,
+        model_class: type[Model],
+        values: Collection[Any] | None = None,
+    ):
+        self._client = client
+        if model_class_path := model_class.PATH:
+            self._path = f"{path}{model_class_path}"
+        else:
+            self._path = path
+        self._model_class = model_class
+        self._values = values
+        self._objects = []
+        self._loaded = values is not None
+
+    @property
+    def path(self):
+        return self._path
+
+    def __len__(self):
+        if self._objects:
+            return len(self._objects)
+        if self._values is None:
+            return 0
+        return len(self._values)
+
+    def _coerce_objects(self) -> list[Any]:
+        if self._objects:
+            return list(self._objects)
+        values = list(self._values or [])
+        coerced: list[Any] = []
+        for item in values:
+            if isinstance(item, self._model_class):
+                coerced.append(item)
+            elif isinstance(item, dict):
+                coerced.append(
+                    self._model_class.from_graph(data=item, client=self._client)
+                )
+            else:
+                coerced.append(item)
+        self._objects = coerced
+        return list(self._objects)
+
+    def __aiter__(self) -> AsyncIterator[Any]:
+        async def _iter() -> AsyncIterator[Any]:
+            if not self._loaded and not self._objects and not self._values:
+                response = await self._client.get(self._path)
+                self._values = response.get("value", [])
+                self._loaded = True
+                self._objects = []
+            for obj in self._coerce_objects():
+                yield obj
+
+        return _iter()
+
+
+class ListProxyField(Field[ListProxy]):
+    def __init__(
+        self,
+        proxy_class: type[ListProxy] | None = None,
+        model_class: type["Model"] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self._proxy_class: type[ListProxy] = proxy_class or ListProxy
+        self._proxy_model_class: type[Model] | None = model_class or getattr(
+            proxy_class, "model_class", None
+        )
+
+    @overload
+    def __get__(
+        self, obj: None, owner: type["Model"] | None = None
+    ) -> "Field[ListProxy]": ...
+
+    @overload
+    def __get__(
+        self, obj: "Model", owner: type["Model"] | None = None
+    ) -> ListProxy: ...
+
+    def __get__(
+        self, obj: "Model | None", owner: type["Model"] | None = None
+    ) -> ListProxy | Field[ListProxy] | None:
+        if obj is None:
+            return self
+        values = obj._data.get(self.name)
+        # if values is None:
+        #     values = []
+        #     obj._data[self.name] = values
+        if (proxy_model_class := self._proxy_model_class) is None:
+            raise RuntimeError("No proxy model class found.")
+        return self._proxy_class(
+            obj._args[0],
+            path=obj.path,
+            model_class=proxy_model_class,
+            values=values,
+        )
+
+
 class ModelField(Field[_Tm]):
     def __init__(
         self,
         model_class: str | type[_Tm],
+        *,
+        is_proxy: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
-
         self._model_class = model_class
+        self.is_proxy = is_proxy
 
     @property
     def model_class(self) -> type[_Tm]:
@@ -304,6 +459,23 @@ class ModelField(Field[_Tm]):
             m = cast(type[_Tm], get_model_class(m))
             self._model_class = m
         return m
+
+    @overload
+    def __get__(
+        self, obj: None, owner: type["Model"] | None = None
+    ) -> "Field[_Tm]": ...
+
+    @overload
+    def __get__(self, obj: "Model", owner: type["Model"] | None = None) -> _Tm: ...
+
+    def __get__(
+        self, obj: "Model | None", owner: type["Model"] | None = None
+    ) -> "_Tm | Field[_Tm] | None":
+        if obj is None:
+            return self
+        if self.is_proxy:
+            return self.model_class(client=obj._args[0], path=obj.path)
+        return obj._data.get(self.name)
 
     def __set__(self, obj: "Model", value: Any) -> None:
         if value is None:
