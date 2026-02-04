@@ -1,19 +1,27 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable
 import importlib
 import re
 import secrets
 import string
 import time
-from typing import TYPE_CHECKING, Any, Iterator, TypeVar
 import uuid
-
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Iterator, TypeVar
 
 if TYPE_CHECKING:
     from pymsgraph.models.base import Model
 
 T = TypeVar("T")
+
+
+def to_datestr(val: datetime | str, astimezone: bool = True) -> str:
+    if isinstance(val, str):
+        val = datetime.fromisoformat(val)
+    if astimezone:
+        return val.astimezone().strftime("%d/%m/%Y")
+    return val.strftime("%d/%m/%Y")
 
 
 def generate_password(length: int = 12) -> str:
@@ -117,7 +125,7 @@ class SimpleCache:
         def _get():
             item = self._store.get(key)
             if item is None:
-                return (0, None)
+                return 0, None
             return item
 
         await _load()

@@ -272,7 +272,77 @@ async def test_site_by_path_list_by_name(make_client: "MakeClient"):
     assert [i.id async for i in items] == ["i1", "i2"]
     assert seen == [
         "/v1.0/sites/root",
+        "/v1.0/sites/contoso.sharepoint.com:/sites/TestSite:/lists/Test List",
         "/v1.0/sites/contoso.sharepoint.com:/sites/TestSite:/lists/Test List/items",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_list_get_rewrites_name_path(make_client: "MakeClient"):
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        if request.url.path == "/v1.0/sites/root":
+            return httpx.Response(
+                200,
+                json={"siteCollection": {"hostname": "contoso.sharepoint.com"}},
+            )
+        if (
+            request.url.path
+            == "/v1.0/sites/contoso.sharepoint.com:/sites/TestSite:/lists/Test List"
+        ):
+            return httpx.Response(
+                200,
+                json={"id": "list1", "displayName": "Test List"},
+            )
+        return httpx.Response(404)
+
+    client, _ = make_client(handler)
+
+    lst = await client.sites.by_path("/sites/TestSite").lists.by_name("Test List").get()
+
+    assert lst.id == "list1"
+    assert lst.path == "/sites/contoso.sharepoint.com:/sites/TestSite:/lists/list1"
+    assert seen == [
+        "/v1.0/sites/root",
+        "/v1.0/sites/contoso.sharepoint.com:/sites/TestSite:/lists/Test List",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_list_items_resolve_list_id_first(make_client: "MakeClient"):
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        if request.url.path == "/v1.0/sites/root":
+            return httpx.Response(
+                200,
+                json={"siteCollection": {"hostname": "contoso.sharepoint.com"}},
+            )
+        if (
+            request.url.path
+            == "/v1.0/sites/contoso.sharepoint.com:/sites/TestSite:/lists/Test List"
+        ):
+            return httpx.Response(200, json={"id": "list1"})
+        if (
+            request.url.path
+            == "/v1.0/sites/contoso.sharepoint.com:/sites/TestSite:/lists/list1/items"
+        ):
+            return httpx.Response(200, json={"value": [{"id": "i1"}]})
+        return httpx.Response(404)
+
+    client, _ = make_client(handler)
+
+    items = (
+        client.sites.by_path("/sites/TestSite").lists.by_name("Test List").items
+    )
+    assert [i.id async for i in items] == ["i1"]
+    assert seen == [
+        "/v1.0/sites/root",
+        "/v1.0/sites/contoso.sharepoint.com:/sites/TestSite:/lists/Test List",
+        "/v1.0/sites/contoso.sharepoint.com:/sites/TestSite:/lists/list1/items",
     ]
 
 

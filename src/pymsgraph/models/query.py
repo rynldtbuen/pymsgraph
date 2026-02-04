@@ -1,3 +1,4 @@
+from typing import cast
 from __future__ import annotations
 
 import asyncio
@@ -157,8 +158,15 @@ class QuerySet(Generic[_Tm]):
         qs = self._clone()
         expands: dict[str, set[str]] = qs._params.setdefault("$expand", {})
         explicit_select = bool(select)
+        default_expands = getattr(qs._model_class, "DEFAULT_EXPAND_FIELDS", None) or ()
+        default_expand_fields = {name for name in default_expands}
+        default_expand_camel = {to_camel_case(name) for name in default_expand_fields}
+        allow_default_expand = (
+            field in default_expand_fields
+            or to_camel_case(field) in default_expand_camel
+        )
         if field_obj := qs._model_class.FIELDS.get(field):
-            if not field_obj.expand:
+            if not field_obj.expand and not allow_default_expand:
                 raise ValueError(f"Field {field!r} does not support expand")
             graph_field = field_obj.graph_attr_name or to_camel_case(field)
             model_class: type[Model] | None = getattr(field_obj, "model_class", None)
@@ -166,6 +174,8 @@ class QuerySet(Generic[_Tm]):
                 defaults = model_class.DEFAULT_SELECT_FIELDS
                 if defaults:
                     select = tuple(defaults)
+        elif allow_default_expand:
+            graph_field = to_camel_case(field)
         else:
             raise ValueError(f"Unknown field {field!r}")
         if graph_field not in expands:
@@ -217,7 +227,8 @@ class QuerySet(Generic[_Tm]):
     def iterator(self, *, page_size: int | None = None) -> "Paginator[_Tm]":
         if self._seeded_objects is not None:
             raise ValueError("Paginator is not available for seeded querysets")
-        if (p := self._paginator) is None:
+        p = self._paginator
+        if p is None:
             # ctx = Context.make(self._ctx, queryset=self)
             p = Paginator[_Tm](self, page_size=page_size or self.page_size)
             self._paginator = p
@@ -273,9 +284,11 @@ class QuerySet(Generic[_Tm]):
         return results[0]
 
     async def first(self) -> _Tm | None:
-        async for obj in self.top(1):
-            return obj
-        return None
+        obj: _Tm | None = None
+        async for item in self.top(1):
+            obj = item
+            break
+        return obj
 
     async def create(self, **kwargs: Any) -> _Tm:
         if self._model_class.READ_ONLY:
@@ -408,23 +421,25 @@ class QuerySet(Generic[_Tm]):
         from pathlib import Path
 
         values = await self.values(*(fieldnames or []))
-        fieldnames: list[str] = []
+        output_fieldnames: list[str] = []
 
         for val in values:
             for key in val.keys():
-                if key not in fieldnames:
-                    fieldnames.append(key)
+                if key not in output_fieldnames:
+                    output_fieldnames.append(key)
 
         out_path = Path(path)
         with out_path.open("w", encoding=encoding, newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+            writer = csv.DictWriter(
+                f, fieldnames=output_fieldnames, extrasaction="ignore"
+            )
             writer.writeheader()
 
             for val in values:
                 writer.writerow(val)
 
     async def to_dataframe(self, *fieldnames: str):
-        import pandas as pd
+        import pandas as pd  # type: ignore[import-not-found]
 
         fieldnames = fieldnames or self._model_class.DEFAULT_SELECT_FIELDS or tuple()
         if fieldnames:
@@ -435,7 +450,7 @@ class QuerySet(Generic[_Tm]):
 
     def with_objects(
         self,
-        *args: str | _Tm | "QuerySet[_Tm]",
+        *args: "str | _Tm | QuerySet[_Tm]",
         key: str = "id",
     ) -> Self:
         qs = self.__class__(self._client, path=self.path, model_class=self._model_class)
@@ -738,16 +753,18 @@ class Paginator(Generic[_Tm]):
         return objects
 
     async def count(self) -> int | None:
+        count: int | None = None
         if (count := self._cached_count) is None:
             qs = self._queryset.with_consistency_level_eventual()
             params = qs._build_params()
             params.pop("$count", None)
             path = f"{self._queryset.path}/$count"
-            count = await self._queryset._client.get(
+            raw_count = await self._queryset._client.get(
                 path, params=params, headers={**qs._headers, "Accept": "text/plain"}
             )
-            self._cached_count = count  # pyright: ignore[reportAttributeAccessIssue]
-        return count  # pyright: ignore[reportReturnType]
+            count = cast(int, cast(object, raw_count))
+            self._cached_count = count
+        return count
 
     async def total_pages(self) -> int | None: ...
 
@@ -915,9 +932,10 @@ class Q:
                 return expr
             return f"({expr})"
 
-        expressions = []
+        expressions: list[str] = []
         for key, value in self.filters.items():
-            expressions.append(f'"{to_camel_case(key)}:{value}"')
+            expr = f'"{to_camel_case(key)}:{value}"'
+            expressions.append(expr)
         return " AND ".join(expressions)
 
 

@@ -5,6 +5,7 @@ import httpx
 import pytest
 
 from pymsgraph.models.query import Q
+from pymsgraph.models.site.list import ListItemsQuerySet
 from pymsgraph.models.user import User
 
 if TYPE_CHECKING:
@@ -110,6 +111,16 @@ def test_expand_defaults_to_related_select_fields(users_qs) -> None:
         params["$expand"]
         == "manager($select=accountEnabled,displayName,id,mail,userPrincipalName)"
     )
+
+
+def test_expand_allows_default_expand_for_property(make_client) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"value": []})
+
+    client, _ = make_client(handler)
+    qs = ListItemsQuerySet(client, path="/sites/s1/lists/l1/items")
+    params = qs.expand("fields")._build_params()
+    assert params["$expand"] == "fields"
 
 
 def test_search_with_q_and_kwargs(users_qs) -> None:

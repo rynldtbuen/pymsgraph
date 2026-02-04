@@ -23,6 +23,7 @@ class ListItem(BaseItem):
     """
 
     PATH = "/items"
+    DEFAULT_EXPAND_FIELDS: tuple[str, ...] | None = ("fields",)
 
     content_type = Field()
     sharepoint_ids = ModelField(SharePointIds, read_only=True)
@@ -69,6 +70,20 @@ class ListItemsQuerySet(QuerySet[ListItem]):
             if "HOSTNAME" in p:
                 hostname = await c.sites._get_hostname()
                 p = p.replace("HOSTNAME", hostname)
+            parent_list = self._kwargs.get("obj")
+            if (
+                "/lists/" in p
+                and "/items" in p
+                and not getattr(self, "_list_id_resolved", False)
+                and not getattr(parent_list, "id", None)
+            ):
+                list_path = p.split("/items", 1)[0]
+                list_data = await c.get(path=list_path)
+                if (list_id := list_data.get("id")) is not None:
+                    base = f"{list_path.rsplit('/', 1)[0]}/{list_id}"
+                    if base != list_path:
+                        p = f"{base}{p[len(list_path):]}"
+                setattr(self, "_list_id_resolved", True)
             self._args = c, p, self._args[2]
         return p
 
@@ -111,6 +126,8 @@ class List(BaseItem):
             hostname = await c.sites._get_hostname()
             p = p.replace("HOSTNAME", hostname)
         data = await c.get(path=p)
+        if data.get("id") and p.rsplit("/", 1)[-1] != "lists":
+            p = p.rsplit("/", 1)[0]
         return List.from_graph(data=data, client=c, path=p)
 
 
