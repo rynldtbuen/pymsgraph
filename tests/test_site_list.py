@@ -1,4 +1,5 @@
 from typing import TYPE_CHECKING
+import json
 import httpx
 import pytest
 
@@ -243,6 +244,204 @@ async def test_field_items_qs_create(make_client: "MakeClient"):
     # Expect POST captured
     assert any(e["method"] == "POST" and e["path"].endswith("/items") for e in seen)
 
+
+@pytest.mark.asyncio
+async def test_field_items_qs_create_many(make_client: "MakeClient"):
+    captured = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(
+            {
+                "method": request.method,
+                "path": request.url.path,
+                "body": request.content,
+            }
+        )
+        if request.method == "GET":
+            if request.url.path == "/v1.0/sites/s123":
+                return httpx.Response(200, json={"id": "s123"})
+            if request.url.path == "/v1.0/sites/s123/lists":
+                return httpx.Response(
+                    200, json={"value": [{"id": "list1", "displayName": "List 1"}]}
+                )
+        if request.method == "POST" and request.url.path == "/v1.0/$batch":
+            payload = json.loads(request.content.decode())
+            reqs = payload.get("requests") or []
+            assert len(reqs) == 2
+            assert reqs[0]["method"] == "POST"
+            assert reqs[0]["url"] == "/sites/s123/lists/list1/items"
+            assert reqs[0]["body"] == {"fields": {"Title": "Created A"}}
+            assert reqs[1]["method"] == "POST"
+            assert reqs[1]["url"] == "/sites/s123/lists/list1/items"
+            assert reqs[1]["body"] == {
+                "fields": {"Title": "Created B", "Number": 2}
+            }
+            return httpx.Response(
+                200,
+                json={
+                    "responses": [
+                        {
+                            "id": "1",
+                            "status": 201,
+                            "body": {"id": "i1", "fields": {"Title": "Created A"}},
+                        },
+                        {
+                            "id": "2",
+                            "status": 201,
+                            "body": {
+                                "id": "i2",
+                                "fields": {"Title": "Created B", "Number": 2},
+                            },
+                        },
+                    ]
+                },
+            )
+        return httpx.Response(404)
+
+    client, _ = make_client(handler)
+    site = await client.sites.get(id="s123")
+    lst = await anext(aiter(site.lists))
+
+    created_qs = await lst.items.create_many(
+        {"Title": "Created A"},
+        {"fields": {"Title": "Created B", "Number": 2}},
+    )
+    created = [i async for i in created_qs]
+
+    assert [item.id for item in created] == ["i1", "i2"]
+    assert any(
+        e["method"] == "POST" and e["path"] == "/v1.0/$batch" for e in captured
+    )
+
+
+@pytest.mark.asyncio
+async def test_field_items_qs_update_dirty_fields(make_client: "MakeClient"):
+    captured: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(
+            {
+                "method": request.method,
+                "path": request.url.path,
+                "body": request.content,
+            }
+        )
+        if request.method == "GET":
+            if request.url.path == "/v1.0/sites/s123":
+                return httpx.Response(200, json={"id": "s123"})
+            if request.url.path == "/v1.0/sites/s123/lists":
+                return httpx.Response(
+                    200, json={"value": [{"id": "list1", "displayName": "List 1"}]}
+                )
+            if request.url.path == "/v1.0/sites/s123/lists/list1/items":
+                return httpx.Response(
+                    200,
+                    json={
+                        "value": [
+                            {"id": "i1", "fields": {"Title": "Item 1"}},
+                            {"id": "i2", "fields": {"Number": 1}},
+                        ]
+                    },
+                )
+        if request.method == "POST" and request.url.path == "/v1.0/$batch":
+            payload = json.loads(request.content.decode())
+            reqs = payload.get("requests") or []
+            assert len(reqs) == 2
+            assert reqs[0]["method"] == "PATCH"
+            assert reqs[0]["url"] == "/sites/s123/lists/list1/items/i1/fields"
+            assert reqs[0]["body"] == {"Title": "Updated 1"}
+            assert reqs[1]["method"] == "PATCH"
+            assert reqs[1]["url"] == "/sites/s123/lists/list1/items/i2/fields"
+            assert reqs[1]["body"] == {"Number": 2}
+            return httpx.Response(
+                200,
+                json={
+                    "responses": [
+                        {"id": "1", "status": 204},
+                        {"id": "2", "status": 204},
+                    ]
+                },
+            )
+        return httpx.Response(404)
+
+    client, _ = make_client(handler)
+    site = await client.sites.get(id="s123")
+    lst = await anext(aiter(site.lists))
+    items_qs = lst.items
+
+    items = [it async for it in items_qs]
+    items[0].fields["Title"] = "Updated 1"
+    items[1].fields["Number"] = 2
+
+    updated = await items_qs.update()
+
+    assert updated == 2
+    assert any(
+        e["method"] == "POST" and e["path"] == "/v1.0/$batch" for e in captured
+    )
+
+
+@pytest.mark.asyncio
+async def test_field_items_qs_update_with_fields(make_client: "MakeClient"):
+    captured: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(
+            {
+                "method": request.method,
+                "path": request.url.path,
+                "body": request.content,
+            }
+        )
+        if request.method == "GET":
+            if request.url.path == "/v1.0/sites/s123":
+                return httpx.Response(200, json={"id": "s123"})
+            if request.url.path == "/v1.0/sites/s123/lists":
+                return httpx.Response(
+                    200, json={"value": [{"id": "list1", "displayName": "List 1"}]}
+                )
+            if request.url.path == "/v1.0/sites/s123/lists/list1/items":
+                return httpx.Response(
+                    200,
+                    json={
+                        "value": [
+                            {"id": "i1", "fields": {"Title": "Item 1"}},
+                            {"id": "i2", "fields": {"Title": "Item 2"}},
+                        ]
+                    },
+                )
+        if request.method == "POST" and request.url.path == "/v1.0/$batch":
+            payload = json.loads(request.content.decode())
+            reqs = payload.get("requests") or []
+            assert len(reqs) == 2
+            assert reqs[0]["method"] == "PATCH"
+            assert reqs[0]["url"] == "/sites/s123/lists/list1/items/i1/fields"
+            assert reqs[0]["body"] == {"Title": "Bulk Updated"}
+            assert reqs[1]["method"] == "PATCH"
+            assert reqs[1]["url"] == "/sites/s123/lists/list1/items/i2/fields"
+            assert reqs[1]["body"] == {"Title": "Bulk Updated"}
+            return httpx.Response(
+                200,
+                json={
+                    "responses": [
+                        {"id": "1", "status": 204},
+                        {"id": "2", "status": 204},
+                    ]
+                },
+            )
+        return httpx.Response(404)
+
+    client, _ = make_client(handler)
+    site = await client.sites.get(id="s123")
+    lst = await anext(aiter(site.lists))
+    items_qs = lst.items
+
+    updated = await items_qs.update(fields={"Title": "Bulk Updated"})
+
+    assert updated == 2
+    assert any(
+        e["method"] == "POST" and e["path"] == "/v1.0/$batch" for e in captured
+    )
 
 @pytest.mark.asyncio
 async def test_site_by_path_list_by_name(make_client: "MakeClient"):

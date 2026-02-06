@@ -324,10 +324,13 @@ class UserQuerySet(QuerySet["User"]):
                 request = await u.assign_manager(
                     manager_id, as_batch_request=True, request_id=str(i)
                 )
-                requests.append(request)  # pyright: ignore[reportArgumentType]
+                if request:
+                    requests.append(request)
 
             batch_resp = await c.post("/$batch", body={"requests": requests})
-            utils.raise_batch_errors(batch_resp, action="assign manager to users")
+            utils.raise_batch_errors(
+                batch_resp, requests, action="assign manager to users"
+            )
 
     async def reset_password(
         self,
@@ -370,7 +373,8 @@ class UserQuerySet(QuerySet["User"]):
                         as_batch_request=True,
                         request_id=str(i),
                     )
-                    requests.append(request)  # pyright: ignore[reportArgumentType]
+                    if request:
+                        requests.append(request)
                     writer.writerow(
                         {
                             "password": u.get_generated_password(),
@@ -384,7 +388,9 @@ class UserQuerySet(QuerySet["User"]):
                 batch_resp = await self._client.post(
                     "/$batch", body={"requests": requests}
                 )
-                utils.raise_batch_errors(batch_resp, action="reset user passwords")
+                utils.raise_batch_errors(
+                    batch_resp, requests, action="reset user passwords"
+                )
 
     #     def get_by_directory_ids(
     #         self,
@@ -558,7 +564,7 @@ class UserQuerySet(QuerySet["User"]):
                 mapping[str(i)] = obj
 
             batch_resp = await self._client.post("/$batch", body={"requests": requests})
-            utils.raise_batch_errors(batch_resp, action="create users")
+            utils.raise_batch_errors(batch_resp, requests, action="create users")
 
             for resp in batch_resp.get("responses", []) or []:
                 obj = mapping.get(str(resp.get("id")))

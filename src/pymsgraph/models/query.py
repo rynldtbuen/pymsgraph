@@ -1,11 +1,10 @@
-from typing import cast
 from __future__ import annotations
+from typing import cast
 
 import asyncio
-from dataclasses import field
 from datetime import datetime, timezone
 import re
-from collections.abc import AsyncIterator, Callable, Collection, Iterable
+from collections.abc import AsyncIterator, Callable, Iterable
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Collection, Generic, Iterator, Self, TypeVar
 
@@ -58,7 +57,7 @@ class QuerySet(Generic[_Tm]):
             return e
         raise AttributeError(f"{type(self).__name__} object has no attribute 'path'")
 
-    def filter(self, *q_objects: "Q", **kwargs: Any) -> Self:
+    def filter(self, *q_objects: "Q | str", **kwargs: Any) -> Self:
         if not q_objects and not kwargs:
             return self
 
@@ -66,7 +65,8 @@ class QuerySet(Generic[_Tm]):
         expressions: list[str] = qs._params.setdefault("$filter", [])
 
         for q_obj in q_objects:
-            if (expr := q_obj.to_odata_query()) not in expressions:
+            expr = q_obj if isinstance(q_obj, str) else q_obj.to_odata_query()
+            if expr not in expressions:
                 expressions.append(expr)
         for key, value in kwargs.items():
             expr = qs._compile_filter_expr(key, value)
@@ -75,7 +75,7 @@ class QuerySet(Generic[_Tm]):
 
         return qs
 
-    def exclude(self, *q_objects: "Q", **kwargs: Any) -> Self:
+    def exclude(self, *q_objects: "Q | str", **kwargs: Any) -> Self:
         if not q_objects and not kwargs:
             return self
 
@@ -83,7 +83,8 @@ class QuerySet(Generic[_Tm]):
         expressions: list[str] = qs._params.setdefault("$filter", [])
 
         for q_obj in q_objects:
-            expr = f"not ({q_obj.to_odata_query()})"
+            base = q_obj if isinstance(q_obj, str) else q_obj.to_odata_query()
+            expr = f"not ({base})"
             if expr not in expressions:
                 expressions.append(expr)
         for key, value in kwargs.items():
@@ -529,7 +530,7 @@ class QuerySet(Generic[_Tm]):
         try:
             from pymsgraph import utils
 
-            utils.raise_batch_errors(resp, action="bulk update")
+            utils.raise_batch_errors(resp, requests, action="bulk update")
         except Exception:
             # rethrow original error for clarity
             raise
@@ -560,7 +561,7 @@ class QuerySet(Generic[_Tm]):
 
         for chunk in utils.chunks(requests, 20):
             resp = await self._client.post("/$batch", body={"requests": chunk})
-            utils.raise_batch_errors(resp, action="prefetch related")
+            utils.raise_batch_errors(resp, chunk, action="prefetch related")
             for r in resp.get("responses", []) or []:
                 rid = str(r.get("id"))
                 obj_field = mapping.get(rid)

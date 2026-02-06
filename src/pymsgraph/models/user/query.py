@@ -174,7 +174,9 @@ class AssignedLicensesQuerySetProxy:
                 )
 
             batch_resp = await c.post("/$batch", body={"requests": requests})
-            utils.raise_batch_errors(batch_resp, action="add user queryset licenses")
+            utils.raise_batch_errors(
+                batch_resp, requests, action="add user queryset licenses"
+            )
             for sku_id, subscribed_sku in available.items():
                 current = subscribed_sku._data.get(
                     "consumed_units", subscribed_sku.consumed_units or 0
@@ -232,7 +234,9 @@ class AssignedLicensesQuerySetProxy:
                 )
 
             batch_resp = await c.post("/$batch", body={"requests": requests})
-            utils.raise_batch_errors(batch_resp, action="remove user queryset licenses")
+            utils.raise_batch_errors(
+                batch_resp, requests, action="remove user queryset licenses"
+            )
             user_count = len(requests)
             for sku_id, subscribed_sku in subscribed_skus.items():
                 current = subscribed_sku._data.get(
@@ -282,7 +286,9 @@ class AppRoleAssignmentsQuerySetProxy:
                     "/$batch", body={"requests": chunked_requests}
                 )
                 utils.raise_batch_errors(
-                    batch_resp, action="add user app role assignments"
+                    batch_resp,
+                    chunked_requests,
+                    action="add user app role assignments",
                 )
 
     async def remove(self, *args: "AppRoleAssignment | dict[str, str]") -> None:
@@ -312,7 +318,7 @@ class AppRoleAssignmentsQuerySetProxy:
                 )
             batch_resp = await c.post("/$batch", body={"requests": requests})
             utils.raise_batch_errors(
-                batch_resp, action="list user app role assignments"
+                batch_resp, requests, action="list user app role assignments"
             )
 
             delete_requests: list[dict[str, Any]] = []
@@ -339,7 +345,9 @@ class AppRoleAssignmentsQuerySetProxy:
                     "/$batch", body={"requests": chunked_requests}
                 )
                 utils.raise_batch_errors(
-                    batch_delete, action="remove user app role assignments"
+                    batch_delete,
+                    chunked_requests,
+                    action="remove user app role assignments",
                 )
 
 
@@ -376,7 +384,7 @@ class GroupsQuerySet(QuerySet["Group"]):
                 )
 
             resp = await c.post("/$batch", body={"requests": requests})
-            utils.raise_batch_errors(resp, action="add user to groups")
+            utils.raise_batch_errors(resp, requests, action="add user to groups")
 
     async def remove(self, *args: "str | Group  | QuerySet[Group]") -> None:
         """
@@ -398,7 +406,7 @@ class GroupsQuerySet(QuerySet["Group"]):
                     }
                 )
             resp = await c.post("/$batch", body={"requests": requests})
-            utils.raise_batch_errors(resp, action="remove user from groups")
+            utils.raise_batch_errors(resp, requests, action="remove user from groups")
 
     async def copy_to(self, *args: "str | User | QuerySet[User]") -> None:
         """
@@ -431,7 +439,7 @@ class GroupsQuerySet(QuerySet["Group"]):
                         }
                     )
                 resp = await c.post("/$batch", body={"requests": requests})
-                utils.raise_batch_errors(resp, action="copy user groups")
+                utils.raise_batch_errors(resp, requests, action="copy user groups")
 
 
 class MemberOfQuerySet(QuerySet["DirectoryObject"]):
@@ -517,7 +525,9 @@ class AppRoleAssignmentQuerySet(_AppRoleAssignmentQuerySet):
                     }
                 )
             batch_resp = await c.post("/$batch", body={"requests": requests})
-            utils.raise_batch_errors(batch_resp, action="add user app role assignments")
+            utils.raise_batch_errors(
+                batch_resp, requests, action="add user app role assignments"
+            )
 
     async def remove(self, *args: "AppRoleAssignment | dict[str, str]") -> None:
         """
@@ -546,5 +556,5 @@ class AppRoleAssignmentQuerySet(_AppRoleAssignmentQuerySet):
                 )
             batch_resp = await c.post("/$batch", body={"requests": requests})
             utils.raise_batch_errors(
-                batch_resp, action="remove user app role assignments"
+                batch_resp, requests, action="remove user app role assignments"
             )

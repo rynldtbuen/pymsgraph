@@ -80,7 +80,7 @@ class MembersQuerySet(QuerySet["DirectoryObject"]):
                     }
                 )
             resp = await c.post("/$batch", body={"requests": requests})
-            utils.raise_batch_errors(resp, action="add group members")
+            utils.raise_batch_errors(resp, requests, action="add group members")
 
     async def remove(self, *args: Any) -> None:
         """
@@ -101,7 +101,7 @@ class MembersQuerySet(QuerySet["DirectoryObject"]):
                     }
                 )
             resp = await c.post("/$batch", body={"requests": requests})
-            utils.raise_batch_errors(resp, action="remove group members")
+            utils.raise_batch_errors(resp, requests, action="remove group members")
 
     async def copy_to(self, *args: Any) -> None:
         """
@@ -127,4 +127,4 @@ class MembersQuerySet(QuerySet["DirectoryObject"]):
                         }
                     )
                 resp = await c.post("/$batch", body={"requests": requests})
-                utils.raise_batch_errors(resp, action="copy group members")
+                utils.raise_batch_errors(resp, requests, action="copy group members")

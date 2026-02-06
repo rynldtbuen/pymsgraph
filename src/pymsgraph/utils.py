@@ -186,10 +186,38 @@ def is_guid(value: str) -> bool:
         return False
 
 
-def raise_batch_errors(batch_payload: dict[str, Any], *, action: str) -> None:
-    # Graph returns 200 for the batch envelope even if individual requests failed. :contentReference[oaicite:2]{index=2}
+def raise_batch_errors(
+    batch_payload: dict[str, Any],
+    requests: Iterable[dict[str, Any]] | None = None,
+    *,
+    action: str,
+) -> None:
+    # Graph returns 200 for the batch envelope even if individual requests failed.
+    request_map: dict[str, dict[str, Any]] = {}
+    if requests:
+        for req in requests:
+            req_id = req.get("id")
+            if req_id is None:
+                continue
+            request_map[str(req_id)] = req
+
     for r in batch_payload.get("responses", []) or []:
         status = int(r.get("status", 0) or 0)
         if status >= 400:
             body = r.get("body")
+            request_info: dict[str, Any] | None = None
+            if request_map:
+                req = request_map.get(str(r.get("id")))
+                if req is not None:
+                    request_info = {
+                        "id": req.get("id"),
+                        "method": req.get("method"),
+                        "url": req.get("url"),
+                        "body": req.get("body"),
+                    }
+            if request_info:
+                raise RuntimeError(
+                    f"Batch {action} failed (status={status}) "
+                    f"for request {request_info}: {body}"
+                )
             raise RuntimeError(f"Batch {action} failed (status={status}): {body}")

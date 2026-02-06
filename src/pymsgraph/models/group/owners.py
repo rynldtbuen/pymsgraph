@@ -38,7 +38,7 @@ class OwnersQuerySet(QuerySet["User"]):
                     }
                 )
             resp = c.post("/$batch", json_body={"requests": requests})
-            utils.raise_batch_errors(resp, action="add owners")
+            utils.raise_batch_errors(resp, requests, action="add owners")
 
     def remove(self, *args: arg_types) -> None:
         """
@@ -58,4 +58,4 @@ class OwnersQuerySet(QuerySet["User"]):
                     }
                 )
             resp = c.post("/$batch", json_body={"requests": requests})
-            utils.raise_batch_errors(resp, action="remove owners")
+            utils.raise_batch_errors(resp, requests, action="remove owners")

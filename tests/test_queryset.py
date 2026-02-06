@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 import httpx
 import pytest
 
+from pymsgraph import utils
 from pymsgraph.models.query import Q
 from pymsgraph.models.site.list import ListItemsQuerySet
 from pymsgraph.models.user import User
@@ -162,6 +163,35 @@ def test_exclude_q_object(users_qs) -> None:
         ._build_params()
     )
     assert params["$filter"] == "(not ((displayName eq 'A') or (mail eq 'a@x.com')))"
+
+
+def test_raise_batch_errors_includes_request_body() -> None:
+    batch_payload = {
+        "responses": [
+            {
+                "id": "1",
+                "status": 400,
+                "body": {"error": {"code": "BadRequest", "message": "Invalid"}},
+            }
+        ]
+    }
+    requests = [
+        {
+            "id": "1",
+            "method": "POST",
+            "url": "/sites/s1/lists/l1/items",
+            "body": {"fields": {"Title": "X"}},
+        }
+    ]
+
+    with pytest.raises(RuntimeError) as exc:
+        utils.raise_batch_errors(batch_payload, requests, action="create list items")
+
+    message = str(exc.value)
+    assert "create list items" in message
+    assert "POST" in message
+    assert "/sites/s1/lists/l1/items" in message
+    assert "Title" in message
 
 
 @pytest.mark.asyncio
