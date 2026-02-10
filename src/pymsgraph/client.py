@@ -7,8 +7,6 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
 
 import httpx
 
-from pymsgraph import utils
-
 try:
     import importlib.metadata as importlib_metadata
 except ImportError:  # pragma: no cover
@@ -27,18 +25,6 @@ if TYPE_CHECKING:
 
 
 __all__ = ["Client"]
-
-
-def _default_user_agent() -> str:
-    """Build a descriptive UA: pymsgraph/<version> (python X.Y; os)."""
-    py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
-    os_name = (platform.system() or "unknown").lower()
-    try:
-        version = importlib_metadata.version("pymsgraph")
-    except importlib_metadata.PackageNotFoundError:
-        version = "0.0.0"
-    return f"pymsgraph/{version} (python {py_ver}; {os_name})"
-
 
 _Tqs = TypeVar("_Tqs", bound="QuerySet")
 
@@ -109,8 +95,8 @@ class Client:
         if url is None:
             raise ValueError("Argument required, path/url.")
         resp = await self.http.get(url, params=params, headers=self._headers(headers))
-        self._raise_for_status(resp)
-        data = self._json_or_none(resp)
+        _raise_for_status(resp)
+        data = _json_or_none(resp)
         return data or {}
 
     async def post(
@@ -127,8 +113,8 @@ class Client:
             json=dict(body) if body is not None else None,
             headers=self._headers(headers),
         )
-        self._raise_for_status(resp)
-        data = self._json_or_none(resp)
+        _raise_for_status(resp)
+        data = _json_or_none(resp)
         return data or {}
 
     async def put(
@@ -149,8 +135,8 @@ class Client:
             json=dict(body) if body is not None else None,
             headers=self._headers(headers),
         )
-        self._raise_for_status(resp)
-        data = self._json_or_none(resp)
+        _raise_for_status(resp)
+        data = _json_or_none(resp)
         return data or {}
 
     async def get_content(
@@ -165,7 +151,7 @@ class Client:
             params=params,
             headers=self._headers(headers),
         )
-        self._raise_for_status(resp)
+        _raise_for_status(resp)
         return resp.content
 
     async def patch(
@@ -182,8 +168,8 @@ class Client:
             json=dict(body) if body is not None else None,
             headers=self._headers(headers),
         )
-        self._raise_for_status(resp)
-        return self._json_or_none(resp)
+        _raise_for_status(resp)
+        return _json_or_none(resp)
 
     async def delete(
         self,
@@ -195,8 +181,8 @@ class Client:
         resp = await self.http.delete(
             self._url(path), params=params, headers=self._headers(headers)
         )
-        self._raise_for_status(resp)
-        return self._json_or_none(resp)
+        _raise_for_status(resp)
+        return _json_or_none(resp)
 
     async def close(self) -> None:
         if self._owns_http:
@@ -219,30 +205,43 @@ class Client:
             out.update(dict(headers))
         return out
 
-    def _raise_for_status(self, resp: httpx.Response) -> None:
-        try:
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            # Try to enrich error with Graph JSON body if present
-            detail: Any
-            try:
-                detail = resp.json()
-            except Exception:
-                detail = resp.text
-            raise httpx.HTTPStatusError(
-                f"Graph API error {resp.status_code}: {detail}: {resp.url}",
-                request=e.request,
-                response=e.response,
-            ) from None
-
-    def _json_or_none(self, resp: httpx.Response) -> Any:
-        if resp.status_code == 204:
-            return None
-        if not resp.content:
-            return None
-        return resp.json()
-
     groups = RootQuerySetDescriptor(GroupQuerySet)
     subscribed_skus = RootQuerySetDescriptor(SubscribedSkuQuerySet)
     sites = RootQuerySetDescriptor(SiteQuerySet)
     users = RootQuerySetDescriptor(UserQuerySet)
+
+
+def _default_user_agent() -> str:
+    """Build a descriptive UA: pymsgraph/<version> (python X.Y; os)."""
+    py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
+    os_name = (platform.system() or "unknown").lower()
+    try:
+        version = importlib_metadata.version("pymsgraph")
+    except importlib_metadata.PackageNotFoundError:
+        version = "0.0.0"
+    return f"pymsgraph/{version} (python {py_ver}; {os_name})"
+
+
+def _json_or_none(resp: httpx.Response) -> Any:
+    if resp.status_code == 204:
+        return None
+    if not resp.content:
+        return None
+    return resp.json()
+
+
+def _raise_for_status(resp: httpx.Response) -> None:
+    try:
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        # Try to enrich error with Graph JSON body if present
+        detail: Any
+        try:
+            detail = resp.json()
+        except Exception:
+            detail = resp.text
+        raise httpx.HTTPStatusError(
+            f"Graph API error {resp.status_code}: {detail}: {resp.url}",
+            request=e.request,
+            response=e.response,
+        ) from None

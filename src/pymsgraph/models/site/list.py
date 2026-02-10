@@ -302,7 +302,7 @@ class List(BaseItem):
     columns = ListField()
     content_types = ListField()
     drive = Field()
-    items = QuerySetField(ListItemsQuerySet)
+    items: QuerySetField[ListItemsQuerySet] = QuerySetField(ListItemsQuerySet)
     operations = ListField()
     subscriptions = ListField()
 
