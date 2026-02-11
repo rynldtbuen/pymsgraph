@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Collection
 from typing import TYPE_CHECKING, Any
 
@@ -7,599 +8,632 @@ from pymsgraph import utils
 from pymsgraph.models.directory_object import DirectoryObject
 from pymsgraph.models.drive import Drive
 from pymsgraph.models.fields import (
-    BooleanField,
-    CharField,
-    DateTimeField,
-    EmailField,
-    Field,
-    IntegerField,
-    ListField,
-    ModelField,
-    QuerySetField,
+	BooleanField,
+	CharField,
+	DateTimeField,
+	EmailField,
+	Field,
+	IntegerField,
+	ListField,
+	ModelField,
+	QuerySetField,
 )
 from pymsgraph.models.query import QuerySet
 from pymsgraph.models.subscribed_sku import SubscribedSku
-
 from .common import Authentication, EmployeeOrgData, PasswordProfile
 from .query import (
-    AppRoleAssignmentQuerySet,
-    AppRoleAssignmentsQuerySetProxy,
-    AssignedLicensesQuerySet,
-    AssignedLicensesQuerySetProxy,
-    AssignedPlansQuerySet,
-    MemberOfQuerySet,
+	AppRoleAssignmentQuerySet,
+	AppRoleAssignmentsQuerySetProxy,
+	AssignedLicensesQuerySet,
+	AssignedLicensesQuerySetProxy,
+	AssignedPlansQuerySet,
+	MemberOfQuerySet,
 )
 
 if TYPE_CHECKING:
-    from pathlib import Path
+	from pathlib import Path
+
+_logger = logging.getLogger(__name__)
 
 
 class User(DirectoryObject):
-    """
-    Graph user resource type.
+	"""
+	Graph user resource type.
 
-    https://learn.microsoft.com/en-us/graph/api/resources/user
-    """
+	https://learn.microsoft.com/en-us/graph/api/resources/user
+	"""
 
-    PATH = "/users"
-    SEARCH_FIELD = "display_name"
+	PATH = "/users"
+	SEARCH_FIELD = "display_name"
 
-    # Properties
-    about_me = CharField()
-    account_enabled = BooleanField(default=True, required=True, select_default=True)
-    age_group = CharField()
-    assigned_licenses = QuerySetField(AssignedLicensesQuerySet)
-    assigned_plans = QuerySetField(AssignedPlansQuerySet)
-    authorization_info = Field()
-    birthday = DateTimeField()
-    business_phones = ListField()
-    city = CharField()
-    company_name = CharField()
-    consent_provided_for_minor = CharField()
-    country = CharField()
-    created_date_time = DateTimeField()
-    creation_type = CharField()
-    custom_security_attributes = Field()
-    department = CharField()
-    device_enrollment_limit = IntegerField()
-    display_name = CharField(required=True, select_default=True, order_by=True)
-    employee_hire_date = DateTimeField()
-    employee_id = CharField()
-    employee_leave_date_time = DateTimeField()
-    employee_org_data = ModelField(EmployeeOrgData)
-    employee_type = CharField()
-    external_user_state = CharField()
-    external_user_state_change_date_time = DateTimeField()
-    fax_number = CharField()
-    given_name = CharField()
-    hire_date = DateTimeField()
-    identities = ListField()
-    im_addresses = ListField()
-    interests = ListField()
-    is_management_restricted = BooleanField()
-    is_resource_account = BooleanField()
-    job_title = CharField()
-    last_password_change_date_time = DateTimeField()
-    legal_age_group_classification = CharField()
-    license_assignment_states = ListField()
-    mail = EmailField(read_only=True, select_default=True)
-    mail_nickname = CharField(required=True)
-    mailbox_settings = Field()
-    mobile_phone = CharField()
-    my_site = CharField()
-    office_location = CharField()
-    on_premises_distinguished_name = CharField()
-    on_premises_domain_name = CharField()
-    on_premises_extension_attributes = Field()
-    on_premises_immutable_id = CharField()
-    on_premises_last_sync_date_time = DateTimeField()
-    on_premises_provisioning_errors = ListField()
-    on_premises_sam_account_name = CharField()
-    on_premises_security_identifier = CharField()
-    on_premises_sync_enabled = BooleanField()
-    on_premises_user_principal_name = CharField()
-    other_mails = ListField()
-    password_policies = CharField()
-    password_profile = ModelField(PasswordProfile, write_only=True)
-    past_projects = ListField()
-    postal_code = CharField()
-    preferred_data_location = CharField()
-    preferred_language = CharField()
-    preferred_name = CharField()
-    print = Field()
-    provisioned_plans = ListField()
-    proxy_addresses = ListField()
-    responsibilities = ListField()
-    schools = ListField()
-    security_identifier = CharField()
-    service_provisioning_errors = ListField()
-    show_in_address_list = BooleanField()
-    sign_in_activity = Field()
-    sign_in_sessions_valid_from_date_time = DateTimeField()
-    skills = ListField()
-    state = CharField()
-    street_address = CharField()
-    surname = CharField()
-    usage_location = CharField()
-    user_principal_name = EmailField(required=True, select_default=True, order_by=True)
-    user_type = CharField()
+	# Properties
+	about_me = CharField()
+	account_enabled = BooleanField(default=True, required=True, select_default=True)
+	age_group = CharField()
+	assigned_licenses = QuerySetField(AssignedLicensesQuerySet)
+	assigned_plans = QuerySetField(AssignedPlansQuerySet)
+	authorization_info = Field()
+	birthday = DateTimeField()
+	business_phones = ListField()
+	city = CharField()
+	company_name = CharField()
+	consent_provided_for_minor = CharField()
+	country = CharField()
+	created_date_time = DateTimeField()
+	creation_type = CharField()
+	custom_security_attributes = Field()
+	department = CharField()
+	device_enrollment_limit = IntegerField()
+	display_name = CharField(required=True, select_default=True, order_by=True)
+	employee_hire_date = DateTimeField()
+	employee_id = CharField()
+	employee_leave_date_time = DateTimeField()
+	employee_org_data = ModelField(EmployeeOrgData)
+	employee_type = CharField()
+	external_user_state = CharField()
+	external_user_state_change_date_time = DateTimeField()
+	fax_number = CharField()
+	given_name = CharField()
+	hire_date = DateTimeField()
+	identities = ListField()
+	im_addresses = ListField()
+	interests = ListField()
+	is_management_restricted = BooleanField()
+	is_resource_account = BooleanField()
+	job_title = CharField()
+	last_password_change_date_time = DateTimeField()
+	legal_age_group_classification = CharField()
+	license_assignment_states = ListField()
+	mail = EmailField(read_only=True, select_default=True)
+	mail_nickname = CharField(required=True)
+	mailbox_settings = Field()
+	mobile_phone = CharField()
+	my_site = CharField()
+	office_location = CharField()
+	on_premises_distinguished_name = CharField()
+	on_premises_domain_name = CharField()
+	on_premises_extension_attributes = Field()
+	on_premises_immutable_id = CharField()
+	on_premises_last_sync_date_time = DateTimeField()
+	on_premises_provisioning_errors = ListField()
+	on_premises_sam_account_name = CharField()
+	on_premises_security_identifier = CharField()
+	on_premises_sync_enabled = BooleanField()
+	on_premises_user_principal_name = CharField()
+	other_mails = ListField()
+	password_policies = CharField()
+	password_profile = ModelField(PasswordProfile, write_only=True)
+	past_projects = ListField()
+	postal_code = CharField()
+	preferred_data_location = CharField()
+	preferred_language = CharField()
+	preferred_name = CharField()
+	print = Field()
+	provisioned_plans = ListField()
+	proxy_addresses = ListField()
+	responsibilities = ListField()
+	schools = ListField()
+	security_identifier = CharField()
+	service_provisioning_errors = ListField()
+	show_in_address_list = BooleanField()
+	sign_in_activity = Field()
+	sign_in_sessions_valid_from_date_time = DateTimeField()
+	skills = ListField()
+	state = CharField()
+	street_address = CharField()
+	surname = CharField()
+	usage_location = CharField()
+	user_principal_name = EmailField(required=True, select_default=True, order_by=True)
+	user_type = CharField()
 
-    # Navigation properties
-    # activities = ListField()
-    # agreement_acceptances = ListField()
-    app_role_assignments = QuerySetField(AppRoleAssignmentQuerySet)
-    authentication = ModelField(Authentication, is_proxy=True)
-    # calendar = Field()
-    # calendar_groups = ListField()
-    # calendar_view = ListField()
-    # calendars = ListField()
-    # chats = ListField()
-    # cloud_clipboard = Field()
-    # cloud_pcs = ListField()
-    # contact_folders = ListField()
-    # contacts = ListField()
-    # created_objects = ListField()
-    # data_security_and_governance = Field()
-    # device_management_troubleshooting_events = ListField()
-    direct_reports = ListField(item_type="User", expand=True)
-    # drives = ListField()
-    # employee_experience = Field()
-    # events = ListField()
-    # extensions = ListField()
-    # followed_sites = ListField()
-    # inference_classification = Field()
-    # insights = Field()
-    # joined_teams = ListField()
-    # license_details = ListField()
-    # mail_folders = ListField()
-    # managed_app_registrations = ListField()
-    # managed_devices = ListField()
-    manager = ModelField("User", expand=True)
-    member_of = QuerySetField(MemberOfQuerySet, prefetch=True, expand=True)
-    # messages = ListField()
-    # oauth2_permission_grants = ListField()
-    # onenote = Field()
-    # online_meetings = ListField()
-    # outlook = Field()
-    # owned_devices = ListField()
-    # owned_objects = ListField()
-    # people = ListField()
-    # permission_grants = ListField()
-    # photo = Field()
-    # photos = ListField()
-    # planner = Field()
-    # presence = Field()
-    # registered_devices = ListField()
-    # scoped_role_member_of = ListField()
-    # settings = Field()
-    # solutions = Field()
-    # sponsors = ListField()
-    # teamwork = Field()
-    # todo = Field()
-    # transitive_member_of = ListField()
+	# Navigation properties
+	# activities = ListField()
+	# agreement_acceptances = ListField()
+	app_role_assignments = QuerySetField(AppRoleAssignmentQuerySet)
+	authentication = ModelField(Authentication, is_proxy=True)
+	# calendar = Field()
+	# calendar_groups = ListField()
+	# calendar_view = ListField()
+	# calendars = ListField()
+	# chats = ListField()
+	# cloud_clipboard = Field()
+	# cloud_pcs = ListField()
+	# contact_folders = ListField()
+	# contacts = ListField()
+	# created_objects = ListField()
+	# data_security_and_governance = Field()
+	# device_management_troubleshooting_events = ListField()
+	direct_reports = ListField(item_type="User", expand=True)
+	# drives = ListField()
+	# employee_experience = Field()
+	# events = ListField()
+	# extensions = ListField()
+	# followed_sites = ListField()
+	# inference_classification = Field()
+	# insights = Field()
+	# joined_teams = ListField()
+	# license_details = ListField()
+	# mail_folders = ListField()
+	# managed_app_registrations = ListField()
+	# managed_devices = ListField()
+	manager = ModelField("User", expand=True)
+	member_of = QuerySetField(MemberOfQuerySet, prefetch=True, expand=True)
 
-    @property
-    def path(self) -> str:
-        if self.id is None and self.user_principal_name:
-            return f"{self.PATH}/{self.user_principal_name}"
-        return super().path
+	# messages = ListField()
+	# oauth2_permission_grants = ListField()
+	# onenote = Field()
+	# online_meetings = ListField()
+	# outlook = Field()
+	# owned_devices = ListField()
+	# owned_objects = ListField()
+	# people = ListField()
+	# permission_grants = ListField()
+	# photo = Field()
+	# photos = ListField()
+	# planner = Field()
+	# presence = Field()
+	# registered_devices = ListField()
+	# scoped_role_member_of = ListField()
+	# settings = Field()
+	# solutions = Field()
+	# sponsors = ListField()
+	# teamwork = Field()
+	# todo = Field()
+	# transitive_member_of = ListField()
 
-    @property
-    def drive(self) -> Drive:
-        return Drive(client=self._args[0], path=f"{self.path}/drive")
+	@property
+	def path(self) -> str:
+		if self.id is None and self.user_principal_name:
+			return f"{self.PATH}/{self.user_principal_name}"
+		return super().path
 
-    def __repr__(self):
-        return f"<User: {self.id}, {self.display_name}, {self.user_principal_name}>"
+	@property
+	def drive(self) -> Drive:
+		return Drive(client=self._args[0], path=f"{self.path}/drive")
 
-    async def reset_password(
-        self,
-        *,
-        password: str | None = None,
-        force_change_password_next_sign_in: bool = True,
-        force_change_password_next_sign_in_with_mfa: bool | None = None,
-        auto_generate_password: bool = False,
-        as_batch_request: bool = False,
-        request_id: str | None = None,
-    ) -> None | dict[str, Any]:
+	def __repr__(self):
+		return f"<User: {self.id}, {self.display_name}, {self.user_principal_name}>"
 
-        path = self.path
+	async def reset_password(
+		self,
+		*,
+		password: str | None = None,
+		force_change_password_next_sign_in: bool = True,
+		force_change_password_next_sign_in_with_mfa: bool | None = None,
+		auto_generate_password: bool = False,
+		as_batch_request: bool = False,
+		request_id: str | None = None,
+	) -> None | dict[str, Any]:
+		_logger.debug(
+			"User.reset_password user=%s batch=%s", self.id or self.user_principal_name, as_batch_request
+		)
 
-        if auto_generate_password and not password:
-            password = utils.generate_password(14)
+		path = self.path
 
-        if not password:
-            raise ValueError(
-                "'password' is required when resetting a user's password. "
-                "Set auto_generate_password=True to generate one."
-            )
+		if auto_generate_password and not password:
+			password = utils.generate_password(14)
 
-        setattr(self, "__generated_password", password)
+		if not password:
+			raise ValueError(
+				"'password' is required when resetting a user's password. "
+				"Set auto_generate_password=True to generate one."
+			)
 
-        password_profile = PasswordProfile(
-            password=password,
-            force_change_password_next_sign_in=force_change_password_next_sign_in,
-            force_change_password_next_sign_in_with_mfa=force_change_password_next_sign_in_with_mfa,
-        )
+		setattr(self, "__generated_password", password)
 
-        if as_batch_request:
-            return {
-                "id": request_id,
-                "method": "PATCH",
-                "url": self.path,
-                "headers": {"Content-Type": "application/json"},
-                "body": {"passwordProfile": password_profile.serialize()},
-            }
+		password_profile = PasswordProfile(
+			password=password,
+			force_change_password_next_sign_in=force_change_password_next_sign_in,
+			force_change_password_next_sign_in_with_mfa=force_change_password_next_sign_in_with_mfa,
+		)
 
-        await self._client.patch(path, body=password_profile.serialize())
+		if as_batch_request:
+			_logger.debug("User.reset_password batch request for %s", path)
+			return {
+				"id": request_id,
+				"method": "PATCH",
+				"url": self.path,
+				"headers": {"Content-Type": "application/json"},
+				"body": {"passwordProfile": password_profile.serialize()},
+			}
 
-    async def assign_manager(
-        self,
-        manager_id: str,
-        as_batch_request: bool = False,
-        request_id: str | None = None,
-    ) -> None | dict[str, Any]:
-        """
-        Assign a manager to this user.
-        """
+		_logger.debug("User.reset_password patch %s", path)
+		await self._client.patch(path, body=password_profile.serialize())
 
-        if "@" in manager_id and not utils.is_guid(manager_id):
-            cache_manager_id = await self._client.users._cache.get(manager_id) or ""
-            if cache_manager_id:
-                manager_id = cache_manager_id
-            else:
-                manager = await self._client.users.get(id=manager_id)
-                if manager.id is None:
-                    raise ValueError(
-                        f"Unable to resolve manager id from '{manager_id}'."
-                    )
-                manager_id = manager.id
+	async def assign_manager(
+		self,
+		manager_id: str,
+		as_batch_request: bool = False,
+		request_id: str | None = None,
+	) -> None | dict[str, Any]:
+		"""
+		Assign a manager to this user.
+		"""
+		_logger.debug(
+			"User.assign_manager user=%s manager_id=%s batch=%s",
+			self.id or self.user_principal_name,
+			manager_id,
+			as_batch_request,
+		)
 
-        body = {"@odata.id": f"{self._client.base_url}/directoryObjects/{manager_id}"}
+		if "@" in manager_id and not utils.is_guid(manager_id):
+			cache_manager_id = await self._client.users._cache.get(manager_id) or ""
+			if cache_manager_id:
+				manager_id = cache_manager_id
+			else:
+				manager = await self._client.users.get(id=manager_id)
+				if manager.id is None:
+					raise ValueError(
+						f"Unable to resolve manager id from '{manager_id}'."
+					)
+				manager_id = manager.id
 
-        if as_batch_request:
-            return {
-                "id": request_id,
-                "method": "PUT",
-                "url": f"{self.path}/manager/$ref",
-                "headers": {"Content-Type": "application/json"},
-                "body": body,
-            }
-        await self._client.put(f"{self.path}/manager/$ref", body=body)
+		body = {"@odata.id": f"{self._client.base_url}/directoryObjects/{manager_id}"}
 
-    async def revoke_sign_in_sessions(self):
-        return await self._client.post(f"{self.path}/revokeSignInSessions")
+		if as_batch_request:
+			_logger.debug("User.assign_manager batch request for %s", self.path)
+			return {
+				"id": request_id,
+				"method": "PUT",
+				"url": f"{self.path}/manager/$ref",
+				"headers": {"Content-Type": "application/json"},
+				"body": body,
+			}
+		_logger.debug("User.assign_manager put %s", self.path)
+		await self._client.put(f"{self.path}/manager/$ref", body=body)
 
-    def get_generated_password(self) -> str | None:
-        pwd = getattr(self, "__generated_password", None)
-        setattr(self, "__generated_password", None)
-        return pwd
+	async def revoke_sign_in_sessions(self):
+		_logger.debug(
+			"User.revoke_sign_in_sessions user=%s", self.id or self.user_principal_name
+		)
+		return await self._client.post(f"{self.path}/revokeSignInSessions")
 
-    @property
-    def directory_object_id(self) -> str:
-        if not self.id:
-            raise ValueError(f"{type(self)} object id is missing.")
-        return self.id
+	def get_generated_password(self) -> str | None:
+		pwd = getattr(self, "__generated_password", None)
+		setattr(self, "__generated_password", None)
+		return pwd
+
+	@property
+	def directory_object_id(self) -> str:
+		if not self.id:
+			raise ValueError(f"{type(self)} object id is missing.")
+		return self.id
 
 
 class UserQuerySet(QuerySet["User"]):
-    model_class = User
+	model_class = User
 
-    @property
-    def _cache(self) -> utils.SimpleCache:
-        if self._client is not None and hasattr(self._client, "_user_cache"):
-            return getattr(self._client, "_user_cache")
+	@property
+	def _cache(self) -> utils.SimpleCache:
+		if self._client is not None and hasattr(self._client, "_user_cache"):
+			return getattr(self._client, "_user_cache")
 
-        cache = utils.SimpleCache()
-        if self._client is not None:
-            setattr(self._client, "_user_cache", cache)
-        return cache
+		cache = utils.SimpleCache()
+		if self._client is not None:
+			setattr(self._client, "_user_cache", cache)
+		return cache
 
-    @property
-    def assigned_licenses(self) -> AssignedLicensesQuerySetProxy:
-        return AssignedLicensesQuerySetProxy(self)
+	@property
+	def assigned_licenses(self) -> AssignedLicensesQuerySetProxy:
+		return AssignedLicensesQuerySetProxy(self)
 
-    @property
-    def app_role_assignments(self) -> AppRoleAssignmentsQuerySetProxy:
-        return AppRoleAssignmentsQuerySetProxy(self)
+	@property
+	def app_role_assignments(self) -> AppRoleAssignmentsQuerySetProxy:
+		return AppRoleAssignmentsQuerySetProxy(self)
 
-    async def get(self, id: str | None = None, **kwargs: Any) -> "User":
-        user = await super().get(id, **kwargs)
-        if user.user_principal_name and user.id:
-            self._cache.set(user.user_principal_name.lower(), user.id, ttl=86400)
-        return user
+	async def get(self, id: str | None = None, **kwargs: Any) -> "User":
+		_logger.debug("UserQuerySet.get id=%s kwargs=%s", id, kwargs)
+		user = await super().get(id, **kwargs)
+		if user.user_principal_name and user.id:
+			self._cache.set(user.user_principal_name.lower(), user.id, ttl=86400)
+		return user
 
-    async def assign_manager(self, manager_id: str) -> None:
-        """
-        Assign manager to all users in this queryset (batched).
-        """
+	async def assign_manager(self, manager_id: str) -> None:
+		"""
+		Assign manager to all users in this queryset (batched).
+		"""
 
-        if not manager_id:
-            raise ValueError("Manager id is required.")
+		if not manager_id:
+			raise ValueError("Manager id is required.")
 
-        c = self._client
+		_logger.debug("UserQuerySet.assign_manager manager_id=%s", manager_id)
+		c = self._client
 
-        async for chunked_users in utils.achunks(self.select("id"), 20):
-            requests: list[dict[str, Any]] = []
-            for i, u in enumerate(chunked_users, start=1):
-                request = await u.assign_manager(
-                    manager_id, as_batch_request=True, request_id=str(i)
-                )
-                if request:
-                    requests.append(request)
+		async for chunked_users in utils.achunks(self.select("id"), 20):
+			requests: list[dict[str, Any]] = []
+			for i, u in enumerate(chunked_users, start=1):
+				request = await u.assign_manager(
+					manager_id, as_batch_request=True, request_id=str(i)
+				)
+				if request:
+					requests.append(request)
 
-            batch_resp = await c.post("/$batch", body={"requests": requests})
-            utils.raise_batch_errors(
-                batch_resp, requests, action="assign manager to users"
-            )
+			_logger.debug(
+				"UserQuerySet.assign_manager batch size=%s", len(requests)
+			)
+			batch_resp = await c.post("/$batch", body={"requests": requests})
+			utils.raise_batch_errors(
+				batch_resp, requests, action="assign manager to users"
+			)
 
-    async def reset_password(
-        self,
-        path: "str | Path",
-        *,
-        password: str | None = None,
-        auto_generate_password: bool = False,
-        force_change_password_next_sign_in: bool = True,
-        force_change_password_next_sign_in_with_mfa: bool | None = None,
-    ) -> None:
-        """
-        Reset passwords for all users in this queryset (batched) and export to CSV.
-        """
+	async def reset_password(
+		self,
+		path: "str | Path",
+		*,
+		password: str | None = None,
+		auto_generate_password: bool = False,
+		force_change_password_next_sign_in: bool = True,
+		force_change_password_next_sign_in_with_mfa: bool | None = None,
+	) -> None:
+		"""
+		Reset passwords for all users in this queryset (batched) and export to CSV.
+		"""
 
-        import csv
-        from pathlib import Path
+		import csv
+		from pathlib import Path
 
-        out_path = Path(path)
-        fieldnames = (
-            "password",
-            "display_name",
-            "user_principal_name",
-            "mobile_phone",
-            "id",
-        )
+		_logger.debug("UserQuerySet.reset_password path=%s", path)
+		out_path = Path(path)
+		fieldnames = (
+			"password",
+			"display_name",
+			"user_principal_name",
+			"mobile_phone",
+			"id",
+		)
 
-        with out_path.open("w", encoding="utf-8", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            qs = self.select(*fieldnames[1:])
+		with out_path.open("w", encoding="utf-8", newline="") as f:
+			writer = csv.DictWriter(f, fieldnames=fieldnames)
+			writer.writeheader()
+			qs = self.select(*fieldnames[1:])
 
-            async for chunked_users in utils.achunks(qs, 20):
-                requests: list[dict[str, Any]] = []
-                for i, u in enumerate(chunked_users, start=1):
-                    request = await u.reset_password(
-                        password=password,
-                        auto_generate_password=auto_generate_password,
-                        force_change_password_next_sign_in=force_change_password_next_sign_in,
-                        force_change_password_next_sign_in_with_mfa=force_change_password_next_sign_in_with_mfa,
-                        as_batch_request=True,
-                        request_id=str(i),
-                    )
-                    if request:
-                        requests.append(request)
-                    writer.writerow(
-                        {
-                            "password": u.get_generated_password(),
-                            "display_name": u.display_name,
-                            "user_principal_name": u.user_principal_name,
-                            "mobile_phone": u.mobile_phone,
-                            "id": u.id,
-                        }
-                    )
+			async for chunked_users in utils.achunks(qs, 20):
+				requests: list[dict[str, Any]] = []
+				for i, u in enumerate(chunked_users, start=1):
+					request = await u.reset_password(
+						password=password,
+						auto_generate_password=auto_generate_password,
+						force_change_password_next_sign_in=force_change_password_next_sign_in,
+						force_change_password_next_sign_in_with_mfa=force_change_password_next_sign_in_with_mfa,
+						as_batch_request=True,
+						request_id=str(i),
+					)
+					if request:
+						requests.append(request)
+					writer.writerow(
+						{
+							"password": u.get_generated_password(),
+							"display_name": u.display_name,
+							"user_principal_name": u.user_principal_name,
+							"mobile_phone": u.mobile_phone,
+							"id": u.id,
+						}
+					)
 
-                batch_resp = await self._client.post(
-                    "/$batch", body={"requests": requests}
-                )
-                utils.raise_batch_errors(
-                    batch_resp, requests, action="reset user passwords"
-                )
+				_logger.debug(
+					"UserQuerySet.reset_password batch size=%s", len(requests)
+				)
+				batch_resp = await self._client.post(
+					"/$batch", body={"requests": requests}
+				)
+				utils.raise_batch_errors(
+					batch_resp, requests, action="reset user passwords"
+				)
 
-    #     def get_by_directory_ids(
-    #         self,
-    #         *ids: str | Iterable[str],
-    #     ) -> list["User"]:
-    #         """
-    #         Resolve directory object IDs to users via /directoryObjects/getByIds.
-    #         """
-    #         id_list: list[str] = []
-    #         for arg in ids:
-    #             if isinstance(arg, str):
-    #                 id_list.append(arg)
-    #             else:
-    #                 id_list.extend(list(arg))
-    #         if not id_list:
-    #             return []
+	#     def get_by_directory_ids(
+	#         self,
+	#         *ids: str | Iterable[str],
+	#     ) -> list["User"]:
+	#         """
+	#         Resolve directory object IDs to users via /directoryObjects/getByIds.
+	#         """
+	#         id_list: list[str] = []
+	#         for arg in ids:
+	#             if isinstance(arg, str):
+	#                 id_list.append(arg)
+	#             else:
+	#                 id_list.extend(list(arg))
+	#         if not id_list:
+	#             return []
 
-    #         results: list[User] = []
-    #         for chunk in utils.chunks(id_list, 1000):
-    #             payload = {"ids": list(chunk), "types": ["user"]}
-    #             data = self._client.post("/directoryObjects/getByIds", json_body=payload)
-    #             results.extend(
-    #                 self.model_class(graph_data=item, parent=self)
-    #                 for item in data.get("value", [])
-    #             )
-    #         return results
+	#         results: list[User] = []
+	#         for chunk in utils.chunks(id_list, 1000):
+	#             payload = {"ids": list(chunk), "types": ["user"]}
+	#             data = self._client.post("/directoryObjects/getByIds", json_body=payload)
+	#             results.extend(
+	#                 self.model_class(graph_data=item, parent=self)
+	#                 for item in data.get("value", [])
+	#             )
+	#         return results
 
-    async def create(
-        self,
-        *,
-        display_name: str,
-        user_principal_name: str,
-        mail_nickname: str,
-        account_enabled: bool = True,
-        password: str | None = None,
-        force_change_password_next_sign_in: bool = True,
-        auto_generate_password: bool = False,
-        assign_licenses: str | Collection[str] | None = None,
-        manager: str | None = None,
-        **kwargs: Any,
-    ) -> "User":
+	async def create(
+		self,
+		*,
+		display_name: str,
+		user_principal_name: str,
+		mail_nickname: str,
+		account_enabled: bool = True,
+		password: str | None = None,
+		force_change_password_next_sign_in: bool = True,
+		auto_generate_password: bool = False,
+		assign_licenses: str | Collection[str] | None = None,
+		manager: str | None = None,
+		**kwargs: Any,
+	) -> "User":
+		_logger.debug(
+			"UserQuerySet.create display_name=%s user_principal_name=%s",
+			display_name,
+			user_principal_name,
+		)
 
-        if password is None:
-            if not auto_generate_password:
-                raise ValueError(
-                    "'password' is required when creating a user. Set auto_generate_password=True to let the system create a random password for this user."
-                )
-            password = utils.generate_password(14)
+		if password is None:
+			if not auto_generate_password:
+				raise ValueError(
+					"'password' is required when creating a user. Set auto_generate_password=True to let the system create a random password for this user."
+				)
+			password = utils.generate_password(14)
 
-        obj = User(
-            display_name=display_name,
-            user_principal_name=user_principal_name,
-            mail_nickname=mail_nickname,
-            account_enabled=account_enabled,
-            password_profile=dict(
-                password=password,
-                force_change_password_next_sign_in=force_change_password_next_sign_in,
-            ),
-            client=self._client,
-            path=self.path,
-            **kwargs,
-        )
+		obj = User(
+			display_name=display_name,
+			user_principal_name=user_principal_name,
+			mail_nickname=mail_nickname,
+			account_enabled=account_enabled,
+			password_profile=dict(
+				password=password,
+				force_change_password_next_sign_in=force_change_password_next_sign_in,
+			),
+			client=self._client,
+			path=self.path,
+			**kwargs,
+		)
 
-        setattr(obj, "__generated_password", password)
+		setattr(obj, "__generated_password", password)
 
-        obj._validate_for_create()
-        data = await self._client.post(self.path, body=obj.serialize())
+		obj._validate_for_create()
+		data = await self._client.post(self.path, body=obj.serialize())
 
-        if data:
-            merged = dict(data)
-            for attr_name, val in obj._data.items():
-                field = obj.FIELDS.get(attr_name)
-                if field is None or field.write_only:
-                    continue
-                graph_attr_name = field.graph_attr_name or attr_name
-                merged.setdefault(graph_attr_name, field.to_graph(val))
-            data = merged
-            obj.refresh_from_graph(data)
+		if data:
+			merged = dict(data)
+			for attr_name, val in obj._data.items():
+				field = obj.FIELDS.get(attr_name)
+				if field is None or field.write_only:
+					continue
+				graph_attr_name = field.graph_attr_name or attr_name
+				merged.setdefault(graph_attr_name, field.to_graph(val))
+			data = merged
+			obj.refresh_from_graph(data)
 
-        if manager is not None:
-            await obj.assign_manager(manager)
-        if assign_licenses is not None:
-            if isinstance(assign_licenses, (str, bytes)) or not isinstance(
-                assign_licenses, Collection
-            ):
-                assign_licenses = (assign_licenses,)
+		if manager is not None:
+			await obj.assign_manager(manager)
+		if assign_licenses is not None:
+			if isinstance(assign_licenses, (str, bytes)) or not isinstance(
+				assign_licenses, Collection
+			):
+				assign_licenses = (assign_licenses,)
 
-            resolved: list[str] = []
-            for item in assign_licenses:
-                if utils.is_guid(item):
-                    resolved.append(item)
-                else:
-                    sku_id = SubscribedSku.get_sku_id(product_name=item)
-                    if sku_id is not None:
-                        resolved.append(sku_id)
-                    else:
-                        raise ValueError(f"Unknown license: {item!r}")
-            if resolved:
-                await obj.assigned_licenses.add(*resolved)
+			resolved: list[str] = []
+			for item in assign_licenses:
+				if utils.is_guid(item):
+					resolved.append(item)
+				else:
+					sku_id = SubscribedSku.get_sku_id(product_name=item)
+					if sku_id is not None:
+						resolved.append(sku_id)
+					else:
+						raise ValueError(f"Unknown license: {item!r}")
+			if resolved:
+				await obj.assigned_licenses.add(*resolved)
 
-        return obj
+		return obj
 
-    async def create_many(
-        self,
-        *args: dict[str, Any],
-        auto_generate_password: bool = False,
-        force_change_password_next_sign_in: bool = True,
-        path: str | Path | None = None,
-        encoding: str = "utf-8",
-        export_path: str | Path | None = None,
-        export_encoding: str = "utf-8",
-    ) -> "UserQuerySet":
+	async def create_many(
+		self,
+		*args: dict[str, Any],
+		auto_generate_password: bool = False,
+		force_change_password_next_sign_in: bool = True,
+		path: str | Path | None = None,
+		encoding: str = "utf-8",
+		export_path: str | Path | None = None,
+		export_encoding: str = "utf-8",
+	) -> "UserQuerySet":
 
-        import csv
-        from pathlib import Path
+		import csv
+		from pathlib import Path
 
-        items: list[dict[str, Any]] = list(args)
-        if path:
-            path = Path(path)
-            if not path.exists():
-                raise ValueError(f"CSV path does not exist: {path}")
-            with path.open("r", encoding=encoding, newline="") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    items.append(dict(row))
-        if not items:
-            return self.with_objects()
+		items: list[dict[str, Any]] = list(args)
+		if path:
+			path = Path(path)
+			if not path.exists():
+				raise ValueError(f"CSV path does not exist: {path}")
+			with path.open("r", encoding=encoding, newline="") as f:
+				reader = csv.DictReader(f)
+				for row in reader:
+					items.append(dict(row))
+		if not items:
+			return self.with_objects()
 
-        created: list[User] = []
-        for chunk_items in utils.chunks(items, 20):
-            requests: list[dict[str, Any]] = []
-            mapping: dict[str, User] = {}
+		_logger.debug("UserQuerySet.create_many items=%s", len(items))
+		created: list[User] = []
+		for chunk_items in utils.chunks(items, 20):
+			requests: list[dict[str, Any]] = []
+			mapping: dict[str, User] = {}
 
-            for i, raw in enumerate(chunk_items, start=1):
-                data: dict[str, Any] = {}
-                for key, val in raw.items():
-                    if val is None:
-                        continue
-                    if isinstance(val, str) and not val.strip():
-                        continue
-                    k = key if key in User.FIELDS else utils.to_snake_case(key)
-                    data[k] = val
+			for i, raw in enumerate(chunk_items, start=1):
+				data: dict[str, Any] = {}
+				for key, val in raw.items():
+					if val is None:
+						continue
+					if isinstance(val, str) and not val.strip():
+						continue
+					k = key if key in User.FIELDS else utils.to_snake_case(key)
+					data[k] = val
 
-                password = data.pop("password", None)
-                if not password and auto_generate_password:
-                    password = utils.generate_password(14)
-                if not password:
-                    raise ValueError(
-                        "'password' is required when creating a user. "
-                        "Set auto_generate_password=True to generate one."
-                    )
+				password = data.pop("password", None)
+				if not password and auto_generate_password:
+					password = utils.generate_password(14)
+				if not password:
+					raise ValueError(
+						"'password' is required when creating a user. "
+						"Set auto_generate_password=True to generate one."
+					)
 
-                data["password_profile"] = dict(
-                    password=password,
-                    force_change_password_next_sign_in=force_change_password_next_sign_in,
-                )
+				data["password_profile"] = dict(
+					password=password,
+					force_change_password_next_sign_in=force_change_password_next_sign_in,
+				)
 
-                obj = User(client=self._client, path=self.path, **data)
-                setattr(obj, "__generated_password", password)
-                obj._validate_for_create()
+				obj = User(client=self._client, path=self.path, **data)
+				setattr(obj, "__generated_password", password)
+				obj._validate_for_create()
 
-                requests.append(
-                    {
-                        "id": str(i),
-                        "method": "POST",
-                        "url": self.path,
-                        "headers": {"Content-Type": "application/json"},
-                        "body": obj.serialize(),
-                    }
-                )
-                mapping[str(i)] = obj
+				requests.append(
+					{
+						"id": str(i),
+						"method": "POST",
+						"url": self.path,
+						"headers": {"Content-Type": "application/json"},
+						"body": obj.serialize(),
+					}
+				)
+				mapping[str(i)] = obj
 
-            batch_resp = await self._client.post("/$batch", body={"requests": requests})
-            utils.raise_batch_errors(batch_resp, requests, action="create users")
+			batch_resp = await self._client.post("/$batch", body={"requests": requests})
+			utils.raise_batch_errors(batch_resp, requests, action="create users")
 
-            for resp in batch_resp.get("responses", []) or []:
-                obj = mapping.get(str(resp.get("id")))
-                if obj is None:
-                    continue
-                body = resp.get("body") or {}
-                if body:
-                    merged = dict(body)
-                    for attr_name, val in obj._data.items():
-                        field = obj.FIELDS.get(attr_name)
-                        if field is None or field.write_only:
-                            continue
-                        graph_attr_name = field.graph_attr_name or attr_name
-                        merged.setdefault(graph_attr_name, field.to_graph(val))
-                    obj.refresh_from_graph(merged)
-                created.append(obj)
+			for resp in batch_resp.get("responses", []) or []:
+				obj = mapping.get(str(resp.get("id")))
+				if obj is None:
+					continue
+				body = resp.get("body") or {}
+				if body:
+					merged = dict(body)
+					for attr_name, val in obj._data.items():
+						field = obj.FIELDS.get(attr_name)
+						if field is None or field.write_only:
+							continue
+						graph_attr_name = field.graph_attr_name or attr_name
+						merged.setdefault(graph_attr_name, field.to_graph(val))
+					obj.refresh_from_graph(merged)
+				created.append(obj)
 
-        qs = self.with_objects(*created)
+		qs = self.with_objects(*created)
 
-        if export_path:
-            await qs.to_csv(
-                export_path,
-                fieldnames=(
-                    "id",
-                    "display_name",
-                    "user_principal_name",
-                    lambda o: {"password": getattr(o, "__generated_password", None)},
-                ),
-                encoding=export_encoding,
-            )
+		if export_path:
+			await qs.to_csv(
+				export_path,
+				fieldnames=(
+					"id",
+					"display_name",
+					"user_principal_name",
+					lambda o: {"password": getattr(o, "__generated_password", None)},
+				),
+				encoding=export_encoding,
+			)
 
-        return qs
+		return qs
 
-    def disabled_with_assigned_licenses(self):
-        return self.filter(account_enabled=False, assigned_licenses__is_null=False)
+	def disabled_with_assigned_licenses(self):
+		return self.filter(account_enabled=False, assigned_licenses__is_null=False)
 
-    def enabled_with_no_assigned_licenses(self):
-        return self.filter(account_enabled=True, assigned_licenses__is_null=True)
+	def enabled_with_no_assigned_licenses(self):
+		return self.filter(account_enabled=True, assigned_licenses__is_null=True)
