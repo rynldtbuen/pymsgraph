@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from pymsgraph.models.directory_object import DirectoryObject
@@ -14,6 +15,8 @@ from pymsgraph.models.fields import (
 )
 from pymsgraph.models.group.query import MembersQuerySet
 from pymsgraph.models.query import QuerySet
+
+_logger = logging.getLogger(__name__)
 
 
 class Group(DirectoryObject):
@@ -111,14 +114,25 @@ class Group(DirectoryObject):
         security = bool(self.security_enabled)
 
         if has_unified:
-            return "microsoft365"
-        if mail and security:
-            return "security_mail_enabled"
-        if security and not mail:
-            return "security"
-        if mail and not security:
-            return "distribution"
-        return "unknown"
+            group_type = "microsoft365"
+        elif mail and security:
+            group_type = "security_mail_enabled"
+        elif security and not mail:
+            group_type = "security"
+        elif mail and not security:
+            group_type = "distribution"
+        else:
+            group_type = "unknown"
+
+        _logger.debug(
+            "Group.group_type id=%s group_types=%s mail_enabled=%s security_enabled=%s resolved=%s",
+            self.id,
+            sorted(gtypes),
+            mail,
+            security,
+            group_type,
+        )
+        return group_type
 
     def __repr__(self) -> str:
         return f"<Group: {self.display_name}, type={self.group_type}>"
@@ -135,6 +149,13 @@ class GroupQuerySet(QuerySet["Group"]):
         mail_enabled: bool = False,
         **kwargs: Any,
     ) -> Group:
+        _logger.debug(
+            "GroupQuerySet.create_security_group display_name=%s mail_nickname=%s mail_enabled=%s extra=%s",
+            display_name,
+            mail_nickname,
+            mail_enabled,
+            sorted(kwargs.keys()),
+        )
         return await self.create(
             display_name=display_name,
             mail_enabled=mail_enabled,
@@ -146,6 +167,13 @@ class GroupQuerySet(QuerySet["Group"]):
     async def create_m365_group(
         self, *, display_name: str, mail_nickname: str, visibility: str, **kwargs: Any
     ) -> Group:
+        _logger.debug(
+            "GroupQuerySet.create_m365_group display_name=%s mail_nickname=%s visibility=%s extra=%s",
+            display_name,
+            mail_nickname,
+            visibility,
+            sorted(kwargs.keys()),
+        )
         return await self.create(
             display_name=display_name,
             mail_enabled=True,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any, Self, override
 from urllib.parse import quote
 
@@ -18,6 +19,8 @@ from .list import ListQuerySet
 
 if TYPE_CHECKING:
     from pymsgraph.client import Client
+
+_logger = logging.getLogger(__name__)
 
 
 class Site(BaseItem):
@@ -63,6 +66,7 @@ class Site(BaseItem):
         p = self.path
         if ":" in p:
             p = f"{p}:"
+        _logger.debug("Site.drive base_path=%s path=%s", self.path, f"{p}/drive")
         return Drive(client=self._args[0], path=f"{p}/drive")
 
     @property
@@ -70,6 +74,7 @@ class Site(BaseItem):
         p = self.path
         if ":" in p:
             p = f"{p}:"
+        _logger.debug("Site.lists base_path=%s path=%s", self.path, f"{p}/lists")
         return ListQuerySet(client=self._args[0], path=f"{p}/lists")
 
     def __repr__(self) -> str:
@@ -81,6 +86,7 @@ class Site(BaseItem):
         if "HOSTNAME" in p:
             hostname = await c.sites._get_hostname()
             p = p.replace("HOSTNAME", hostname)
+        _logger.debug("Site.get path=%s", p)
         data = await c.get(p)
         return Site.from_graph(data=data, client=c)
 
@@ -120,6 +126,7 @@ class SiteQuerySet(QuerySet[Site]):
             )
 
         qs._params["search"] = keyword
+        _logger.debug("SiteQuerySet.search keyword=%s", keyword)
         return qs
 
     async def get(
@@ -127,8 +134,10 @@ class SiteQuerySet(QuerySet[Site]):
     ) -> Site:
         data = None
         if id:
+            request_path = f"{self.path}/{id}"
+            _logger.debug("SiteQuerySet.get by_id id=%s path=%s", id, request_path)
             data = await self._client.get(
-                f"{self.path}/{id}", params=self._params, headers=self._headers
+                request_path, params=self._params, headers=self._headers
             )
         elif path:
             p = (path or "").strip()
@@ -137,8 +146,15 @@ class SiteQuerySet(QuerySet[Site]):
             p_encoded = quote(p, safe="/")
             c: Client = self._client
             hostname = await c.sites._get_hostname()
+            request_path = f"{self.path}/{hostname}:{p_encoded}"
+            _logger.debug(
+                "SiteQuerySet.get by_path input=%s hostname=%s path=%s",
+                path,
+                hostname,
+                request_path,
+            )
             data = await c.get(
-                f"{self.path}/{hostname}:{p_encoded}",
+                request_path,
                 params=self._params,
                 headers=self._headers,
             )
@@ -162,6 +178,13 @@ class SiteQuerySet(QuerySet[Site]):
         if not host:
             host = "HOSTNAME"
         full_path = f"{self.path}/{host}:{p_encoded}"
+        _logger.debug(
+            "SiteQuerySet.by_path input=%s hostname=%s normalized=%s path=%s",
+            path,
+            host,
+            p_encoded,
+            full_path,
+        )
         return Site(client=self._args[0], path=full_path)
 
     async def _get_hostname(self) -> str:
@@ -169,6 +192,7 @@ class SiteQuerySet(QuerySet[Site]):
         c = self._client
         hostname = getattr(c, "_sharepoint_hostname", None)
         if hostname is None:
+            _logger.debug("SiteQuerySet._get_hostname cache_miss")
             root = await c.get("/sites/root")
             hostname = (root.get("siteCollection") or {}).get("hostname")
             if not hostname:
@@ -176,4 +200,7 @@ class SiteQuerySet(QuerySet[Site]):
                     "Could not discover SharePoint hostname from /sites/root"
                 )
             setattr(c, "_sharepoint_hostname", hostname)
+            _logger.debug("SiteQuerySet._get_hostname discovered=%s", hostname)
+        else:
+            _logger.debug("SiteQuerySet._get_hostname cache_hit=%s", hostname)
         return hostname

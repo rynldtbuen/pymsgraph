@@ -2,7 +2,7 @@ notebooks
 tests/*.json
 .vscode
 src/pymsgraph/models/**/*_schema.yaml
-
+test.*
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

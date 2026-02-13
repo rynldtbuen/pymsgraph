@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
@@ -16,6 +17,8 @@ from pymsgraph.models.query import QuerySet
 
 if TYPE_CHECKING:
 	from pymsgraph.client import Client
+
+_logger = logging.getLogger(__name__)
 
 
 class Drive(BaseItem):
@@ -61,6 +64,7 @@ class Drive(BaseItem):
 		if "HOSTNAME" in p:
 			hostname = await c.sites._get_hostname()
 			p = p.replace("HOSTNAME", hostname)
+		_logger.debug("Drive.get path=%s", p)
 		data = await c.get(p)
 		return Drive.from_graph(data=data, client=c)
 
@@ -69,6 +73,7 @@ class Drive(BaseItem):
 		if "HOSTNAME" in path:
 			hostname = await client.sites._get_hostname()
 			path = path.replace("HOSTNAME", hostname)
+		_logger.debug("Drive.from_path path=%s", path)
 		data = await client.get(path)
 		return Drive.from_graph(data=data, client=client)
 
@@ -150,9 +155,11 @@ class DriveItem(BaseItem):
 			# colon-based paths need :/children suffix
 			# e.g. /drives/{id}/root:/folder -> /drives/{id}/root:/folder:/children
 			path = f"{self.path}:/children"
+		_logger.debug("DriveItem.items base_path=%s path=%s", base_path, path)
 		return DriveItemsQueryset(self._args[0], path=path)
 
 	def by_path(self, path: str) -> DriveItem:
+		orig_path = path
 		p = (path or "").strip()
 		# normalize leading slash for relative paths
 		if not p.startswith("/"):
@@ -166,6 +173,13 @@ class DriveItem(BaseItem):
 		else:
 			# otherwise, build /{item-id}:/path
 			path = f"{p}:{p_encoded}"
+		_logger.debug(
+			"DriveItem.by_path base=%s input=%s normalized=%s result=%s",
+			self.path,
+			orig_path,
+			p_encoded,
+			path,
+		)
 		return DriveItem(client=self._args[0], path=path)
 
 	def by_id(self, id: str) -> DriveItem:
@@ -174,6 +188,7 @@ class DriveItem(BaseItem):
 		# /users/{user-id}/drive/root -> /users/{user-id}/drive/items
 		if p.endswith("/root"):
 			p = f"{p.split('/root')[0]}/items"
+		_logger.debug("DriveItem.by_id base_path=%s id=%s path=%s", self.path, id, p)
 		return DriveItem(client=self._args[0], path=p, id=id)
 
 	async def get(self) -> DriveItem:
@@ -190,6 +205,7 @@ class DriveItem(BaseItem):
 				p = f"{d.path}/root:{tail}"
 			else:
 				raise RuntimeError(f"Unknown path, {p}")
+		_logger.debug("DriveItem.get request_path=%s model_path=%s", p, di_p or p)
 		data = await self._client.get(p)
 
 		return DriveItem.from_graph(data, client=self._client, path=di_p or p)
@@ -202,16 +218,19 @@ class DriveItem(BaseItem):
 		p = self.path
 		c = self._client
 		resolved: DriveItem | None = None
+		_logger.debug("DriveItem._get_path start=%s", p)
 
 		if "HOSTNAME" in p:
 			hostname = await c.sites._get_hostname()
 			p = p.replace("HOSTNAME", hostname)
+			_logger.debug("DriveItem._get_path hostname_resolved=%s", p)
 
 		# Normalize children suffixes to resolve the parent item.
 		if p.endswith(":/children"):
 			p = p[: -len(":/children")]
 		elif p.endswith("/children"):
 			p = p[: -len("/children")]
+		_logger.debug("DriveItem._get_path normalized_children=%s", p)
 
 		if "/drive/root" in p and (p.startswith("/sites/") or p.startswith("/users/")):
 			base = f"{p.split('/drive/root', 1)[0]}/drive"
@@ -223,6 +242,11 @@ class DriveItem(BaseItem):
 				p = f"{drive.path}/root"
 			data = await c.get(p)
 			resolved = DriveItem.from_graph(data, client=c, path=f"{drive.path}/items")
+			_logger.debug(
+				"DriveItem._get_path resolved_from_site drive=%s resolved_path=%s",
+				drive.path,
+				resolved.path,
+			)
 
 		if p.startswith("/drives/") and "/root" in p:
 			base = "/".join(p.split("/")[:3])
@@ -233,6 +257,11 @@ class DriveItem(BaseItem):
 				p = f"{base}/root"
 			data = await c.get(p)
 			resolved = DriveItem.from_graph(data, client=c, path=f"{base}/items")
+			_logger.debug(
+				"DriveItem._get_path resolved_from_drive base=%s resolved_path=%s",
+				base,
+				resolved.path,
+			)
 
 		if resolved is not None:
 			self._data = resolved._data
@@ -242,8 +271,10 @@ class DriveItem(BaseItem):
 			except AttributeError:
 				self._dirty = set()
 			self._args = (self._args[0], resolved._args[1])
+			_logger.debug("DriveItem._get_path cached=%s", self.path)
 			return self.path
 
+		_logger.debug("DriveItem._get_path passthrough=%s", p)
 		return p
 
 	async def upload(
@@ -279,6 +310,13 @@ class DriveItem(BaseItem):
 			raise ValueError("name is required when using raw content")
 
 		path = f"{await self._get_path()}:/{name}:/content"
+		_logger.debug(
+			"DriveItem.upload path=%s name=%s content_type=%s from_file=%s",
+			path,
+			name,
+			content_type,
+			file_path is not None,
+		)
 		data = await self._client.put(
 			path,
 			content=content,
@@ -290,6 +328,7 @@ class DriveItem(BaseItem):
 		"""
 		Download this drive item content. If `dest_path` is provided, write to disk.
 		"""
+		_logger.debug("DriveItem.download item_path=%s dest_path=%s", self.path, dest_path)
 		data = await self._client.get_content(
 			f"{await self._get_path()}/content", headers={}
 		)
@@ -328,6 +367,7 @@ class DriveItem(BaseItem):
 				ref["driveId"] = drive_id
 			body["parentReference"] = ref
 
+		_logger.debug("DriveItem.copy path=%s body=%s", self.path, body)
 		data = await self._client.post(f"{self.path}/copy", body=body)
 		return self.__class__(graph_data=data, client=self._client)
 
@@ -356,6 +396,7 @@ class DriveItem(BaseItem):
 				ref["driveId"] = drive_id
 			body["parentReference"] = ref
 
+		_logger.debug("DriveItem.move path=%s body=%s", self.path, body)
 		data = await self._client.patch(self.path, body=body)
 		return self.__class__(graph_data=data, client=self._client)
 
@@ -395,6 +436,11 @@ class DriveItemsQueryset(QuerySet[DriveItem]):
 		else:
 			raise RuntimeError(f"Unknown path, {p}")
 
+		_logger.debug(
+			"DriveItemsQueryset.make_from_graph source_path=%s normalized_path=%s",
+			self.path,
+			p,
+		)
 		return self._model_class.from_graph(data, client=self._client, path=p)
 
 	async def _get_path(self):
@@ -417,4 +463,7 @@ class DriveItemsQueryset(QuerySet[DriveItem]):
 				raise RuntimeError(f"Unknown path, {p}")
 			# cache resolved path for subsequent calls
 			self._args = c, p, self._args[2]
+			_logger.debug("DriveItemsQueryset._get_path resolved=%s", p)
+		else:
+			_logger.debug("DriveItemsQueryset._get_path passthrough=%s", p)
 		return p
