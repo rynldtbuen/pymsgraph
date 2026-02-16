@@ -1,0 +1,51 @@
+/* mkdocstrings typography tweaks (theme-agnostic) */
+
+/* ReadTheDocs theme: remove fixed content width to reduce right-side empty space */
+.wy-nav-content {
+  max-width: none !important;
+}
+
+/* Body text inside API docs */
+/* .doc .doc-contents,
+.doc .doc-contents p,
+.doc .doc-contents li,
+.doc .doc-contents dd {
+  font-size: 0.9rem !important;
+} */
+
+/* Method/property/class headings and signatures */
+/* .doc .doc-object-name,
+.doc .doc-signature,
+.doc .doc-children .doc-heading {
+  font-size: 0.82rem !important;
+} */
+
+/* Inline/code blocks in API docs */
+/* .doc .doc-contents code,
+.doc .doc-contents pre code {
+  font-size: 0.84rem !important;
+} */
+
+/* Indent nested API members (works for ReadTheDocs + mkdocstrings structures) */
+.doc .doc-children .doc-object .doc-contents,
+.doc .doc-object.doc-function .doc-contents,
+.doc .doc-object.doc-method .doc-contents,
+.doc .doc-object.doc-attribute .doc-contents,
+.doc .doc-object.doc-property .doc-contents {
+  margin-left: 1rem !important;
+  padding-left: 0.9rem !important;
+  border-left: 2px solid rgba(120, 120, 120, 0.45) !important;
+  font-size: 0.7rem !important;
+}
+
+/* Keep nested lists aligned within indented member content */
+.doc .doc-children .doc-object .doc-contents ul,
+.doc .doc-children .doc-object .doc-contents ol {
+  margin-left: 1rem !important;
+}
+
+/* Class-level docstring text (e.g., QuerySet class description) */
+.doc.doc-object.doc-class>.doc-contents>p:not(.doc-class-bases) {
+  font-size: 0.7rem !important;
+  line-height: 1.45 !important;
+}

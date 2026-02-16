@@ -1,22 +1,15 @@
 > **Disclaimer**
-> This project is an independent implementation for Microsoft Graph and is not sponsored, endorsed, or affiliated with Microsoft. Feature coverage is intentionally partial and may change as Microsoft Graph and this library evolve. Validate behavior in your environment and apply appropriate testing, security controls, and version pinning before production use.
-
-# pymsgraph
+> ***This project is an independent implementation for Microsoft Graph and is not sponsored, endorsed, or affiliated with Microsoft. Feature coverage is intentionally partial and may change as Microsoft Graph and this library evolve. Validate behavior in your environment and apply appropriate testing, security controls, and version pinning before production use***
 
 Python client for Microsoft Graph with Django-style query syntax
 
-[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Docs](https://img.shields.io/badge/docs-GitHub%20Pages-blue.svg)](https://rynldtbuen.github.io/pymsgraph/)
-[![Docs Workflow](https://github.com/rynldtbuen/pymsgraph/actions/workflows/docs.yml/badge.svg)](https://github.com/rynldtbuen/pymsgraph/actions/workflows/docs.yml)
-
-## Prerequisites
+### Prerequisites
 
 - Python `3.12+`
 - Access to a Microsoft Entra app registration
 - Microsoft Graph permissions appropriate for the operations you plan to run
 
-## Install from Source
+### Install from source
 
 `pymsgraph` is not yet published to PyPI.
 
@@ -40,7 +33,7 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-## Configure Authentication
+### Configure athentication
 
 `pymsgraph` accepts a token provider with `get_access_token(...)`.
 
@@ -49,7 +42,7 @@ Built-in providers:
 - `ConfidentialClientAuth`: app-only/client-credentials flow
 - `PublicClientAuth`: delegated flow (interactive or cached sign-in)
 
-### Option A: App-only (Confidential Client)
+#### Using app-only (Confidential Client)
 
 Set environment variables:
 
@@ -67,7 +60,7 @@ provider = ConfidentialClientAuth(
 )
 ```
 
-### Option B: Delegated (Public Client)
+#### Using delegated (Public Client)
 
 Set environment variables:
 
@@ -84,7 +77,7 @@ provider = PublicClientAuth(
 )
 ```
 
-## First End-to-End Script
+### Example
 
 ```python
 import asyncio

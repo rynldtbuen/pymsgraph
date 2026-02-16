@@ -13,993 +13,1625 @@ from pymsgraph import utils
 from pymsgraph.utils import to_camel_case
 
 if TYPE_CHECKING:
-	from pathlib import Path
+    from pathlib import Path
 
-	from pymsgraph.client import Client
-	from pymsgraph.models.base import Model
+    from pymsgraph.client import Client
+    from pymsgraph.models.base import Model
 
 _Tm = TypeVar("_Tm", bound="Model")
 _logger = logging.getLogger(__name__)
 
 
 class QuerySet(Generic[_Tm]):
-	PATH: str | None = None
-	model_class: type[_Tm] | None = None
-	page_size: int | None = 50
-
-	def __init__(
-		self,
-		client: "Client | None" = None,
-		*,
-		path: str | None = None,
-		model_class: "type[Model] | None" = None,
-		**kwargs: Any,
-	) -> None:
-		model_class = model_class or self.model_class
-		self._args: tuple[Any, ...] = (
-			client,
-			path or getattr(model_class, "PATH", None),
-			model_class,
-		)
-		self._params: dict[str, Any] = {}
-		self._headers: dict[str, Any] = {}
-
-		self._paginator: Paginator[_Tm] | None = None
-		self._all: bool = False
-		self._kwargs: dict[str, Any] = kwargs
-		self._seeded_objects: list[_Tm] | None = None
-		self._union_qs: tuple[list[QuerySet[_Tm]], Callable[[_Tm], Any] | None] = (
-			[],
-			None,
-		)
-
-	@property
-	def path(self) -> str:
-		if e := self._args[1]:
-			return e
-		raise AttributeError(f"{type(self).__name__} object has no attribute 'path'")
-
-	def filter(self, *q_objects: "Q | str", **kwargs: Any) -> Self:
-		if not q_objects and not kwargs:
-			return self
-
-		qs = self._clone()
-		expressions: list[str] = qs._params.setdefault("$filter", [])
-
-		for q_obj in q_objects:
-			expr = q_obj if isinstance(q_obj, str) else q_obj.to_odata_query()
-			if expr not in expressions:
-				expressions.append(expr)
-		for key, value in kwargs.items():
-			expr = qs._compile_filter_expr(key, value)
-			if expr not in expressions:
-				expressions.append(expr)
-
-		_logger.debug("QuerySet.filter added=%s", expressions)
-		return qs
-
-	def exclude(self, *q_objects: "Q | str", **kwargs: Any) -> Self:
-		if not q_objects and not kwargs:
-			return self
-
-		qs = self._clone()
-		expressions: list[str] = qs._params.setdefault("$filter", [])
-
-		for q_obj in q_objects:
-			base = q_obj if isinstance(q_obj, str) else q_obj.to_odata_query()
-			expr = f"not ({base})"
-			if expr not in expressions:
-				expressions.append(expr)
-		for key, value in kwargs.items():
-			expr = f"not ({qs._compile_filter_expr(key, value)})"
-			if expr not in expressions:
-				expressions.append(expr)
-
-		_logger.debug("QuerySet.exclude added=%s", expressions)
-		return qs
-
-	def select(self, *args: str) -> Self:
-		if not args:
-			return self
-
-		qs = self._clone()
-		selected_fields = qs._params.setdefault("$select", [])
-
-		for field in args:
-			if field not in selected_fields:
-				selected_fields.append(field)
-
-		_logger.debug("QuerySet.select fields=%s", args)
-		return qs
-
-	def order_by(self, *fields: str) -> Self:
-		if not fields:
-			return self
-
-		qs = self._clone()
-		expressions = qs._params.setdefault("$orderby", [])
-
-		for field in fields:
-			normalized = field[1:] if field.startswith("-") else field
-			if (field_obj := self._model_class.FIELDS.get(normalized)) is None:
-				raise ValueError(f"Unkown field: {normalized!r}")
-			elif not field_obj.order_by:
-				raise ValueError(f"Unsupported order_by field: {normalized!r}")
-			expr = (field,)
-			if field.startswith("-"):
-				expr = (field[1:], "desc")
-			if expr not in expressions:
-				expressions.append(expr)
-
-		_logger.debug("QuerySet.order_by fields=%s", fields)
-		return qs
-
-	def search(self, *q_objects: "Q", **kwargs: Any) -> Self:
-		if not q_objects and not kwargs:
-			return self
-
-		if not getattr(self._model_class, "SEARCH_FIELD", None):
-			raise ValueError(f"{self._model_class.__name__} does not support search")
-
-		qs = self._clone()
-		values = qs._params.setdefault("$search", [])
-
-		for q_obj in q_objects:
-			if (expr := q_obj.to_search_format()) not in values:
-				values.append(expr)
-		for k, v in kwargs.items():
-			val = f'"{to_camel_case(k)}:{v}"'
-			if val not in values:
-				values.append(val)
-
-		_logger.debug("QuerySet.search terms=%s", values)
-		return qs
-
-	def top(self, value: int) -> Self:
-		if value < 1:
-			raise ValueError("value must be greater than zero.")
-		qs = self._clone()
-		qs._params["$top"] = value
-		_logger.debug("QuerySet.top value=%s", value)
-		return qs
-
-	def expand(self, field: str, *select: str) -> Self:
-		qs = self._clone()
-		expands: dict[str, set[str]] = qs._params.setdefault("$expand", {})
-		explicit_select = bool(select)
-		default_expands = getattr(qs._model_class, "DEFAULT_EXPAND_FIELDS", None) or ()
-		default_expand_fields = {name for name in default_expands}
-		default_expand_camel = {to_camel_case(name) for name in default_expand_fields}
-		allow_default_expand = (
-			field in default_expand_fields
-			or to_camel_case(field) in default_expand_camel
-		)
-		if field_obj := qs._model_class.FIELDS.get(field):
-			if not field_obj.expand and not allow_default_expand:
-				raise ValueError(f"Field {field!r} does not support expand")
-			graph_field = field_obj.graph_attr_name or to_camel_case(field)
-			model_class: type[Model] | None = getattr(field_obj, "model_class", None)
-			if not select and model_class is not None:
-				defaults = model_class.DEFAULT_SELECT_FIELDS
-				if defaults:
-					select = tuple(defaults)
-		elif allow_default_expand:
-			graph_field = to_camel_case(field)
-		else:
-			raise ValueError(f"Unknown field {field!r}")
-		if graph_field not in expands:
-			expands[graph_field] = set()
-		if select:
-			selects = {to_camel_case(s) for s in select}
-			if explicit_select and "id" not in selects:
-				selects.add("id")
-			expands[graph_field].update(selects)
-		_logger.debug(
-			"QuerySet.expand field=%s graph_field=%s select=%s",
-			field,
-			graph_field,
-			sorted(expands[graph_field]),
-		)
-		return qs
-
-	def all(self) -> Self:
-		"""Return a copy of the queryset"""
-		qs = self._clone()
-		qs._all = True
-		return qs
-
-	def with_count(self) -> Self:
-		qs = self._clone()
-		qs._params["$count"] = "true"
-		_logger.debug("QuerySet.with_count enabled")
-		return qs.with_consistency_level_eventual()
-
-	def with_consistency_level_eventual(self) -> Self:
-		qs = self._clone()
-		qs._headers["ConsistencyLevel"] = "eventual"
-		_logger.debug("QuerySet.with_consistency_level_eventual enabled")
-		return qs
-
-	def prefetch(self, *fields: str) -> "QuerySet[_Tm]":
-		if not fields:
-			return self
-
-		from pymsgraph.models.fields import QuerySetField
-
-		qs = self._clone()
-		prefetch_fields = set(qs._kwargs.get("prefetch", []))
-		for name in fields:
-			field_obj = self._model_class.FIELDS.get(name)
-			if field_obj is None:
-				raise ValueError(f"Unknown field {name!r}")
-			if not isinstance(field_obj, QuerySetField):
-				raise ValueError(f"{name!r} is not a related QuerySetField")
-			if not field_obj.prefetch:
-				raise ValueError(f"{name!r} does not support prefetch")
-			if name not in prefetch_fields:
-				prefetch_fields.add(name)
-		qs._kwargs["prefetch"] = prefetch_fields
-		_logger.debug("QuerySet.prefetch fields=%s", sorted(prefetch_fields))
-		return qs
-
-	def iterator(self, *, page_size: int | None = None) -> "Paginator[_Tm]":
-		if self._seeded_objects is not None:
-			raise ValueError("Paginator is not available for seeded querysets")
-		p = self._paginator
-		if p is None:
-			# ctx = Context.make(self._ctx, queryset=self)
-			p = Paginator[_Tm](self, page_size=page_size or self.page_size)
-			self._paginator = p
-			_logger.debug(
-				"QuerySet.iterator created paginator page_size=%s",
-				page_size or self.page_size,
-			)
-		return p
-
-	def union(
-		self,
-		*others: "QuerySet[_Tm]",
-		key: Callable[[_Tm], Any] | None = None,
-	) -> Self:
-		if key is not None and not callable(key):
-			raise TypeError("Union key must be a callable.")
-
-		prev_key = self._union_qs[1]
-		if prev_key is not None and key is not None and key != prev_key:
-			raise ValueError("Union key already set; cannot change key.")
-
-		qs = self.__class__(self._client, path=self.path, model_class=self._model_class)
-		union_list = list(self._union_qs[0])
-		union_list.append(self)
-		union_list.extend(others)
-		qs._union_qs = (union_list, key or prev_key)
-		_logger.debug("QuerySet.union items=%s", len(union_list))
-		return qs
-
-	async def exists(self) -> bool:
-		return bool(await self.count())
-
-	async def count(self) -> int | None:
-		return await self.iterator().count()
-
-	async def get(self, id: str | None = None, **kwargs) -> _Tm:
-		if id:
-			data = await self._client.get(
-				f"{self.path}/{id}", params=self._build_params()
-			)
-			return self.make_from_graph(data)
-
-		if not kwargs:
-			raise ValueError("No kwargs found.")
-
-		results = [o async for o in self.filter(**kwargs).top(2)]
-
-		if not results:
-			raise DoesNotExist(
-				f"{self._model_class.__name__} matching query does not exist"
-			)
-
-		if len(results) > 1:
-			raise MultipleObjectsReturned(
-				f"get() returned more than one {self._model_class.__name__}"
-			)
-
-		return results[0]
-
-	async def first(self) -> _Tm | None:
-		obj: _Tm | None = None
-		async for item in self.top(1):
-			obj = item
-			break
-		return obj
-
-	async def create(self, **kwargs: Any) -> _Tm:
-		if self._model_class.READ_ONLY:
-			raise ValueError(f"{self._model_class.__name__} is read-only")
-		obj = self._model_class(client=self._client, path=self.path, **kwargs)
-		obj._validate_for_create()
-		_logger.debug("QuerySet.create model=%s", self._model_class.__name__)
-		data = await self._client.post(self.path, body=obj.serialize())
-		return self._model_class.from_graph(data, client=self._client, path=self.path)
-
-	async def update(self, **fields: Any) -> int:
-		"""
-		Bulk update all objects in this queryset.
-
-		Returns the number of objects updated.
-		"""
-		if self._model_class.READ_ONLY:
-			raise ValueError(f"{self._model_class.__name__} is read-only")
-		if not fields:
-			return 0
-
-		# Validate fields
-		payload: dict[str, Any] = {}
-		for attr_name, val in fields.items():
-			field_obj = self._model_class.FIELDS.get(attr_name)
-			if field_obj is None:
-				raise ValueError(f"Unknown field {attr_name!r}")
-			if field_obj.read_only:
-				raise ValueError(f"Field {attr_name!r} is read-only")
-			graph_name = field_obj.graph_attr_name or to_camel_case(attr_name)
-			payload[graph_name] = field_obj.to_graph(val)
-
-		total_updated = 0
-		batch_size = 20
-
-		_logger.debug(
-			"QuerySet.update model=%s fields=%s",
-			self._model_class.__name__,
-			sorted(payload),
-		)
-		async for batch in utils.achunks(self.select("id"), batch_size):
-			await self._bulk_patch(batch, payload)
-			total_updated += len(batch)
-
-		return total_updated
-
-	async def values(
-		self, *fieldnames: str | Callable[[_Tm], dict[str, Any]]
-	) -> list[dict[str, Any]]:
-		"""
-		Return a list of dicts for selected fieldnames.
-		"""
-		from pymsgraph.models.base import Model
-
-		def _coerce(val: Any) -> Any:
-			if isinstance(val, Model):
-				return val.to_dict()
-			if isinstance(val, list):
-				return [_coerce(v) for v in val]
-			if isinstance(val, dict):
-				return {k: _coerce(v) for k, v in val.items()}
-			return val
-
-		fieldnames = fieldnames or self._model_class.DEFAULT_SELECT_FIELDS or tuple()
-		if not fieldnames:
-			if (default_fieldnames := self._model_class.DEFAULT_SELECT_FIELDS) is None:
-				return [
-					{k: _coerce(getattr(o, k)) for k in o._data.keys()}
-					async for o in self.iterator().all()
-				]
-			return [
-				{k: _coerce(getattr(o, k)) for k in default_fieldnames}
-				async for o in self.iterator().all()
-			]
-
-		valid_fields: list[str] = []
-		value_fns: list[Callable[[_Tm], dict[str, Any]]] = []
-		for name in fieldnames:
-			if isinstance(name, str):
-				if name not in self._model_class.FIELDS:
-					raise ValueError(f"Unknown field {name!r}")
-				valid_fields.append(name)
-				continue
-			if not callable(name):
-				raise TypeError(
-					"values() fieldnames must be str or callable returning dict"
-				)
-			value_fns.append(name)
-
-		if valid_fields:
-			selected = set(self._params.get("$select", []))
-			if selected and selected.issuperset(valid_fields):
-				objects = self.iterator().all()
-			else:
-				objects = self.select(*valid_fields).all()
-		else:
-			objects = self.iterator().all()
-
-		rows: list[dict[str, Any]] = []
-		async for obj in objects:
-			row = {name: _coerce(getattr(obj, name)) for name in valid_fields}
-			for fn in value_fns:
-				extra = fn(obj)
-				if extra is None:
-					continue
-				if not isinstance(extra, dict):
-					raise ValueError("values() callable must return a dict")
-				for k, v in extra.items():
-					row[k] = _coerce(v)
-			rows.append(row)
-		return rows
-
-	def apply(self, predicate: Callable[[_Tm], bool]) -> AsyncIterator[_Tm]:
-		if predicate is None:
-			raise ValueError(
-				f"{type(self).__name__} apply requires a callable predicate"
-			)
-		_logger.debug("QuerySet.apply predicate=%s", predicate)
-
-		async def _iter() -> AsyncIterator[_Tm]:
-			async for obj in self.iterator().all():
-				if predicate(obj):
-					yield obj
-
-		return _iter()
-
-	async def to_csv(
-		self,
-		path: str | Path,
-		*,
-		fieldnames: (  # pyright: ignore[reportRedeclaration]
-			Collection[str | Callable[[_Tm], dict[str, Any]]] | None
-		) = None,
-		encoding: str = "utf-8",
-	) -> None:
-		import csv
-		from pathlib import Path
-
-		values = await self.values(*(fieldnames or []))
-		output_fieldnames: list[str] = []
-
-		for val in values:
-			for key in val.keys():
-				if key not in output_fieldnames:
-					output_fieldnames.append(key)
-
-		out_path = Path(path)
-		_logger.debug("QuerySet.to_csv path=%s rows=%s", out_path, len(values))
-		with out_path.open("w", encoding=encoding, newline="") as f:
-			writer = csv.DictWriter(
-				f, fieldnames=output_fieldnames, extrasaction="ignore"
-			)
-			writer.writeheader()
-
-			for val in values:
-				writer.writerow(val)
-
-	async def to_dataframe(self, *fieldnames: str):
-		import pandas as pd  # type: ignore[import-not-found]
-
-		_logger.debug("QuerySet.to_dataframe fields=%s", fieldnames)
-		fieldnames = fieldnames or self._model_class.DEFAULT_SELECT_FIELDS or tuple()
-		if fieldnames:
-			values = await self.values(*fieldnames)
-		else:
-			values = await self.values()
-		return pd.DataFrame(values)
-
-	def with_objects(
-		self,
-		*args: "str | _Tm | QuerySet[_Tm]",
-		key: str = "id",
-	) -> Self:
-		qs = self.__class__(self._client, path=self.path, model_class=self._model_class)
-		objects = list(qs._coerce_objects(args, key=key))
-		if not objects:
-			return qs
-
-		qs._seeded_objects = objects
-		_logger.debug("QuerySet.with_objects seeded=%s", len(objects))
-		return qs
-
-	def make(self, **kwargs: Any) -> _Tm:
-		return self._model_class(**kwargs, client=self._client, path=self.path)
-
-	def make_from_graph(self, data: dict[str, Any]):
-		return self._model_class.from_graph(data, client=self._client, path=self.path)
-
-	def __aiter__(self) -> AsyncIterator[_Tm]:
-		if (objects := self._seeded_objects) is not None:
-
-			async def _iter_seeded() -> AsyncIterator[_Tm]:
-				for obj in objects or []:
-					yield obj
-
-			return _iter_seeded()
-
-		querysets, key = self._union_qs
-		if querysets:
-			key_fn = key or (lambda o: getattr(o, "id", None))
-
-			async def _iter_union() -> AsyncIterator[_Tm]:
-				seen: set[Any] = set()
-				for qs in querysets:
-					iter_objects = qs.all() if self._all else qs
-					async for obj in iter_objects:
-						k = key_fn(obj)
-						if k in seen:
-							continue
-						seen.add(k)
-						yield obj
-
-			return _iter_union()
-
-		paginator = self.iterator()
-		if not self._all:
-			return paginator._fetch_page(1)
-		return paginator.all()
-
-	@property
-	def _client(self) -> "Client":
-		if c := self._args[0]:
-			return c
-		raise AttributeError(f"{type(self).__name__} object has no attribute '_client'")
-
-	@property
-	def _model_class(self) -> type[_Tm]:
-		if c := self._args[2]:
-			return c
-		raise AttributeError(
-			f"{type(self).__name__} object has no attribute '_model_class'"
-		)
-
-	async def _bulk_patch(self, iterable: list[_Tm], payload: dict[str, Any]) -> None:
-		requests: list[dict[str, Any]] = []
-		for i, obj in enumerate(iterable, start=1):
-			requests.append(
-				{
-					"id": str(i),
-					"method": "PATCH",
-					"url": obj.path,
-					"headers": {"Content-Type": "application/json"},
-					"body": payload,
-				}
-			)
-
-		_logger.debug(
-			"QuerySet._bulk_patch count=%s payload_keys=%s",
-			len(requests),
-			sorted(payload),
-		)
-		resp = await self._client.post("/$batch", body={"requests": requests})
-		try:
-			from pymsgraph import utils
-
-			utils.raise_batch_errors(resp, requests, action="bulk update")
-		except Exception:
-			# rethrow original error for clarity
-			raise
-
-	async def _prefetch_related(self, objects: list[_Tm], fields: list[str]) -> None:
-		if not objects or not fields:
-			return
-		_logger.debug(
-			"QuerySet._prefetch_related objects=%s fields=%s",
-			len(objects),
-			fields,
-		)
-
-		requests: list[dict[str, Any]] = []
-		mapping: dict[str, tuple[_Tm, str]] = {}
-		req_id = 1
-
-		for obj in objects:
-			for field_name in fields:
-				qs = getattr(obj, field_name)
-				if not hasattr(qs, "path"):
-					continue
-				req_id_str = str(req_id)
-				requests.append(
-					{
-						"id": req_id_str,
-						"method": "GET",
-						"url": qs.path,
-					}
-				)
-				mapping[req_id_str] = (obj, field_name)
-				req_id += 1
-
-		for chunk in utils.chunks(requests, 20):
-			resp = await self._client.post("/$batch", body={"requests": chunk})
-			utils.raise_batch_errors(resp, chunk, action="prefetch related")
-			for r in resp.get("responses", []) or []:
-				rid = str(r.get("id"))
-				obj_field = mapping.get(rid)
-				if not obj_field:
-					continue
-				obj, field_name = obj_field
-				body = r.get("body") or {}
-				obj._data[field_name] = body.get("value", [])
-				if hasattr(obj, "_prefetch_meta"):
-					obj._prefetch_meta[field_name] = {
-						"next_link": body.get("@odata.nextLink"),
-						"count": body.get("@odata.count"),
-					}
-
-	def _clone(self) -> Self:
-		obj = self.__class__(
-			self._client, path=self.path, model_class=self._model_class
-		)
-		obj._params = deepcopy(self._params)
-		obj._headers = dict(self._headers)
-		obj._kwargs = dict(self._kwargs)
-		obj._all = self._all
-		if self._seeded_objects is not None:
-			obj._seeded_objects = list(self._seeded_objects)
-		obj._union_qs = (list(self._union_qs[0]), self._union_qs[1])
-		return obj
-
-	def _compile_filter_expr(self, key: str, value: Any) -> str:
-		if "__" in key:
-			field, lookup = key.split("__", 1)
-		else:
-			field, lookup = key, "exact"
-
-		field_obj = self._model_class.FIELDS.get(field) if self._model_class else None
-		from pymsgraph.models import fields as _fields
-
-		if isinstance(field_obj, _fields.ListField):
-			graph_field = field_obj.graph_attr_name or to_camel_case(field)
-			return compile_list_lookup(graph_field, lookup, value)
-
-		if isinstance(field_obj, _fields.QuerySetField):
-			graph_field = field_obj.graph_attr_name or to_camel_case(field)
-			if lookup == "isnull":
-				return compile_list_lookup(graph_field, "isnull", value)
-
-			model_class = field_obj.model_class or field_obj.queryset_class.model_class
-			if model_class is None:
-				raise ValueError(f"{field!r} related model is not configured")
-
-			if isinstance(model_class, str):
-				from pymsgraph.utils import get_model_class
-
-				model_class = get_model_class(model_class)
-
-			if "__" in lookup:
-				element_field, element_lookup = lookup.split("__", 1)
-			else:
-				element_field, element_lookup = lookup, "exact"
-
-			element = model_class.FIELDS.get(element_field)
-			if element is None:
-				raise ValueError(
-					f"Unsupported related field: {field}__{element_field!r}"
-				)
-			element_graph = element.graph_attr_name or to_camel_case(element_field)
-
-			try:
-				func = PY_TO_ODATA_QUERY[element_lookup]
-			except KeyError:
-				raise ValueError(f"Unsupported lookup: {element_lookup!r}") from None
-
-			clause = func(f"u/{element_graph}", value)
-			return f"{graph_field}/any(u:{clause})"
-
-		# fallback to scalar compiler
-		return to_odata_query(key, value)
-
-	def _build_params(self) -> dict[str, Any]:
-		"""Build OData query parameters"""
-		compiled_params = {}
-		params = deepcopy(self._params)
-
-		if values := params.pop("$filter", None):
-			compiled_params["$filter"] = " and ".join(f"({v})" for v in values)
-
-		if "$select" not in params:
-			default_fields = getattr(self._model_class, "DEFAULT_SELECT_FIELDS", None)
-			if default_fields and len(default_fields) > 1:
-				params["$select"] = sorted(default_fields)
-
-		if values := params.pop("$select", None):
-			if self._model_class.HAS_ID and "id" not in values:
-				values = ["id"] + list(values)
-			compiled_params["$select"] = ",".join([to_camel_case(v) for v in values])
-
-		if values := params.pop("$orderby", None):
-			compiled_params["$orderby"] = ",".join(
-				[
-					(
-						to_camel_case(v[0])
-						if len(v) < 2
-						else f"{to_camel_case(v[0])} {v[1]}"
-					)
-					for v in values
-				]
-			)
-
-		if values := params.pop("$search", None):
-			compiled_params["$search"] = " AND ".join(values)
-
-		if expands := params.pop("$expand", None):
-			parts: list[str] = []
-			for name, fields in expands.items():
-				if fields:
-					parts.append(f"{name}($select={','.join(sorted(fields))})")
-				else:
-					parts.append(name)
-			compiled_params["$expand"] = ",".join(parts)
-
-		compiled_params.update(params)
-
-		_logger.debug("QuerySet._build_params params=%s", compiled_params)
-		return compiled_params
-
-	async def _iter_objects(self, async_gen: Any) -> list[_Tm]:
-		return [i async for i in async_gen]
-
-	def _coerce_objects(
-		self,
-		args: tuple[str | _Tm | QuerySet[_Tm] | dict[str, Any], ...],
-		key: str = "id",
-	) -> Iterator[_Tm]:
-		def _iter_flatten(iterable) -> Iterator[_Tm]:
-			for item in iterable:
-				if isinstance(item, str):
-					yield self.make_from_graph(data={key: item})
-				elif isinstance(item, self._model_class):
-					yield item
-				elif isinstance(item, dict):
-					yield self._model_class(**item)
-				elif isinstance(item, QuerySet):
-					try:
-						asyncio.get_running_loop()
-					except RuntimeError:
-						objects = asyncio.run(self._iter_objects(item))
-					else:
-						raise RuntimeError(
-							"Cannot coerce QuerySet in async context; iterate it and pass objects instead."
-						)
-					for obj in objects:
-						yield obj
-
-		seen: set[str] = set()
-
-		for obj in _iter_flatten(args):
-			try:
-				val = getattr(obj, key)
-			except AttributeError:
-				continue
-			if val not in seen:
-				yield obj
-			seen.add(val)
+    """
+    Django-style async query builder for Microsoft Graph resources.
+
+    A `QuerySet` is immutable-by-convention: each chain method returns a cloned
+    queryset with updated parameters aside from execution methods. Network requests are deferred until
+    execution methods or async iteration are used.
+    """
+
+    PATH: str | None = None
+    model_class: type[_Tm] | None = None
+    page_size: int | None = 50
+
+    def __init__(
+        self,
+        client: "Client | None" = None,
+        *,
+        path: str | None = None,
+        model_class: "type[Model] | None" = None,
+        **kwargs: Any,
+    ) -> None:
+        """
+        Initialize a queryset bound to a client, path, and model class.
+
+        Args:
+            client:
+                Graph client used to execute requests.
+            path:
+                Base collection path (for example `/users`).
+            model_class:
+                Model type represented by this queryset.
+            **kwargs:
+                Internal execution options (prefetch metadata, cached page
+                data, etc.) propagated by helper methods.
+        """
+        model_class = model_class or self.model_class
+        self._args: tuple[Any, ...] = (
+            client,
+            path or getattr(model_class, "PATH", None),
+            model_class,
+        )
+        self._params: dict[str, Any] = {}
+        self._headers: dict[str, Any] = {}
+
+        self._paginator: Paginator[_Tm] | None = None
+        self._all: bool = False
+        self._kwargs: dict[str, Any] = kwargs
+        self._seeded_objects: list[_Tm] | None = None
+        self._union_qs: tuple[list[QuerySet[_Tm]], Callable[[_Tm], Any] | None] = (
+            [],
+            None,
+        )
+
+    @property
+    def path(self) -> str:
+        """
+        Return the Graph collection path used by this queryset.
+        """
+        if e := self._args[1]:
+            return e
+        raise AttributeError(f"{type(self).__name__} object has no attribute 'path'")
+
+    def filter(self, *q_objects: "Q | str", **kwargs: Any) -> Self:
+        """
+        Return a cloned queryset with additional OData `$filter` expressions.
+
+        `filter(...)` is additive and lazy. It never executes a network request;
+        it only updates query parameters on a cloned queryset.
+
+        You can pass filters in three forms:
+
+        - keyword lookups, e.g. `account_enabled=True`, `display_name__contains="Ada"`
+        - `Q(...)` objects for explicit boolean composition
+        - raw OData filter strings
+
+        Args:
+            *q_objects:
+                `Q` objects or raw OData filter expression strings.
+            **kwargs:
+                Django-style field lookups converted to OData filter clauses.
+
+        Returns:
+            QuerySet[_Tm]:
+                A new queryset containing previous filters plus the newly
+                added expressions.
+
+        Raises:
+            ValueError:
+                If a field/lookup is unsupported while compiling kwargs.
+            TypeError:
+                If a provided lookup value has an unsupported type.
+
+        Notes:
+            - Identical expressions are de-duplicated.
+            - Multiple calls to `filter(...)` are cumulative.
+
+        Example:
+            ```python
+            qs = client.users.filter(account_enabled=True)
+            qs = qs.filter(department__contains="Engineering")
+            qs = qs.filter(Q(city="Seattle") | Q(city="Portland"))
+            qs = client.users.filter(assigned_licenses__isnull=True)
+            qs = (
+                client
+                .sites
+                .by_path("sites/Contoso")
+                .lists
+                .by_name("Contoso List")
+                .items
+                .expand("fields")
+                .filter("Status/Completed")
+            )
+            ```
+        """
+        if not q_objects and not kwargs:
+            return self
+
+        qs = self._clone()
+        expressions: list[str] = qs._params.setdefault("$filter", [])
+
+        for q_obj in q_objects:
+            expr = q_obj if isinstance(q_obj, str) else q_obj.to_odata_query()
+            if expr not in expressions:
+                expressions.append(expr)
+        for key, value in kwargs.items():
+            expr = qs._compile_filter_expr(key, value)
+            if expr not in expressions:
+                expressions.append(expr)
+
+        _logger.debug("QuerySet.filter added=%s", expressions)
+        return qs
+
+    def exclude(self, *q_objects: "Q | str", **kwargs: Any) -> Self:
+        """
+        Return a cloned queryset with negated filter expressions.
+
+        `exclude(...)` mirrors `filter(...)` but wraps each expression with
+        `not (...)` before appending to `$filter`.
+
+        Args:
+            *q_objects:
+                `Q` objects or raw OData filter expression strings.
+            **kwargs:
+                Django-style field lookups converted to negated OData clauses.
+
+        Returns:
+            QuerySet[_Tm]:
+                A new queryset with additional exclusion expressions.
+
+        Raises:
+            ValueError:
+                If field/lookup compilation fails for kwargs.
+            TypeError:
+                If a provided lookup value has an unsupported type.
+
+        Notes:
+            Repeated exclude expressions are de-duplicated.
+
+        Example:
+            ```python
+            qs = client.users.exclude(job_title__isnull=True)
+            ```
+        """
+        if not q_objects and not kwargs:
+            return self
+
+        qs = self._clone()
+        expressions: list[str] = qs._params.setdefault("$filter", [])
+
+        for q_obj in q_objects:
+            base = q_obj if isinstance(q_obj, str) else q_obj.to_odata_query()
+            expr = f"not ({base})"
+            if expr not in expressions:
+                expressions.append(expr)
+        for key, value in kwargs.items():
+            expr = f"not ({qs._compile_filter_expr(key, value)})"
+            if expr not in expressions:
+                expressions.append(expr)
+
+        _logger.debug("QuerySet.exclude added=%s", expressions)
+        return qs
+
+    def select(self, *args: str) -> Self:
+        """
+        Return a cloned queryset restricted to selected fields.
+
+        Args:
+            *args:
+                Model field names to include in `$select`.
+
+        Returns:
+            QuerySet[_Tm]:
+                A new queryset with appended select fields.
+
+        Notes:
+            - Duplicate field names are ignored.
+            - `id` is auto-added later when parameters are compiled if not specify in args.
+
+        Example:
+            ```python
+            qs = client.users.select("display_name", "mail")
+            ```
+        """
+        if not args:
+            return self
+
+        qs = self._clone()
+        selected_fields = qs._params.setdefault("$select", [])
+
+        for field in args:
+            if field not in selected_fields:
+                selected_fields.append(field)
+
+        _logger.debug("QuerySet.select fields=%s", args)
+        return qs
+
+    def order_by(self, *fields: str) -> Self:
+        """
+        Return a cloned queryset with ordering applied.
+
+        Args:
+            *fields:
+                Sort fields in model naming format. Prefix with `-` for
+                descending order.
+
+        Returns:
+            QuerySet[_Tm]:
+                A new queryset with `$orderby` expressions.
+
+        Raises:
+            ValueError:
+                If a field does not exist or is not marked sortable.
+
+        Example:
+            ```python
+            qs = client.users.order_by("-display_name")
+            ```
+        """
+        if not fields:
+            return self
+
+        qs = self._clone()
+        expressions = qs._params.setdefault("$orderby", [])
+
+        for field in fields:
+            normalized = field[1:] if field.startswith("-") else field
+            if (field_obj := self._model_class.FIELDS.get(normalized)) is None:
+                raise ValueError(f"Unkown field: {normalized!r}")
+            elif not field_obj.order_by:
+                raise ValueError(f"Unsupported order_by field: {normalized!r}")
+            expr = (field,)
+            if field.startswith("-"):
+                expr = (field[1:], "desc")
+            if expr not in expressions:
+                expressions.append(expr)
+
+        _logger.debug("QuerySet.order_by fields=%s", fields)
+        return qs
+
+    def search(self, *q_objects: "Q", **kwargs: Any) -> Self:
+        """
+        Return a cloned queryset with Graph `$search` terms.
+
+        Args:
+            *q_objects:
+                `Q` objects converted to search expressions.
+            **kwargs:
+                Field/value terms converted to `"field:value"` search tokens.
+
+        Returns:
+            QuerySet[_Tm]:
+                A new queryset with appended `$search` terms.
+
+        Raises:
+            ValueError:
+                If the model does not support search.
+
+        Notes:
+            Search terms are AND-joined during parameter compilation.
+
+        Example:
+            ```python
+            qs = client.users.search(display_name="Adele")
+            ```
+        """
+        if not q_objects and not kwargs:
+            return self
+
+        if not getattr(self._model_class, "SEARCH_FIELD", None):
+            raise ValueError(f"{self._model_class.__name__} does not support search")
+
+        qs = self._clone()
+        values = qs._params.setdefault("$search", [])
+
+        for q_obj in q_objects:
+            if (expr := q_obj.to_search_format()) not in values:
+                values.append(expr)
+        for k, v in kwargs.items():
+            val = f'"{to_camel_case(k)}:{v}"'
+            if val not in values:
+                values.append(val)
+
+        _logger.debug("QuerySet.search terms=%s", values)
+        return qs
+
+    def top(self, value: int) -> Self:
+        """
+        Return a cloned queryset limiting result size via `$top`.
+
+        Args:
+            value:
+                Maximum number of records to request.
+
+        Returns:
+            QuerySet[_Tm]:
+                A new queryset with `$top` set.
+
+        Raises:
+            ValueError:
+                If `value` is less than 1.
+
+        Example:
+            ```python
+            qs = client.users.top(10)
+            ```
+        """
+        if value < 1:
+            raise ValueError("value must be greater than zero.")
+        qs = self._clone()
+        qs._params["$top"] = value
+        _logger.debug("QuerySet.top value=%s", value)
+        return qs
+
+    def expand(self, field: str, *select: str) -> Self:
+        """
+        Return a cloned queryset with a related field expansion.
+
+        Args:
+            field:
+                Related field name to expand.
+            *select:
+                Optional field subset for the expanded object(s).
+
+        Returns:
+            QuerySet[_Tm]:
+                A new queryset with updated `$expand` configuration.
+
+        Raises:
+            ValueError:
+                If `field` is unknown or does not support expand.
+
+        Notes:
+            - If no explicit select is provided, model defaults may be used.
+            - When explicit select is used, `id` is auto-included.
+
+        Example:
+            ```python
+            qs = client.users.expand("manager", "display_name", "mail")
+            # Expanding multitple fields
+            qs = client.users.expand("manager", "display_name", "mail").expand("assigned_licenses")
+            ```
+        """
+        qs = self._clone()
+        expands: dict[str, set[str]] = qs._params.setdefault("$expand", {})
+        explicit_select = bool(select)
+        default_expands = getattr(qs._model_class, "DEFAULT_EXPAND_FIELDS", None) or ()
+        default_expand_fields = {name for name in default_expands}
+        default_expand_camel = {to_camel_case(name) for name in default_expand_fields}
+        allow_default_expand = (
+            field in default_expand_fields
+            or to_camel_case(field) in default_expand_camel
+        )
+        if field_obj := qs._model_class.FIELDS.get(field):
+            if not field_obj.expand and not allow_default_expand:
+                raise ValueError(f"Field {field!r} does not support expand")
+            graph_field = field_obj.graph_attr_name or to_camel_case(field)
+            model_class: type[Model] | None = getattr(field_obj, "model_class", None)
+            if not select and model_class is not None:
+                defaults = model_class.DEFAULT_SELECT_FIELDS
+                if defaults:
+                    select = tuple(defaults)
+        elif allow_default_expand:
+            graph_field = to_camel_case(field)
+        else:
+            raise ValueError(f"Unknown field {field!r}")
+        if graph_field not in expands:
+            expands[graph_field] = set()
+        if select:
+            selects = {to_camel_case(s) for s in select}
+            if explicit_select and "id" not in selects:
+                selects.add("id")
+            expands[graph_field].update(selects)
+        _logger.debug(
+            "QuerySet.expand field=%s graph_field=%s select=%s",
+            field,
+            graph_field,
+            sorted(expands[graph_field]),
+        )
+        return qs
+
+    def all(self) -> Self:
+        """
+        Return a cloned queryset configured to iterate all pages.
+
+        Returns:
+            QuerySet[_Tm]:
+                A new queryset with "fetch all pages" iteration mode.
+
+        Example:
+            ```python
+            users = [u async for u in client.users.all()]
+            ```
+        """
+        qs = self._clone()
+        qs._all = True
+        return qs
+
+    def with_count(self) -> Self:
+        """
+        Return a cloned queryset requesting count metadata.
+
+        Returns:
+            QuerySet[_Tm]:
+                A new queryset with `$count=true` and eventual consistency
+                header enabled.
+        Notes:
+            - Auto-set consistency-level evetual header
+
+        Example:
+            ```python
+            qs = client.users.with_count().top(25)
+            ```
+        """
+        qs = self._clone()
+        qs._params["$count"] = "true"
+        _logger.debug("QuerySet.with_count enabled")
+        return qs.with_consistency_level_eventual()
+
+    def with_consistency_level_eventual(self) -> Self:
+        """
+        Return a cloned queryset with eventual consistency header.
+
+        Returns:
+            QuerySet[_Tm]:
+                A new queryset with `ConsistencyLevel: eventual`.
+
+        Notes:
+            Required by some Graph query patterns (for example advanced
+            search/count scenarios).
+
+        Example:
+            ```python
+            qs = client.users.with_consistency_level_eventual()
+            ```
+        """
+        qs = self._clone()
+        qs._headers["ConsistencyLevel"] = "eventual"
+        _logger.debug("QuerySet.with_consistency_level_eventual enabled")
+        return qs
+
+    def prefetch(self, *fields: str) -> "QuerySet[_Tm]":
+        """
+        Return a cloned queryset configured for related-field prefetch.
+
+        Prefetch runs during queryset iteration. For each fetched page of main
+        objects, related fields are loaded immediately using Microsoft Graph
+        `$batch` requests, then attached to each object before it is yielded.
+
+        Args:
+            *fields:
+                Related `QuerySetField` names marked as prefetch-capable.
+
+        Returns:
+            QuerySet[_Tm]:
+                A new queryset that prefetches requested related fields.
+
+        Raises:
+            ValueError:
+                If a field is unknown, not related, or not prefetch-enabled.
+
+        Notes:
+            - Main objects are fetched first.
+            - Related objects are fetched in follow-up `POST /$batch` calls
+              using `GET` requests per object/related-field path.
+            - Batch requests are chunked in groups of up to 20 operations.
+            - Prefetch is page-scoped: each page triggers its own related fetches.
+
+        Example:
+            ```python
+            qs = client.users.top(5).prefetch("member_of")
+            ```
+        """
+        if not fields:
+            return self
+
+        from pymsgraph.models.fields import QuerySetField
+
+        qs = self._clone()
+        prefetch_fields = set(qs._kwargs.get("prefetch", []))
+        for name in fields:
+            field_obj = self._model_class.FIELDS.get(name)
+            if field_obj is None:
+                raise ValueError(f"Unknown field {name!r}")
+            if not isinstance(field_obj, QuerySetField):
+                raise ValueError(f"{name!r} is not a related QuerySetField")
+            if not field_obj.prefetch:
+                raise ValueError(f"{name!r} does not support prefetch")
+            if name not in prefetch_fields:
+                prefetch_fields.add(name)
+        qs._kwargs["prefetch"] = prefetch_fields
+        _logger.debug("QuerySet.prefetch fields=%s", sorted(prefetch_fields))
+        return qs
+
+    def iterator(self, *, page_size: int | None = None) -> "Paginator[_Tm]":
+        """
+        Return a paginator bound to this queryset.
+
+        Args:
+            page_size:
+                Optional per-page size override.
+
+        Returns:
+            Paginator[_Tm]:
+                Reusable paginator instance for page-wise fetching.
+
+        Raises:
+            ValueError:
+                If called on a seeded queryset created via `with_objects(...)`.
+
+        Example:
+            ```python
+            paginator = client.users.iterator(page_size=25)
+            first_page = await paginator.first_page()
+            next_page = await paginator.next_page()
+            ```
+        """
+        if self._seeded_objects is not None:
+            raise ValueError("Paginator is not available for seeded querysets")
+        p = self._paginator
+        if p is None:
+            # ctx = Context.make(self._ctx, queryset=self)
+            p = Paginator[_Tm](self, page_size=page_size or self.page_size)
+            self._paginator = p
+            _logger.debug(
+                "QuerySet.iterator created paginator page_size=%s",
+                page_size or self.page_size,
+            )
+        return p
+
+    def union(
+        self,
+        *others: "QuerySet[_Tm]",
+        key: Callable[[_Tm], Any] | None = None,
+    ) -> Self:
+        """
+        Return a queryset that yields a de-duplicated union of querysets.
+
+        Args:
+            *others:
+                Additional querysets of the same model type.
+            key:
+                Optional function used to determine uniqueness. Defaults to
+                object `id` when omitted.
+
+        Returns:
+            QuerySet[_Tm]:
+                A union queryset evaluated during async iteration.
+
+        Raises:
+            TypeError:
+                If `key` is provided but is not callable.
+            ValueError:
+                If attempting to change an already-set union key.
+
+        Example:
+            ```python
+            west = client.users.filter(state="WA")
+            east = client.users.filter(state="NY")
+            combined = west.union(east)
+            ```
+        """
+        if key is not None and not callable(key):
+            raise TypeError("Union key must be a callable.")
+
+        prev_key = self._union_qs[1]
+        if prev_key is not None and key is not None and key != prev_key:
+            raise ValueError("Union key already set; cannot change key.")
+
+        qs = self.__class__(self._client, path=self.path, model_class=self._model_class)
+        union_list = list(self._union_qs[0])
+        union_list.append(self)
+        union_list.extend(others)
+        qs._union_qs = (union_list, key or prev_key)
+        _logger.debug("QuerySet.union items=%s", len(union_list))
+        return qs
+
+    async def exists(self) -> bool:
+        """
+        Return whether this queryset contains at least one result.
+
+        Returns:
+            bool:
+                `True` when count is non-zero, otherwise `False`.
+
+        Example:
+            ```python
+            has_enabled = await client.users.filter(account_enabled=True).exists()
+            ```
+        """
+        return bool(await self.count())
+
+    async def count(self) -> int | None:
+        """
+        Return total number of results for this queryset.
+
+        Returns:
+            int | None:
+                Count when available, otherwise `None`.
+
+        Example:
+            ```python
+            total = await client.users.filter(account_enabled=True).count()
+            ```
+        """
+        return await self.iterator().count()
+
+    async def get(self, id: str | None = None, **kwargs) -> _Tm:
+        """
+        Return a single object by id or unique filter criteria.
+
+        Args:
+            id:
+                Optional object id/path key for direct fetch.
+            **kwargs:
+                Field filters expected to resolve to exactly one object when
+                `id` is not provided.
+
+        Returns:
+            _Tm:
+                The resolved model instance.
+
+        Raises:
+            ValueError:
+                If neither `id` nor filter kwargs are supplied.
+            DoesNotExist:
+                If no object matches the provided filters.
+            MultipleObjectsReturned:
+                If more than one object matches filter criteria.
+            httpx.HTTPStatusError:
+                If Graph returns an HTTP error.
+        """
+        if id:
+            data = await self._client.get(
+                f"{self.path}/{id}", params=self._build_params()
+            )
+            return self.make_from_graph(data)
+
+        if not kwargs:
+            raise ValueError("No kwargs found.")
+
+        results = [o async for o in self.filter(**kwargs).top(2)]
+
+        if not results:
+            raise DoesNotExist(
+                f"{self._model_class.__name__} matching query does not exist"
+            )
+
+        if len(results) > 1:
+            raise MultipleObjectsReturned(
+                f"get() returned more than one {self._model_class.__name__}"
+            )
+
+        return results[0]
+
+    async def first(self) -> _Tm | None:
+        """
+        Return the first object from this queryset.
+
+        Returns:
+            _Tm | None:
+                First object if available, otherwise `None`.
+
+        Example:
+            ```python
+            first = await client.users.order_by("display_name").first()
+            ```
+        """
+        obj: _Tm | None = None
+        async for item in self.top(1):
+            obj = item
+            break
+        return obj
+
+    async def create(self, **kwargs: Any) -> _Tm:
+        """
+        Create one object in Graph and return the hydrated model.
+
+        Args:
+            **kwargs:
+                Model field values used to create the object.
+
+        Returns:
+            _Tm:
+                Created model instance from Graph response data.
+
+        Raises:
+            ValueError:
+                If the model is read-only or create validation fails.
+            httpx.HTTPStatusError:
+                If Graph returns an HTTP error.
+        """
+        if self._model_class.READ_ONLY:
+            raise ValueError(f"{self._model_class.__name__} is read-only")
+        obj = self._model_class(client=self._client, path=self.path, **kwargs)
+        obj._validate_for_create()
+        _logger.debug("QuerySet.create model=%s", self._model_class.__name__)
+        data = await self._client.post(self.path, body=obj.serialize())
+        return self._model_class.from_graph(data, client=self._client, path=self.path)
+
+    async def update(self, **fields: Any) -> int:
+        """
+        Bulk update all objects matched by this queryset.
+
+        Args:
+            **fields:
+                Model fields to patch on every matched object.
+
+        Returns:
+            int:
+                Number of objects updated.
+
+        Raises:
+            ValueError:
+                If model is read-only, field is unknown, or field is read-only.
+            httpx.HTTPStatusError:
+                If Graph returns an HTTP error for batch update calls.
+
+        Notes:
+            Updates are sent as Graph `$batch` PATCH requests in chunks of 20.
+
+        Example:
+            ```python
+            updated = await client.users.filter(department="Engineering").update(
+                city="Seattle"
+            )
+            ```
+        """
+        if self._model_class.READ_ONLY:
+            raise ValueError(f"{self._model_class.__name__} is read-only")
+        if not fields:
+            return 0
+
+        # Validate fields
+        payload: dict[str, Any] = {}
+        for attr_name, val in fields.items():
+            field_obj = self._model_class.FIELDS.get(attr_name)
+            if field_obj is None:
+                raise ValueError(f"Unknown field {attr_name!r}")
+            if field_obj.read_only:
+                raise ValueError(f"Field {attr_name!r} is read-only")
+            graph_name = field_obj.graph_attr_name or to_camel_case(attr_name)
+            payload[graph_name] = field_obj.to_graph(val)
+
+        total_updated = 0
+        batch_size = 20
+
+        _logger.debug(
+            "QuerySet.update model=%s fields=%s",
+            self._model_class.__name__,
+            sorted(payload),
+        )
+        async for batch in utils.achunks(self.select("id"), batch_size):
+            await self._bulk_patch(batch, payload)
+            total_updated += len(batch)
+
+        return total_updated
+
+    async def values(
+        self, *fieldnames: str | Callable[[_Tm], dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """
+        Materialize queryset results as list of dictionaries.
+
+        Args:
+            *fieldnames:
+                Field names and/or callables.
+                - `str` entries read model attributes.
+                - `callable(obj) -> dict` entries inject computed columns.
+
+        Returns:
+            list[dict[str, Any]]:
+                Row dictionaries for each object in the queryset.
+
+        Raises:
+            ValueError:
+                If an unknown field is requested or callable returns non-dict.
+            TypeError:
+                If an item in `fieldnames` is neither `str` nor callable.
+
+        Notes:
+            - If no fields are given, model default select fields are used.
+            - Nested model values are converted to dictionaries recursively.
+            - Calculated fields are supported by passing a callable that returns
+              a `dict[str, Any]` (merged into each row).
+            - If any requested string field is missing from the current `$select`,
+              `values(...)` builds a cloned queryset with `select(*fieldnames)`
+              before iterating. This results in a separate fetch for that projection.
+
+        Example:
+            ```python
+            rows = await client.users.values(
+                "display_name",
+                "mail",
+                lambda u: {"is_engineering": "engineering" in (u.department or "").lower()},
+            )
+
+            # Base queryset
+            qs = client.users.search(display_name="Alice").select(
+                "display_name", "job_title", "department", "mail"
+            )
+            async for _ in qs:
+                ...
+
+            # Reuses current queryset projection; may still fetch additional (uncached) pages
+            rows = await qs.values()
+
+            # Same as above (requested fields already in $select)
+            rows = await qs.values("display_name", "job_title")
+
+            # Builds a cloned queryset with expanded $select, so it performs a new fetch path
+            rows = await qs.values("display_name", "mail", "user_principal_name")
+            ```
+        """
+        from pymsgraph.models.base import Model
+
+        def _coerce(val: Any) -> Any:
+            if isinstance(val, Model):
+                return val.to_dict()
+            if isinstance(val, list):
+                return [_coerce(v) for v in val]
+            if isinstance(val, dict):
+                return {k: _coerce(v) for k, v in val.items()}
+            return val
+
+        # fieldnames = fieldnames or self._model_class.DEFAULT_SELECT_FIELDS or tuple()
+        if not fieldnames:
+            if (default_fieldnames := self._model_class.DEFAULT_SELECT_FIELDS) is None:
+                return [
+                    {k: _coerce(getattr(o, k)) for k in o._data.keys()}
+                    async for o in self.iterator().all()
+                ]
+            return [
+                {k: _coerce(getattr(o, k)) for k in default_fieldnames}
+                async for o in self.iterator().all()
+            ]
+
+        valid_fields: list[str] = []
+        value_fns: list[Callable[[_Tm], dict[str, Any]]] = []
+        for name in fieldnames:
+            if isinstance(name, str):
+                if name not in self._model_class.FIELDS:
+                    raise ValueError(f"Unknown field {name!r}")
+                valid_fields.append(name)
+                continue
+            if not callable(name):
+                raise TypeError(
+                    "values() fieldnames must be str or callable returning dict"
+                )
+            value_fns.append(name)
+
+        if valid_fields:
+            selected = set(self._params.get("$select", []))
+            if selected and selected.issuperset(valid_fields):
+                objects = self.iterator().all()
+            else:
+                objects = self.select(*valid_fields).all()
+        else:
+            objects = self.iterator().all()
+
+        rows: list[dict[str, Any]] = []
+        async for obj in objects:
+            row = {name: _coerce(getattr(obj, name)) for name in valid_fields}
+            for fn in value_fns:
+                extra = fn(obj)
+                if extra is None:
+                    continue
+                if not isinstance(extra, dict):
+                    raise ValueError("values() callable must return a dict")
+                for k, v in extra.items():
+                    row[k] = _coerce(v)
+            rows.append(row)
+        return rows
+
+    def apply(self, predicate: Callable[[_Tm], bool]) -> AsyncIterator[_Tm]:
+        """
+        Yield only objects that satisfy `predicate`.
+
+        This is an in-memory/post-fetch filter. It is useful when your filter
+        logic cannot be expressed in Graph/OData (for example custom Python
+        predicates or multi-field computed checks).
+
+        Args:
+            predicate:
+                Callable evaluated for each object.
+
+        Returns:
+            AsyncIterator[_Tm]:
+                Filtered async iterator of objects.
+
+        Raises:
+            ValueError:
+                If `predicate` is `None`.
+
+        Notes:
+            - Objects are fetched first, then filtered in Python.
+            - `apply(...)` does not reduce Graph query payload or server work.
+            - Prefer `filter(...)` for conditions that Graph can evaluate.
+
+        Example:
+            ```python
+            disabled_engineering = (
+                client
+                .users
+                .filter(account_enabled=False)
+                .apply(lambda u: "engineering" in (u.department or "").lower())
+            )
+            users = [u async for u in disabled_engineering]
+            ```
+        """
+        if predicate is None:
+            raise ValueError(
+                f"{type(self).__name__} apply requires a callable predicate"
+            )
+        _logger.debug("QuerySet.apply predicate=%s", predicate)
+
+        async def _iter() -> AsyncIterator[_Tm]:
+            async for obj in self.iterator().all():
+                if predicate(obj):
+                    yield obj
+
+        return _iter()
+
+    async def to_csv(
+        self,
+        path: str | Path,
+        *,
+        fieldnames: (  # pyright: ignore[reportRedeclaration]
+            Collection[str | Callable[[_Tm], dict[str, Any]]] | None
+        ) = None,
+        encoding: str = "utf-8",
+    ) -> None:
+        """
+        Export queryset rows to a CSV file.
+
+        Args:
+            path:
+                Output CSV path.
+            fieldnames:
+                Optional field/callable spec forwarded to `values(...)`.
+            encoding:
+                Output text encoding. Defaults to `utf-8`.
+
+        Returns:
+            None
+
+        Notes:
+            - Column order follows first appearance across generated row keys.
+
+        Example:
+            ```python
+            await client.users.select("display_name", "mail").to_csv("users.csv")
+            ```
+        """
+        import csv
+        from pathlib import Path
+
+        values = await self.values(*(fieldnames or []))
+        output_fieldnames: list[str] = []
+
+        for val in values:
+            for key in val.keys():
+                if key not in output_fieldnames:
+                    output_fieldnames.append(key)
+
+        out_path = Path(path)
+        _logger.debug("QuerySet.to_csv path=%s rows=%s", out_path, len(values))
+        with out_path.open("w", encoding=encoding, newline="") as f:
+            writer = csv.DictWriter(
+                f, fieldnames=output_fieldnames, extrasaction="ignore"
+            )
+            writer.writeheader()
+
+            for val in values:
+                writer.writerow(val)
+
+    async def to_dataframe(self, *fieldnames: str):
+        """
+        Return queryset rows as a pandas `DataFrame`. Requires pandas library
+
+        Args:
+            *fieldnames:
+                Optional field names to include.
+
+        Returns:
+            pandas.DataFrame:
+                Dataframe containing materialized queryset values.
+
+        Example:
+            ```python
+            df = await client.users.to_dataframe("display_name", "mail")
+            ```
+        """
+        import pandas as pd  # type: ignore[import-not-found]
+
+        _logger.debug("QuerySet.to_dataframe fields=%s", fieldnames)
+        fieldnames = fieldnames or self._model_class.DEFAULT_SELECT_FIELDS or tuple()
+        if fieldnames:
+            values = await self.values(*fieldnames)
+        else:
+            values = await self.values()
+        return pd.DataFrame(values)
+
+    def with_objects(
+        self,
+        *args: "str | _Tm | QuerySet[_Tm]",
+        key: str = "id",
+    ) -> Self:
+        """
+        Return a seeded queryset from ids, objects, or querysets.
+
+        Args:
+            *args:
+                Supported item types:
+                - id strings
+                - model instances
+                - dictionaries coercible to model instances
+                - querysets (coerced synchronously outside async context)
+            key:
+                Attribute used for de-duplication. Defaults to `id`.
+
+        Returns:
+            QuerySet[_Tm]:
+                A seeded queryset that yields provided objects in-memory.
+
+        Raises:
+            RuntimeError:
+                If coercing a queryset while already inside async context.
+
+        Example:
+            ```python
+            seeded = client.users.with_objects("user-id-1", "user-id-2")
+            users = [u async for u in seeded]
+            ```
+        """
+        qs = self.__class__(self._client, path=self.path, model_class=self._model_class)
+        objects = list(qs._coerce_objects(args, key=key))
+        if not objects:
+            return qs
+
+        qs._seeded_objects = objects
+        _logger.debug("QuerySet.with_objects seeded=%s", len(objects))
+        return qs
+
+    def make(self, **kwargs: Any) -> _Tm:
+        """
+        Build a model instance bound to this queryset's client/path.
+
+        Args:
+            **kwargs:
+                Initial model fields.
+
+        Returns:
+            _Tm:
+                New model instance (not persisted).
+
+        Example:
+            ```python
+                user = client.users.make(id="u1", display_name="Ada")
+            ```
+        """
+        return self._model_class(**kwargs, client=self._client, path=self.path)
+
+    def make_from_graph(self, data: dict[str, Any]):
+        """
+        Build a model instance from Graph response payload.
+
+        Args:
+            data:
+                Raw Graph JSON object.
+
+        Returns:
+            _Tm:
+                Hydrated model instance.
+
+        Example:
+            ```python
+            user = client.users.make_from_graph(
+                {"id": "u1", "displayName": "Ada Lovelace"}
+            )
+            ```
+        """
+        return self._model_class.from_graph(data, client=self._client, path=self.path)
+
+    def __aiter__(self) -> AsyncIterator[_Tm]:
+        """
+        Return an async iterator.
+
+        Notes:
+            - seeded queryset: yields in-memory objects
+            - union queryset: yields de-duplicated combined results
+            - standard queryset: yields first page by default, or all pages when `.all()` mode is enabled
+        """
+        if (objects := self._seeded_objects) is not None:
+
+            async def _iter_seeded() -> AsyncIterator[_Tm]:
+                for obj in objects or []:
+                    yield obj
+
+            return _iter_seeded()
+
+        querysets, key = self._union_qs
+        if querysets:
+            key_fn = key or (lambda o: getattr(o, "id", None))
+
+            async def _iter_union() -> AsyncIterator[_Tm]:
+                seen: set[Any] = set()
+                for qs in querysets:
+                    iter_objects = qs.all() if self._all else qs
+                    async for obj in iter_objects:
+                        k = key_fn(obj)
+                        if k in seen:
+                            continue
+                        seen.add(k)
+                        yield obj
+
+            return _iter_union()
+
+        paginator = self.iterator()
+        if not self._all:
+            return paginator._fetch_page(1)
+        return paginator.all()
+
+    @property
+    def _client(self) -> "Client":
+        if c := self._args[0]:
+            return c
+        raise AttributeError(f"{type(self).__name__} object has no attribute '_client'")
+
+    @property
+    def _model_class(self) -> type[_Tm]:
+        if c := self._args[2]:
+            return c
+        raise AttributeError(
+            f"{type(self).__name__} object has no attribute '_model_class'"
+        )
+
+    async def _bulk_patch(self, iterable: list[_Tm], payload: dict[str, Any]) -> None:
+        requests: list[dict[str, Any]] = []
+        for i, obj in enumerate(iterable, start=1):
+            requests.append(
+                {
+                    "id": str(i),
+                    "method": "PATCH",
+                    "url": obj.path,
+                    "headers": {"Content-Type": "application/json"},
+                    "body": payload,
+                }
+            )
+
+        _logger.debug(
+            "QuerySet._bulk_patch count=%s payload_keys=%s",
+            len(requests),
+            sorted(payload),
+        )
+        resp = await self._client.post("/$batch", body={"requests": requests})
+        try:
+            from pymsgraph import utils
+
+            utils.raise_batch_errors(resp, requests, action="bulk update")
+        except Exception:
+            # rethrow original error for clarity
+            raise
+
+    async def _prefetch_related(self, objects: list[_Tm], fields: list[str]) -> None:
+        if not objects or not fields:
+            return
+        _logger.debug(
+            "QuerySet._prefetch_related objects=%s fields=%s",
+            len(objects),
+            fields,
+        )
+
+        requests: list[dict[str, Any]] = []
+        mapping: dict[str, tuple[_Tm, str]] = {}
+        req_id = 1
+
+        for obj in objects:
+            for field_name in fields:
+                qs = getattr(obj, field_name)
+                if not hasattr(qs, "path"):
+                    continue
+                req_id_str = str(req_id)
+                requests.append(
+                    {
+                        "id": req_id_str,
+                        "method": "GET",
+                        "url": qs.path,
+                    }
+                )
+                mapping[req_id_str] = (obj, field_name)
+                req_id += 1
+
+        for chunk in utils.chunks(requests, 20):
+            resp = await self._client.post("/$batch", body={"requests": chunk})
+            utils.raise_batch_errors(resp, chunk, action="prefetch related")
+            for r in resp.get("responses", []) or []:
+                rid = str(r.get("id"))
+                obj_field = mapping.get(rid)
+                if not obj_field:
+                    continue
+                obj, field_name = obj_field
+                body = r.get("body") or {}
+                obj._data[field_name] = body.get("value", [])
+                if hasattr(obj, "_prefetch_meta"):
+                    obj._prefetch_meta[field_name] = {
+                        "next_link": body.get("@odata.nextLink"),
+                        "count": body.get("@odata.count"),
+                    }
+
+    def _clone(self) -> Self:
+        obj = self.__class__(
+            self._client, path=self.path, model_class=self._model_class
+        )
+        obj._params = deepcopy(self._params)
+        obj._headers = dict(self._headers)
+        obj._kwargs = dict(self._kwargs)
+        obj._all = self._all
+        if self._seeded_objects is not None:
+            obj._seeded_objects = list(self._seeded_objects)
+        obj._union_qs = (list(self._union_qs[0]), self._union_qs[1])
+        return obj
+
+    def _compile_filter_expr(self, key: str, value: Any) -> str:
+        if "__" in key:
+            field, lookup = key.split("__", 1)
+        else:
+            field, lookup = key, "exact"
+
+        field_obj = self._model_class.FIELDS.get(field) if self._model_class else None
+        from pymsgraph.models import fields as _fields
+
+        if isinstance(field_obj, _fields.ListField):
+            graph_field = field_obj.graph_attr_name or to_camel_case(field)
+            return compile_list_lookup(graph_field, lookup, value)
+
+        if isinstance(field_obj, _fields.QuerySetField):
+            graph_field = field_obj.graph_attr_name or to_camel_case(field)
+            if lookup == "isnull":
+                return compile_list_lookup(graph_field, "isnull", value)
+
+            model_class = field_obj.model_class or field_obj.queryset_class.model_class
+            if model_class is None:
+                raise ValueError(f"{field!r} related model is not configured")
+
+            if isinstance(model_class, str):
+                from pymsgraph.utils import get_model_class
+
+                model_class = get_model_class(model_class)
+
+            if "__" in lookup:
+                element_field, element_lookup = lookup.split("__", 1)
+            else:
+                element_field, element_lookup = lookup, "exact"
+
+            element = model_class.FIELDS.get(element_field)
+            if element is None:
+                raise ValueError(
+                    f"Unsupported related field: {field}__{element_field!r}"
+                )
+            element_graph = element.graph_attr_name or to_camel_case(element_field)
+
+            try:
+                func = PY_TO_ODATA_QUERY[element_lookup]
+            except KeyError:
+                raise ValueError(f"Unsupported lookup: {element_lookup!r}") from None
+
+            clause = func(f"u/{element_graph}", value)
+            return f"{graph_field}/any(u:{clause})"
+
+        # fallback to scalar compiler
+        return to_odata_query(key, value)
+
+    def _build_params(self) -> dict[str, Any]:
+        """Build OData query parameters"""
+        compiled_params = {}
+        params = deepcopy(self._params)
+
+        if values := params.pop("$filter", None):
+            compiled_params["$filter"] = " and ".join(f"({v})" for v in values)
+
+        if "$select" not in params:
+            default_fields = getattr(self._model_class, "DEFAULT_SELECT_FIELDS", None)
+            if default_fields and len(default_fields) > 1:
+                params["$select"] = sorted(default_fields)
+
+        if values := params.pop("$select", None):
+            if self._model_class.HAS_ID and "id" not in values:
+                values = ["id"] + list(values)
+            compiled_params["$select"] = ",".join([to_camel_case(v) for v in values])
+
+        if values := params.pop("$orderby", None):
+            compiled_params["$orderby"] = ",".join(
+                [
+                    (
+                        to_camel_case(v[0])
+                        if len(v) < 2
+                        else f"{to_camel_case(v[0])} {v[1]}"
+                    )
+                    for v in values
+                ]
+            )
+
+        if values := params.pop("$search", None):
+            compiled_params["$search"] = " AND ".join(values)
+
+        if expands := params.pop("$expand", None):
+            parts: list[str] = []
+            for name, fields in expands.items():
+                if fields:
+                    parts.append(f"{name}($select={','.join(sorted(fields))})")
+                else:
+                    parts.append(name)
+            compiled_params["$expand"] = ",".join(parts)
+
+        compiled_params.update(params)
+
+        _logger.debug("QuerySet._build_params params=%s", compiled_params)
+        return compiled_params
+
+    async def _iter_objects(self, async_gen: Any) -> list[_Tm]:
+        return [i async for i in async_gen]
+
+    def _coerce_objects(
+        self,
+        args: tuple[str | _Tm | QuerySet[_Tm] | dict[str, Any], ...],
+        key: str = "id",
+    ) -> Iterator[_Tm]:
+        def _iter_flatten(iterable) -> Iterator[_Tm]:
+            for item in iterable:
+                if isinstance(item, str):
+                    yield self.make_from_graph(data={key: item})
+                elif isinstance(item, self._model_class):
+                    yield item
+                elif isinstance(item, dict):
+                    yield self._model_class(**item)
+                elif isinstance(item, QuerySet):
+                    try:
+                        asyncio.get_running_loop()
+                    except RuntimeError:
+                        objects = asyncio.run(self._iter_objects(item))
+                    else:
+                        raise RuntimeError(
+                            "Cannot coerce QuerySet in async context; iterate it and pass objects instead."
+                        )
+                    for obj in objects:
+                        yield obj
+
+        seen: set[str] = set()
+
+        for obj in _iter_flatten(args):
+            try:
+                val = getattr(obj, key)
+            except AttributeError:
+                continue
+            if val not in seen:
+                yield obj
+            seen.add(val)
 
 
 class Paginator(Generic[_Tm]):
-	def __init__(
-		self, queryset: QuerySet[_Tm], *, page_size: int | None = None
-	) -> None:
-		qs_kwargs = queryset._kwargs
-		self._qs_kwargs = qs_kwargs
-		self._queryset = queryset
+    def __init__(
+        self, queryset: QuerySet[_Tm], *, page_size: int | None = None
+    ) -> None:
+        qs_kwargs = queryset._kwargs
+        self._qs_kwargs = qs_kwargs
+        self._queryset = queryset
 
-		self._cached_objects: dict[int, list[_Tm]] = {}
-		self._cached_count: int | None = qs_kwargs.get("prefetch_count")
-		self._page_size = page_size or queryset.page_size
-		self._current_page_number: int = 1
-		self._next_link: str | None = qs_kwargs.get("prefetch_next_link")
+        self._cached_objects: dict[int, list[_Tm]] = {}
+        self._cached_count: int | None = qs_kwargs.get("prefetch_count")
+        self._page_size = page_size or queryset.page_size
+        self._current_page_number: int = 1
+        self._next_link: str | None = qs_kwargs.get("prefetch_next_link")
 
-		cached_data = qs_kwargs.get("cached_data")
-		if cached_data is not None:
-			objects = self._cached_objects.setdefault(1, [])
-			for data in cached_data:
-				obj = self._queryset.make_from_graph(data)
-				objects.append(obj)
+        cached_data = qs_kwargs.get("cached_data")
+        if cached_data is not None:
+            objects = self._cached_objects.setdefault(1, [])
+            for data in cached_data:
+                obj = self._queryset.make_from_graph(data)
+                objects.append(obj)
 
-	async def next_page(self) -> list[_Tm]:
-		next_page = self._current_page_number + 1
-		objects = [o async for o in self._fetch_page(next_page)]
-		if objects:
-			self._current_page_number = next_page
-		return objects
+    async def next_page(self) -> list[_Tm]:
+        next_page = self._current_page_number + 1
+        objects = [o async for o in self._fetch_page(next_page)]
+        if objects:
+            self._current_page_number = next_page
+        return objects
 
-	async def count(self) -> int | None:
-		count: int | None = None
-		if (count := self._cached_count) is None:
-			qs = self._queryset.with_consistency_level_eventual()
-			params = qs._build_params()
-			params.pop("$count", None)
-			path = f"{self._queryset.path}/$count"
-			_logger.debug("Paginator.count path=%s params=%s", path, params)
-			raw_count = await self._queryset._client.get(
-				path, params=params, headers={**qs._headers, "Accept": "text/plain"}
-			)
-			count = cast(int, cast(object, raw_count))
-			self._cached_count = count
-		return count
+    async def count(self) -> int | None:
+        count: int | None = None
+        if (count := self._cached_count) is None:
+            qs = self._queryset.with_consistency_level_eventual()
+            params = qs._build_params()
+            params.pop("$count", None)
+            path = f"{self._queryset.path}/$count"
+            _logger.debug("Paginator.count path=%s params=%s", path, params)
+            raw_count = await self._queryset._client.get(
+                path, params=params, headers={**qs._headers, "Accept": "text/plain"}
+            )
+            count = cast(int, cast(object, raw_count))
+            self._cached_count = count
+        return count
 
-	async def total_pages(self) -> int | None:
-		...
+    async def total_pages(self) -> int | None: ...
 
-	async def has_next(self) -> bool:
-		if not self._cached_objects.get(1):
-			async for _ in self._fetch_page(1):
-				...
-		return bool(self._next_link)
+    async def has_next(self) -> bool:
+        if not self._cached_objects.get(1):
+            async for _ in self._fetch_page(1):
+                ...
+        return bool(self._next_link)
 
-	def __aiter__(self) -> AsyncIterator[_Tm]:
-		return self._fetch_page(self._current_page_number)
+    def __aiter__(self) -> AsyncIterator[_Tm]:
+        return self._fetch_page(self._current_page_number)
 
-	async def all(self) -> AsyncIterator[_Tm]:
-		page_numbers = sorted(self._cached_objects)
+    async def all(self) -> AsyncIterator[_Tm]:
+        page_numbers = sorted(self._cached_objects)
 
-		if not page_numbers:
-			async for obj in self._fetch_page(1):
-				yield obj
-			next_page_number = 2
-		else:
-			for page_number in page_numbers:
-				async for obj in self._fetch_page(page_number):
-					yield obj
-			next_page_number = max(page_numbers) + 1
+        if not page_numbers:
+            async for obj in self._fetch_page(1):
+                yield obj
+            next_page_number = 2
+        else:
+            for page_number in page_numbers:
+                async for obj in self._fetch_page(page_number):
+                    yield obj
+            next_page_number = max(page_numbers) + 1
 
-		while self._next_link:
-			async for obj in self._fetch_page(next_page_number):
-				yield obj
-			next_page_number += 1
+        while self._next_link:
+            async for obj in self._fetch_page(next_page_number):
+                yield obj
+            next_page_number += 1
 
-	async def first_page(self) -> list[_Tm]:
-		return [o async for o in self._fetch_page(1)]
+    async def first_page(self) -> list[_Tm]:
+        return [o async for o in self._fetch_page(1)]
 
-	async def _fetch_page(self, page_number: int | None = None) -> AsyncIterator[_Tm]:
-		"""Fetch a single page of results"""
+    async def _fetch_page(self, page_number: int | None = None) -> AsyncIterator[_Tm]:
+        """Fetch a single page of results"""
 
-		if page_number is None:
-			page_number = self._current_page_number
+        if page_number is None:
+            page_number = self._current_page_number
 
-		# e.g. page_number = 3, current_page_number = 1
-		if page_number > self._current_page_number + 1:
-			# $skip and $top not supported at this stage
-			raise ValueError(f"Unable to fetch page, {page_number}.")
+        # e.g. page_number = 3, current_page_number = 1
+        if page_number > self._current_page_number + 1:
+            # $skip and $top not supported at this stage
+            raise ValueError(f"Unable to fetch page, {page_number}.")
 
-		if page_number < 1:
-			raise ValueError("page_number must be greater than 0.")
+        if page_number < 1:
+            raise ValueError("page_number must be greater than 0.")
 
-		objects = self._cached_objects.get(page_number)
-		if objects is not None:
-			for obj in objects:
-				yield obj
-			return
+        objects = self._cached_objects.get(page_number)
+        if objects is not None:
+            for obj in objects:
+                yield obj
+            return
 
-		queryset = self._queryset
+        queryset = self._queryset
 
-		if page_number == 1:
-			params = queryset._build_params()
-			if params.get("$top") is None and self._page_size is not None:
-				params["$top"] = str(self._page_size)
+        if page_number == 1:
+            params = queryset._build_params()
+            if params.get("$top") is None and self._page_size is not None:
+                params["$top"] = str(self._page_size)
 
-			path = queryset.path
-			if (path_func := getattr(queryset, "_get_path", None)) is not None:
-				path: str = await path_func()
+            path = queryset.path
+            if (path_func := getattr(queryset, "_get_path", None)) is not None:
+                path: str = await path_func()
 
-			_logger.debug(
-				"Paginator._fetch_page page=%s path=%s params=%s",
-				page_number,
-				path,
-				params,
-			)
-			response = await queryset._client.get(
-				path, params=params, headers=queryset._headers
-			)
-		else:
-			if not self._next_link:
-				return
-			_logger.debug(
-				"Paginator._fetch_page page=%s next_link=%s",
-				page_number,
-				self._next_link,
-			)
-			response = await queryset._client.get(
-				url=self._next_link, headers=queryset._headers
-			)
+            _logger.debug(
+                "Paginator._fetch_page page=%s path=%s params=%s",
+                page_number,
+                path,
+                params,
+            )
+            response = await queryset._client.get(
+                path, params=params, headers=queryset._headers
+            )
+        else:
+            if not self._next_link:
+                return
+            _logger.debug(
+                "Paginator._fetch_page page=%s next_link=%s",
+                page_number,
+                self._next_link,
+            )
+            response = await queryset._client.get(
+                url=self._next_link, headers=queryset._headers
+            )
 
-		self._next_link = response.get("@odata.nextLink")
-		self._cached_count = response.get("@odata.count")
-		objects = self._cached_objects.setdefault(page_number, [])
+        self._next_link = response.get("@odata.nextLink")
+        self._cached_count = response.get("@odata.count")
+        objects = self._cached_objects.setdefault(page_number, [])
 
-		for data in response.get("value", []):
-			obj = queryset.make_from_graph(data)
-			objects.append(obj)
+        for data in response.get("value", []):
+            obj = queryset.make_from_graph(data)
+            objects.append(obj)
 
-		prefetch_fields = self._qs_kwargs.get("prefetch", [])
-		if prefetch_fields:
-			await queryset._prefetch_related(objects, prefetch_fields)
+        prefetch_fields = self._qs_kwargs.get("prefetch", [])
+        if prefetch_fields:
+            await queryset._prefetch_related(objects, prefetch_fields)
 
-		_logger.debug(
-			"Paginator._fetch_page page=%s results=%s next_link=%s",
-			page_number,
-			len(objects),
-			bool(self._next_link),
-		)
-		for obj in objects:
-			yield obj
+        _logger.debug(
+            "Paginator._fetch_page page=%s results=%s next_link=%s",
+            page_number,
+            len(objects),
+            bool(self._next_link),
+        )
+        for obj in objects:
+            yield obj
 
-		# increase _current_page_number only if page_number is greater than.
-		# page_number=2, current_page_number=1
-		if page_number > self._current_page_number:
-			self._current_page_number = page_number
+        # increase _current_page_number only if page_number is greater than.
+        # page_number=2, current_page_number=1
+        if page_number > self._current_page_number:
+            self._current_page_number = page_number
 
 
 class Q:
-	OR = "OR"
-	AND = "AND"
-	NOT = "NOT"
+    OR = "OR"
+    AND = "AND"
+    NOT = "NOT"
 
-	def __init__(self, **kwargs):
-		self.filters = kwargs
-		self.connector = self.AND
-		self.negated = False
-		self.children: list["Q"] = []
+    def __init__(self, **kwargs):
+        self.filters = kwargs
+        self.connector = self.AND
+        self.negated = False
+        self.children: list["Q"] = []
 
-	def __or__(self, other: "Q") -> "Q":
-		"""Combine with OR: Q(...) | Q(...)"""
-		q = Q()
-		q.connector = self.OR
-		q.children = [self, other]
-		return q
+    def __or__(self, other: "Q") -> "Q":
+        """Combine with OR: Q(...) | Q(...)"""
+        q = Q()
+        q.connector = self.OR
+        q.children = [self, other]
+        return q
 
-	def __and__(self, other: "Q") -> "Q":
-		"""Combine with AND: Q(...) & Q(...)"""
-		q = Q()
-		q.connector = self.AND
-		q.children = [self, other]
-		return q
+    def __and__(self, other: "Q") -> "Q":
+        """Combine with AND: Q(...) & Q(...)"""
+        q = Q()
+        q.connector = self.AND
+        q.children = [self, other]
+        return q
 
-	def __invert__(self) -> "Q":
-		"""Negate with NOT: ~Q(...)"""
-		q = Q(**self.filters)
-		q.negated = not self.negated
-		q.children = self.children
-		q.connector = self.connector
-		return q
+    def __invert__(self) -> "Q":
+        """Negate with NOT: ~Q(...)"""
+        q = Q(**self.filters)
+        q.negated = not self.negated
+        q.children = self.children
+        q.connector = self.connector
+        return q
 
-	def to_odata_query(self) -> str:
-		"""Convert Q object to OData filter string"""
-		if self.children:
-			# Complex Q with children
-			child_expressions = [child.to_odata_query() for child in self.children]
+    def to_odata_query(self) -> str:
+        """Convert Q object to OData filter string"""
+        if self.children:
+            # Complex Q with children
+            child_expressions = [child.to_odata_query() for child in self.children]
 
-			if self.connector == self.OR:
-				expr = " or ".join(f"({e})" for e in child_expressions)
-			else:  # AND
-				expr = " and ".join(f"({e})" for e in child_expressions)
+            if self.connector == self.OR:
+                expr = " or ".join(f"({e})" for e in child_expressions)
+            else:  # AND
+                expr = " and ".join(f"({e})" for e in child_expressions)
 
-			if self.negated:
-				return f"not ({expr})"
-			return f"{expr}"
+            if self.negated:
+                return f"not ({expr})"
+            return f"{expr}"
 
-		else:
-			# Simple Q with filters
-			expressions = []
-			for key, value in self.filters.items():
-				expressions.append(to_odata_query(key, value))
+        else:
+            # Simple Q with filters
+            expressions = []
+            for key, value in self.filters.items():
+                expressions.append(to_odata_query(key, value))
 
-			if len(expressions) == 1:
-				result = expressions[0]
-			else:
-				result = " and ".join(f"({e})" for e in expressions)
+            if len(expressions) == 1:
+                result = expressions[0]
+            else:
+                result = " and ".join(f"({e})" for e in expressions)
 
-			if self.negated:
-				return f"not ({result})"
-			return result
+            if self.negated:
+                return f"not ({result})"
+            return result
 
-	def to_search_format(self) -> Any:
-		"""Convert Q object to $search query string"""
-		if self.children:
-			values = [child.to_search_format() for child in self.children]
-			expr = f" {self.connector} ".join(values)
-			if any(map(lambda x: x.startswith("("), values)):
-				return expr
-			return f"({expr})"
+    def to_search_format(self) -> Any:
+        """Convert Q object to $search query string"""
+        if self.children:
+            values = [child.to_search_format() for child in self.children]
+            expr = f" {self.connector} ".join(values)
+            if any(map(lambda x: x.startswith("("), values)):
+                return expr
+            return f"({expr})"
 
-		expressions: list[str] = []
-		for key, value in self.filters.items():
-			expr = f'"{to_camel_case(key)}:{value}"'
-			expressions.append(expr)
-		return " AND ".join(expressions)
+        expressions: list[str] = []
+        for key, value in self.filters.items():
+            expr = f'"{to_camel_case(key)}:{value}"'
+            expressions.append(expr)
+        return " AND ".join(expressions)
 
 
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -1007,104 +1639,104 @@ _ISO_DATETIME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T")
 
 
 def _format_datetime_literal(value: datetime) -> str:
-	if value.tzinfo is None:
-		value = value.replace(tzinfo=timezone.utc)
-	else:
-		value = value.astimezone(timezone.utc)
-	return value.isoformat().replace("+00:00", "Z")
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.isoformat().replace("+00:00", "Z")
 
 
 def _str_to_odata_literal(value: str) -> str:
-	s = value.strip()
-	if _ISO_DATE_RE.match(s):
-		return f"{s}T00:00:00Z"
-	if _ISO_DATETIME_RE.match(s):
-		if s.endswith("Z"):
-			return s
-		try:
-			dt = datetime.fromisoformat(s)
-		except ValueError:
-			return "'" + s.replace("'", "''") + "'"
-		return _format_datetime_literal(dt)
-	return "'" + s.replace("'", "''") + "'"
+    s = value.strip()
+    if _ISO_DATE_RE.match(s):
+        return f"{s}T00:00:00Z"
+    if _ISO_DATETIME_RE.match(s):
+        if s.endswith("Z"):
+            return s
+        try:
+            dt = datetime.fromisoformat(s)
+        except ValueError:
+            return "'" + s.replace("'", "''") + "'"
+        return _format_datetime_literal(dt)
+    return "'" + s.replace("'", "''") + "'"
 
 
 PY_TO_ODATA_LITERAL: dict[str, Any] = {
-	"bool": lambda x: str(x).lower(),
-	"nonetype": "null",
-	"int": lambda x: str(x),
-	"float": lambda x: str(x),
-	"datetime": _format_datetime_literal,
-	"date": lambda x: f"{x.isoformat()}T00:00:00Z",
-	"str": _str_to_odata_literal,
+    "bool": lambda x: str(x).lower(),
+    "nonetype": "null",
+    "int": lambda x: str(x),
+    "float": lambda x: str(x),
+    "datetime": _format_datetime_literal,
+    "date": lambda x: f"{x.isoformat()}T00:00:00Z",
+    "str": _str_to_odata_literal,
 }
 
 
 def in_lookup(field, value):
-	if not isinstance(value, Iterable) or isinstance(value, (str, bytes)):
-		raise TypeError("__in expects a non-string iterable")
-	parts = [f"{field} eq {to_odata_literal(v)}" for v in value]
-	return "(" + " or ".join(parts) + ")" if parts else "(false)"
+    if not isinstance(value, Iterable) or isinstance(value, (str, bytes)):
+        raise TypeError("__in expects a non-string iterable")
+    parts = [f"{field} eq {to_odata_literal(v)}" for v in value]
+    return "(" + " or ".join(parts) + ")" if parts else "(false)"
 
 
 PY_TO_ODATA_QUERY: dict[str, Any] = {
-	"exact": lambda f, v: f"{f} eq {to_odata_literal(v)}",
-	"ne": lambda f, v: f"{f} ne {to_odata_literal(v)}",
-	"gt": lambda f, v: f"{f} gt {to_odata_literal(v)}",
-	"gte": lambda f, v: f"{f} ge {to_odata_literal(v)}",
-	"lt": lambda f, v: f"{f} lt {to_odata_literal(v)}",
-	"lte": lambda f, v: f"{f} le {to_odata_literal(v)}",
-	"contains": lambda f, v: f"contains({f}, {to_odata_literal(v)})",
-	"startswith": lambda f, v: f"startswith({f}, {to_odata_literal(v)})",
-	"endswith": lambda f, v: f"endswith({f}, {to_odata_literal(v)})",
-	"isnull": lambda f, v: f"{f} eq null" if v else f"{f} ne null",
-	"in": in_lookup,
+    "exact": lambda f, v: f"{f} eq {to_odata_literal(v)}",
+    "ne": lambda f, v: f"{f} ne {to_odata_literal(v)}",
+    "gt": lambda f, v: f"{f} gt {to_odata_literal(v)}",
+    "gte": lambda f, v: f"{f} ge {to_odata_literal(v)}",
+    "lt": lambda f, v: f"{f} lt {to_odata_literal(v)}",
+    "lte": lambda f, v: f"{f} le {to_odata_literal(v)}",
+    "contains": lambda f, v: f"contains({f}, {to_odata_literal(v)})",
+    "startswith": lambda f, v: f"startswith({f}, {to_odata_literal(v)})",
+    "endswith": lambda f, v: f"endswith({f}, {to_odata_literal(v)})",
+    "isnull": lambda f, v: f"{f} eq null" if v else f"{f} ne null",
+    "in": in_lookup,
 }
 
 
 def to_odata_literal(value: Any) -> str:
-	_type = type(value).__name__.lower()
-	try:
-		func = PY_TO_ODATA_LITERAL[_type]
-	except KeyError:
-		raise TypeError(f"Unsupported literal type: {type(value)!r}") from None
-	return func(value)
+    _type = type(value).__name__.lower()
+    try:
+        func = PY_TO_ODATA_LITERAL[_type]
+    except KeyError:
+        raise TypeError(f"Unsupported literal type: {type(value)!r}") from None
+    return func(value)
 
 
 def to_odata_query(key: str, value: Any) -> str:
-	if "__" in key:
-		field, lookup = key.split("__", 1)
-	else:
-		field, lookup = key, "exact"
-	graph_field = to_camel_case(field)
-	try:
-		func = PY_TO_ODATA_QUERY[lookup]
-	except:
-		raise ValueError(f"Unsupported lookup: {lookup!r}") from None
-	return func(graph_field, value)
+    if "__" in key:
+        field, lookup = key.split("__", 1)
+    else:
+        field, lookup = key, "exact"
+    graph_field = to_camel_case(field)
+    try:
+        func = PY_TO_ODATA_QUERY[lookup]
+    except:
+        raise ValueError(f"Unsupported lookup: {lookup!r}") from None
+    return func(graph_field, value)
 
 
 def compile_list_lookup(
-	graph_field: str, lookup: str, value: Any, var: str = "i"
+    graph_field: str, lookup: str, value: Any, var: str = "i"
 ) -> str:
-	"""
-	Compile lookups for list fields into any()/count OData expressions.
-	"""
-	if lookup == "isnull":
-		if not isinstance(value, bool):
-			raise ValueError(f"isnull expects bool, got {type(value).__name__}")
-		return f"{graph_field}/$count eq 0" if value else f"{graph_field}/$count ne 0"
+    """
+    Compile lookups for list fields into any()/count OData expressions.
+    """
+    if lookup == "isnull":
+        if not isinstance(value, bool):
+            raise ValueError(f"isnull expects bool, got {type(value).__name__}")
+        return f"{graph_field}/$count eq 0" if value else f"{graph_field}/$count ne 0"
 
-	if lookup == "exact":
-		lookup = "exact"
+    if lookup == "exact":
+        lookup = "exact"
 
-	try:
-		func = PY_TO_ODATA_QUERY[lookup]
-	except KeyError:
-		raise ValueError(f"Unsupported lookup for list field: {lookup!r}") from None
+    try:
+        func = PY_TO_ODATA_QUERY[lookup]
+    except KeyError:
+        raise ValueError(f"Unsupported lookup for list field: {lookup!r}") from None
 
-	clause = func(var, value)
-	return f"{graph_field}/any({var}:{clause})"
+    clause = func(var, value)
+    return f"{graph_field}/any({var}:{clause})"
 
 
 class DoesNotExist(Exception): ...

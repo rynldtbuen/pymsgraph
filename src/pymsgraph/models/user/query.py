@@ -33,7 +33,41 @@ class AssignedLicensesQuerySet(QuerySet[AssignedLicense]):
         request_id: str | None = None,
     ) -> dict[str, Any] | None:
         """
-        Add license/s to this user.
+        Add one or more licenses to a single user.
+
+        This method targets the user bound to this queryset path (for example
+        `/users/{id}/assignLicense`). Inputs may be SKU ids, product names, or
+        `AssignedLicense` objects. Product names are resolved to SKU ids when
+        possible through `SubscribedSku.get_sku_id(...)`.
+
+        Args:
+                *args:
+                        Licenses to add. Supported values:
+                        - SKU id string
+                        - Product name string (resolvable to SKU id)
+                        - `AssignedLicense` object
+                as_batch_request:
+                        When `True`, do not call Graph. Return a batch request
+                        item payload instead.
+                request_id:
+                        Optional request id included when `as_batch_request=True`.
+
+        Returns:
+                dict[str, Any] | None:
+                        - Batch mode: request payload dict.
+                        - Non-batch mode: `None`.
+                        - `None` if no valid licenses are provided.
+
+        Raises:
+                ValueError:
+                        If any SKU id is unknown or has no available units.
+                httpx.HTTPStatusError:
+                        If Microsoft Graph returns an HTTP error.
+
+        Notes:
+                - Uses `POST {path}` with `addLicenses` payload.
+                - On successful non-batch calls, local `SubscribedSku.consumed_units`
+                  cache is incremented by 1 for each added SKU.
         """
 
         _args: list[str | AssignedLicense] = []
@@ -92,7 +126,30 @@ class AssignedLicensesQuerySet(QuerySet[AssignedLicense]):
         as_batch: bool = False,
     ) -> dict[str, Any] | None:
         """
-        Remove license/s from this user.
+        Remove one or more licenses from a single user.
+
+        This method targets the user bound to this queryset path and sends
+        `removeLicenses` via Graph `assignLicense` API.
+
+        Args:
+                *args:
+                        Licenses to remove. Supported values:
+                        - SKU id string
+                        - `AssignedLicense` object
+                        - `QuerySet[AssignedLicense]`
+                as_batch:
+                        When `True`, do not call Graph. Return request kwargs
+                        payload for inclusion in a `$batch` request.
+
+        Returns:
+                dict[str, Any] | None:
+                        - Batch mode: request kwargs dict.
+                        - Non-batch mode: `None`.
+                        - `None` if no licenses are provided after coercion.
+
+        Raises:
+                httpx.HTTPStatusError:
+                        If Microsoft Graph returns an HTTP error.
         """
 
         objects = self._coerce_objects(args, key="sku_id")
@@ -114,6 +171,13 @@ class AssignedLicensesQuerySet(QuerySet[AssignedLicense]):
 
 
 class AssignedLicensesQuerySetProxy:
+    """
+    Proxy facade for bulk assigned-license operations on a `UserQuerySet`.
+
+    Exposes convenience methods that operate over all users matched by the
+    parent queryset, using Graph `$batch` requests under the hood.
+    """
+
     def __init__(self, parent: "QuerySet[User]"):
         self._parent = parent
 
@@ -121,11 +185,46 @@ class AssignedLicensesQuerySetProxy:
         self, *args: "str | AssignedLicense", force=False
     ) -> dict[str, dict[str, int]]:
         """
-        Add license(s) to all users in this queryset.
+        Add one or more licenses to all users in the parent queryset.
 
-        Usage:
-            client.users.filter(...).assigned_licenses.add("sku1", AssignLicense(sku_id="sku2"))
+        Each input item is normalized to an `AssignedLicense` and validated
+        against `client.subscribed_skus` cache. The operation is executed with
+        Graph `$batch` requests (up to 20 users per batch). License assignment
+        respects available units per SKU and skips users once capacity is
+        exhausted.
+
+        Args:
+                *args:
+                        License identifiers to add. Each item can be:
+                        - SKU id string
+                        - `AssignedLicense` instance
+
+        Returns:
+                dict[str, dict[str, int]]:
+                        Per-SKU summary with:
+                        - `assigned`: number of users assigned the SKU
+                        - `skipped`: number of users not assigned due to capacity
+
+        Raises:
+                ValueError:
+                        If a SKU id is unknown or has no available units.
+                httpx.HTTPStatusError:
+                        If Microsoft Graph returns an error for any batch request.
+
+        Notes:
+                - Batch requests call `POST /users/{id}/assignLicense`.
+                - `SubscribedSku.consumed_units` cache is updated after success.
+
+        Quick usage:
+                ```python
+                summary = await client.users.filter(account_enabled=True).assigned_licenses.add(
+                        "6fd2c87f-b296-42f0-b197-1e91e994b900"
+                )
+                print(summary)
+                ```
         """
+
+        # TODO: allow passing the product name and resolve it via SubscribedSku.get_sku_id
 
         c = self._parent._client
         available: dict[str, "SubscribedSku"] = {}
@@ -190,14 +289,48 @@ class AssignedLicensesQuerySetProxy:
         }
 
     async def remove(
-        self, *args: str | AssignedLicense, force=False, all=False
+        self, *args: str | AssignedLicense, force: bool = False, all: bool = False
     ) -> None:
-        """
-        Remove license(s) from all users in this queryset.
+        """sss
+        Remove one or more licenses from all users in the parent queryset.
 
-        Usage:
-            client.users.filter(...).assigned_licenses.remove("sku1", AssignLicense(sku_id="sku2"))
+        Input items are normalized to `AssignedLicense` objects, then each user
+        is processed via Graph `$batch` requests (up to 20 users per batch).
+        For each user, all requested SKU ids are sent in a single
+        `assignLicense` request with `addLicenses=[]`.
+
+        Args:
+                *args:
+                        License identifiers to remove. Each item can be:
+                        - SKU id string
+                        - `AssignedLicense` instance
+                force:
+                        Reserved for compatibility. Currently has no effect.
+                all:
+                        Reserved for compatibility. Currently has no effect.
+
+        Returns:
+                None
+
+        Raises:
+                ValueError:
+                        If a SKU id is unknown.
+                httpx.HTTPStatusError:
+                        If Microsoft Graph returns an error for any batch request.
+
+        Notes:
+                - Batch requests call `POST /users/{id}/assignLicense`.
+                - `SubscribedSku.consumed_units` cache is decreased after success.
+
+        Quick usage:
+                ```python
+                await client.users.filter(department="IT").assigned_licenses.remove(
+                        "6fd2c87f-b296-42f0-b197-1e91e994b900"
+                )
+                ```
         """
+
+        # TODO: allow passing the product name and resolve it via SubscribedSku.get_sku_id
 
         c = self._parent._client
         objects = list(AssignedLicensesQuerySet(c)._coerce_objects(args, key="sku_id"))
