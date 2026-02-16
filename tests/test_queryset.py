@@ -417,3 +417,114 @@ async def test_to_csv_with_callable_fieldnames(make_client: "MakeClient", tmp_pa
     content = out_path.read_text(encoding="utf-8").splitlines()
     assert content[0] == "full_name"
     assert content[1] == "Ada L"
+
+
+@pytest.mark.asyncio
+async def test_paginator_first_next_has_next_and_cached_count(make_client: "MakeClient"):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1.0/users":
+            if "skip=1" in str(request.url):
+                return httpx.Response(
+                    200,
+                    json={"value": [{"id": "u2"}], "@odata.count": 2},
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "value": [{"id": "u1"}],
+                    "@odata.nextLink": "https://graph.microsoft.com/v1.0/users?$skip=1",
+                    "@odata.count": 2,
+                },
+            )
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    c, requests = make_client(handler)
+    paginator = c.users.iterator(page_size=1)
+
+    page1 = await paginator.first_page()
+    assert [u.id for u in page1] == ["u1"]
+    assert await paginator.has_next() is True
+
+    page2 = await paginator.next_page()
+    assert [u.id for u in page2] == ["u2"]
+    assert await paginator.has_next() is False
+
+    # Count should use @odata.count cached from page response and avoid /$count call.
+    assert await paginator.count() == 2
+    assert not any(r["path"] == "/v1.0/users/$count" for r in requests)
+
+
+@pytest.mark.asyncio
+async def test_paginator_count_uses_count_endpoint_once(make_client: "MakeClient"):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1.0/users/$count":
+            return httpx.Response(200, text="7")
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    c, requests = make_client(handler)
+    paginator = c.users.iterator(page_size=25)
+
+    assert await paginator.count() == 7
+    assert await paginator.count() == 7  # second call should be served from cache
+
+    count_calls = [r for r in requests if r["path"] == "/v1.0/users/$count"]
+    assert len(count_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_paginator_fetch_page_rejects_non_sequential_page(
+    make_client: "MakeClient",
+):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    c, _ = make_client(handler)
+    paginator = c.users.iterator(page_size=10)
+
+    with pytest.raises(ValueError, match=r"Unable to fetch page, 3"):
+        _ = [o async for o in paginator._fetch_page(3)]
+
+
+@pytest.mark.asyncio
+async def test_seeded_queryset_iterator_not_available(users_qs) -> None:
+    seeded = users_qs.with_objects("u1")
+    with pytest.raises(ValueError, match="Paginator is not available for seeded querysets"):
+        seeded.iterator()
+
+
+@pytest.mark.asyncio
+async def test_paginator_all_uses_cached_items_then_fetches_remaining_pages(
+    make_client: "MakeClient",
+):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1.0/users":
+            if "skip=1" in str(request.url):
+                return httpx.Response(200, json={"value": [{"id": "u2"}]})
+            return httpx.Response(
+                200,
+                json={
+                    "value": [{"id": "u1"}],
+                    "@odata.nextLink": "https://graph.microsoft.com/v1.0/users?$skip=1",
+                },
+            )
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    c, requests = make_client(handler)
+    paginator = c.users.iterator(page_size=1)
+
+    # Prime cache with page 1.
+    page1 = await paginator.first_page()
+    assert [u.id for u in page1] == ["u1"]
+
+    # all() should yield cached page 1 first, then fetch only remaining pages.
+    items = [u async for u in paginator.all()]
+    assert [u.id for u in items] == ["u1", "u2"]
+
+    user_get_calls = [
+        r
+        for r in requests
+        if r["method"] == "GET" and r["path"] == "/v1.0/users"
+    ]
+    assert len(user_get_calls) == 2
+    assert "skip=1" not in user_get_calls[0]["url"]
+    assert "skip=1" in user_get_calls[1]["url"]
