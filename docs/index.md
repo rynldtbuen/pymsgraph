@@ -97,14 +97,14 @@ async def main() -> None:
         client_secret=os.environ["AZURE_CLIENT_SECRET"],
     )
 
-    async with Client(provider) as graph:
+    async with Client(provider) as c:
         # 1) Fetch one user by object ID or UPN.
-        user = await graph.users.get(id="alice@contoso.com")
+        user = await c.users.get(id="alice@contoso.com")
         print(user.id, user.display_name, user.mail)
 
         # 2) Build a lazy queryset.
         enabled_users_qs = (
-            graph.users
+            c.users
             .filter(account_enabled=True)
             .select("display_name", "mail")
             .order_by("display_name")
@@ -112,8 +112,7 @@ async def main() -> None:
         )
 
         # 3) Execute by iterating/materializing.
-        enabled_users = [u async for u in enabled_users_qs]
-        for u in enabled_users:
+        async for u in enabled_users_qs:
             print(u.display_name, u.mail)
 
 
