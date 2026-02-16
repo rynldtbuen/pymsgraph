@@ -26,29 +26,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-      uses: actions/checkout@v4
+        uses: actions/checkout@v4
 
       - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: "3.12"
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
       - name: Configure Pages
-      uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v5
 
       - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -e .
-        pip install -r docs/requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install -r docs/requirements.txt
 
       - name: Build docs
-      run: mkdocs build --strict
+        run: mkdocs build --strict
 
       - name: Upload artifact
-      uses: actions/upload-pages-artifact@v3
-      with:
-        path: site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
 
   deploy:
     environment:
@@ -58,5 +58,5 @@ jobs:
     needs: build
     steps:
       - name: Deploy to GitHub Pages
-      id: deployment
-      uses: actions/deploy-pages@v4
+        id: deployment
+        uses: actions/deploy-pages@v4
