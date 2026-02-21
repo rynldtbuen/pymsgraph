@@ -5,48 +5,31 @@
 - Model: `Group`
 - Root queryset: `client.groups` (`GroupQuerySet`)
 - Graph path: `/groups`
-- Search field: `display_name`
 
-## Common Properties
+## Create a security group
 
-- Identity: `id`, `display_name`, `description`
-- Mail/security: `mail`, `mail_enabled`, `mail_nickname`, `security_enabled`
-- Classification/visibility: `group_types`, `visibility`, `classification`
-- Navigation: `members`
+```python
+group = await client.groups.create_security_group(
+    display_name="Platform Security",
+    mail_nickname="platform-security",
+)
 
-Computed property:
+print(group.id, group.display_name, group.group_type)
+```
 
-- `group.group_type`: resolves to one of `microsoft365`, `security_mail_enabled`, `security`, `distribution`, or `unknown`
+## Create a mail-enabled security group
 
-For full declared fields, see `src/pymsgraph/models/group/__init__.py`.
+```python
+group = await client.groups.create_security_group(
+    display_name="Ops Notifications",
+    mail_nickname="ops-notifications",
+    mail_enabled=True,
+)
 
-## GroupQuerySet
+print(group.mail_enabled, group.security_enabled, group.group_type)
+```
 
-### Inherited QuerySet Operations
-
-- `filter`, `exclude`, `search`
-- `select`, `order_by`, `top`
-- `get`, `first`, `count`, `values`
-
-### Group-Specific QuerySet Methods
-
-| API | Description |
-|---|---|
-| `await groups.create_security_group(...)` | Creates security-enabled group helper |
-| `await groups.create_m365_group(...)` | Creates Unified (Microsoft 365) group helper |
-
-## Members Relationship
-
-`group.members` returns `MembersQuerySet` with member management helpers:
-
-| API | Description |
-|---|---|
-| `await group.members.add(...)` | Add one or more directory objects as members (batched) |
-| `await group.members.remove(...)` | Remove one or more members (batched) |
-| `await group.members.copy_to(...)` | Copy current members to target group(s) |
-| `group.members.users` | User-only view as `UsersQuerySet` |
-
-## Example
+## Create a Microsoft 365 group
 
 ```python
 group = await client.groups.create_m365_group(
@@ -55,5 +38,76 @@ group = await client.groups.create_m365_group(
     visibility="Private",
 )
 
-await group.members.add("user-object-id")
+print(group.id, group.display_name, group.group_type)
 ```
+
+## Add and remove members
+
+```python
+group = await client.groups.get(id="group-object-id")
+
+await group.members.add(
+    "user-object-id-1",
+    "user-object-id-2",
+)
+
+await group.members.remove("user-object-id-2")
+```
+
+## Copy members to another group
+
+```python
+source = await client.groups.get(id="source-group-id")
+await source.members.copy_to("target-group-id")
+```
+
+## User-only member queryset
+
+```python
+group = await client.groups.get(id="group-object-id")
+
+user_members_qs = group.members.users
+user_members = [u async for u in user_members_qs]
+print(len(user_members))
+```
+
+## Update group fields
+
+```python
+group = await client.groups.get(id="group-object-id")
+await group.update(description="Platform security and access control group")
+
+updated = await client.groups.filter(classification="Internal").update(
+    visibility="Private",
+)
+print(updated)
+```
+
+## Notes
+
+- `group.group_type` is computed from `group_types`, `mail_enabled`, and `security_enabled`.
+- `group.members.add/remove/copy_to` use Graph batching under the hood (chunked requests).
+- `group.members.users` provides a user-only view of the group membership relationship.
+- Microsoft Graph member-management APIs (`add/remove members`, `add/remove owners`) are supported for **security groups** and **Microsoft 365 groups**.
+- **Distribution lists** and **mail-enabled security groups** are Exchange-managed and are not supported by these Graph group membership update APIs.
+
+## API Reference
+
+::: pymsgraph.models.group.Group
+    options:
+      filters: public
+
+
+::: pymsgraph.models.group.GroupQuerySet
+    options:
+      filters: public
+
+
+::: pymsgraph.models.group.query.MembersQuerySet
+    options:
+      filters: public
+
+
+::: pymsgraph.models.group.query.UsersQuerySet
+    options:
+      filters: public

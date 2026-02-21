@@ -25,8 +25,9 @@ _logger = logging.getLogger(__name__)
 
 class Site(BaseItem):
     """
-    Graph site resource.
+    Graph SharePoint site resource.
 
+    Reference:
     https://learn.microsoft.com/en-us/graph/api/resources/site
     """
 
@@ -57,12 +58,34 @@ class Site(BaseItem):
 
     @property
     def path(self) -> str:
+        """
+        Resolve the request path for this site instance.
+
+        Returns:
+            str:
+                Site path based on `id` or the model's bound path argument.
+
+        Notes:
+            If `id` is missing but a path was provided at construction time
+            (for example from `SiteQuerySet.by_path(...)`), that path is used.
+        """
         if self.id is None and (p := self._args[1]) is not None:
             return p
         return super().path
 
     @property
     def drive(self):
+        """
+        Return a queryset/model handle for the site's default document library.
+
+        Returns:
+            Drive:
+                Drive handle targeting `{site.path}/drive`.
+
+        Notes:
+            For path-based site addressing, a trailing `:` is preserved before
+            appending `/drive` to comply with Graph URL rules.
+        """
         p = self.path
         if ":" in p:
             p = f"{p}:"
@@ -71,6 +94,17 @@ class Site(BaseItem):
 
     @property
     def lists(self):
+        """
+        Return a queryset for SharePoint lists under this site.
+
+        Returns:
+            ListQuerySet:
+                Queryset targeting `{site.path}/lists`.
+
+        Notes:
+            For path-based site addressing, a trailing `:` is preserved before
+            appending `/lists` to comply with Graph URL rules.
+        """
         p = self.path
         if ":" in p:
             p = f"{p}:"
@@ -81,6 +115,29 @@ class Site(BaseItem):
         return f"<Site: {self.display_name or self.name}>"
 
     async def get(self) -> "Site":
+        """
+        Fetch and hydrate this site from Graph.
+
+        Returns:
+            Site:
+                Refreshed site model from Graph response data.
+
+        Notes:
+            If the path contains the `HOSTNAME` placeholder, it is resolved
+            via `SiteQuerySet._get_hostname()` before the request is sent.
+
+        Example:
+            ```python
+            # by_path() may create a lazy path with HOSTNAME placeholder:
+            # /sites/HOSTNAME:/sites/Engineering
+            lazy_site = client.sites.by_path("/sites/Engineering")
+
+            # get() resolves HOSTNAME (e.g. contoso.sharepoint.com) and fetches:
+            # /sites/contoso.sharepoint.com:/sites/Engineering
+            site = await lazy_site.get()
+            print(site.id, site.display_name)
+            ```
+        """
         p = self.path
         c = self._client
         if "HOSTNAME" in p:
@@ -109,12 +166,35 @@ class Site(BaseItem):
 
 
 class SiteQuerySet(QuerySet[Site]):
+    """
+    QuerySet for Microsoft Graph SharePoint site resources.
+    """
+
     model_class = Site
 
     @override
     def search(
         self, *q_objects: "Q", keyword: str | None = None, **kwargs: Any
     ) -> Self:
+        """
+        Build a site search queryset using keyword search.
+
+        Args:
+            *q_objects:
+                Not supported for site search. Must be empty.
+            keyword:
+                Search keyword passed as Graph `search` parameter.
+            **kwargs:
+                Not supported for site search. Must be empty.
+
+        Returns:
+            Self:
+                Cloned queryset with consistency header and search keyword set.
+
+        Raises:
+            ValueError:
+                If `q_objects`/`kwargs` are provided, or `keyword` is missing.
+        """
         qs = self.with_consistency_level_eventual()
         if q_objects or kwargs:
             raise ValueError(
@@ -132,6 +212,27 @@ class SiteQuerySet(QuerySet[Site]):
     async def get(
         self, id: str | None = None, *, path: str | None = None, **kwargs: Any
     ) -> Site:
+        """
+        Retrieve a site by site id or server-relative path.
+
+        Args:
+            id:
+                Site id for direct lookup (`/sites/{id}`).
+            path:
+                Server-relative path (for example `/sites/Engineering`).
+            **kwargs:
+                Reserved for compatibility. Not used.
+
+        Returns:
+            Site:
+                Hydrated site model.
+
+        Raises:
+            ValueError:
+                If neither `id` nor `path` is provided.
+            httpx.HTTPStatusError:
+                If Graph returns an HTTP error.
+        """
         data = None
         if id:
             request_path = f"{self.path}/{id}"
@@ -166,6 +267,26 @@ class SiteQuerySet(QuerySet[Site]):
         return self.make_from_graph(data)
 
     def by_path(self, path: str) -> Site:
+        """
+        Create a lazy `Site` handle from a server-relative path.
+
+        Args:
+            path:
+                Server-relative site path (for example `/sites/Engineering`).
+
+        Returns:
+            Site:
+                Site model bound to a path-based Graph endpoint.
+
+        Raises:
+            ValueError:
+                If `path` is empty.
+
+        Notes:
+            The resulting site is not fetched until `.get()` is called.
+            If hostname is not yet cached, `HOSTNAME` placeholder is used and
+            resolved later by `Site.get()`.
+        """
         p = (path or "").strip()
         if not p:
             raise ValueError(f"{type(self).__name__} by_path requires a path.")

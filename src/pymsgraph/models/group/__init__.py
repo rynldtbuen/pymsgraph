@@ -21,8 +21,9 @@ _logger = logging.getLogger(__name__)
 
 class Group(DirectoryObject):
     """
-    Graph group resource type
+    Graph group resource.
 
+    Reference:
     https://learn.microsoft.com/en-us/graph/api/resources/group?view=graph-rest-1.0
     """
 
@@ -108,6 +109,26 @@ class Group(DirectoryObject):
 
     @property
     def group_type(self) -> str:
+        """
+        Resolve the effective group category from Graph fields.
+
+        Resolution order:
+            1. `microsoft365` when `group_types` contains `"Unified"`
+            2. `security_mail_enabled` when both `mail_enabled` and
+               `security_enabled` are true
+            3. `security` when only `security_enabled` is true
+            4. `distribution` when only `mail_enabled` is true
+            5. `unknown` otherwise
+
+        Returns:
+            str:
+                One of:
+                - `Group.MICROSOFT365`
+                - `Group.SECURITY_MAIL_ENABLED`
+                - `Group.SECURITY`
+                - `Group.DISTRIBUTION`
+                - `"unknown"`
+        """
         gtypes = {*(self.group_types or [])}
         has_unified = "Unified" in gtypes
         mail = bool(self.mail_enabled)
@@ -139,6 +160,10 @@ class Group(DirectoryObject):
 
 
 class GroupQuerySet(QuerySet["Group"]):
+    """
+    QuerySet interface for working with Microsoft Graph groups.
+    """
+
     model_class = Group
 
     async def create_security_group(
@@ -149,6 +174,33 @@ class GroupQuerySet(QuerySet["Group"]):
         mail_enabled: bool = False,
         **kwargs: Any,
     ) -> Group:
+        """
+        Create a security group.
+
+        This helper wraps `create(...)` with `security_enabled=True` and lets
+        callers optionally choose whether the group is mail-enabled.
+
+        Args:
+            display_name:
+                Group display name.
+            mail_nickname:
+                Mail nickname/alias.
+            mail_enabled:
+                Whether to create a mail-enabled security group.
+                Defaults to `False`.
+            **kwargs:
+                Additional group fields accepted by Graph/model.
+
+        Returns:
+            Group:
+                Created group model.
+
+        Raises:
+            ValueError:
+                If required model fields are missing/invalid.
+            httpx.HTTPStatusError:
+                If Graph returns an HTTP error.
+        """
         _logger.debug(
             "GroupQuerySet.create_security_group display_name=%s mail_nickname=%s mail_enabled=%s extra=%s",
             display_name,
@@ -167,6 +219,32 @@ class GroupQuerySet(QuerySet["Group"]):
     async def create_m365_group(
         self, *, display_name: str, mail_nickname: str, visibility: str, **kwargs: Any
     ) -> Group:
+        """
+        Create a Microsoft 365 (Unified) group.
+
+        This helper wraps `create(...)` with defaults required for M365 groups:
+        `group_types=["Unified"]`, `mail_enabled=True`, `security_enabled=False`.
+
+        Args:
+            display_name:
+                Group display name.
+            mail_nickname:
+                Mail nickname/alias.
+            visibility:
+                Group visibility (for example `Public` or `Private`).
+            **kwargs:
+                Additional group fields accepted by Graph/model.
+
+        Returns:
+            Group:
+                Created group model.
+
+        Raises:
+            ValueError:
+                If required model fields are missing/invalid.
+            httpx.HTTPStatusError:
+                If Graph returns an HTTP error.
+        """
         _logger.debug(
             "GroupQuerySet.create_m365_group display_name=%s mail_nickname=%s visibility=%s extra=%s",
             display_name,
@@ -183,61 +261,3 @@ class GroupQuerySet(QuerySet["Group"]):
             visibility=visibility,
             **kwargs,
         )
-
-
-#     @property
-#     def endpoint(self) -> str:
-#         return f"{self._kwargs['group'].get_endpoint()}/members"
-
-# def add(self, *users: "str | User | QuerySet['User']") -> None:
-#     """
-#     Add one or many users to this group.
-
-#     Fast path:
-#       PATCH /groups/{id} with members@odata.bind (up to 20 per call). :contentReference[oaicite:3]{index=3}
-#     """
-#     user_ids = utils.coerce_ids(*users)
-#     if not user_ids:
-#         return
-
-#     client = self.model._get_client()
-#     group = self._kwargs["group"]
-
-#     # Graph supports adding up to 20 members per PATCH via members@odata.bind.
-#     for chunk in utils.chunks(user_ids, 20):
-#         binds = [f"{client.base_url}/directoryObjects/{uid}" for uid in chunk]
-#         client.patch(
-#             group.get_endpoint(),
-#             json_body={"members@odata.bind": binds},
-#         )
-
-#     def remove(self, *users: "str | User | QuerySet['User']") -> None:
-#         """
-#         Remove one or many users from this group.
-
-#         Uses:
-#           DELETE /groups/{id}/members/{member-id}/$ref :contentReference[oaicite:4]{index=4}
-#         Batched with POST /$batch (max 20 requests per batch). :contentReference[oaicite:5]{index=5}
-#         """
-#         user_ids = utils.coerce_ids(*users)
-#         if not user_ids:
-#             return
-
-#         client = self.model._get_client()
-#         group = self._kwargs["group"]
-
-#         # Batch delete refs (20 requests max per batch)
-#         for chunk in utils.chunks(user_ids, 20):
-#             requests: list[dict[str, Any]] = []
-#             for i, uid in enumerate(chunk, start=1):
-#                 requests.append(
-#                     {
-#                         "id": str(i),
-#                         "method": "DELETE",
-#                         # batch urls must be relative like "/groups/..." :contentReference[oaicite:6]{index=6}
-#                         "url": f"{group.get_endpoint()}/members/{uid}/$ref",
-#                     }
-#                 )
-
-#             batch_resp = client.post("/$batch", json_body={"requests": requests})
-#             utils.raise_batch_errors(batch_resp, action="remove members")

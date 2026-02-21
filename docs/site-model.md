@@ -6,44 +6,72 @@
 - Root queryset: `client.sites` (`SiteQuerySet`)
 - Graph path: `/sites`
 
-## Common Properties
+## Get a site by id
 
-- `id`, `display_name`, `name`
-- `site_collection`, `sharepoint_ids`
-- `is_personal_site`
+```python
+site = await client.sites.get(id="contoso.sharepoint.com,123,456")
+print(site.id, site.display_name)
+```
 
-Navigation properties:
-
-- `site.drive` -> `Drive`
-- `site.lists` -> `ListQuerySet`
-
-## Site Instance Methods
-
-| API | Description |
-|---|---|
-| `site.path` | Uses bound path when created with path-based access |
-| `await site.get()` | Fetches/refreshes this site, resolving `HOSTNAME` placeholders |
-
-## SiteQuerySet
-
-### Inherited QuerySet Operations
-
-- `filter`, `exclude`, `select`, `order_by`, `top`, `first`, `count`, `values`
-
-### Site-Specific Methods
-
-| API | Description |
-|---|---|
-| `sites.search(keyword="...")` | Search sites (keyword only; no `Q`/kwargs mix) |
-| `await sites.get(id="...")` | Get by site id |
-| `await sites.get(path="/sites/...")` | Get by SharePoint path, with hostname discovery/cache |
-| `sites.by_path("/sites/...")` | Build path-based `Site` reference (lazy) |
-| `await sites._get_hostname()` | Internal hostname resolution/cache helper |
-
-## Example
+## Get a site by SharePoint path
 
 ```python
 site = await client.sites.get(path="/sites/Engineering")
+print(site.id, site.display_name)
+```
+
+## Build a lazy site reference by path
+
+```python
+# by_path() returns a lazy Site handle (no request yet)
+lazy_site = client.sites.by_path("/sites/Engineering")
+
+# get() resolves HOSTNAME and fetches the site
+site = await lazy_site.get()
+print(site.id, site.display_name)
+```
+
+## Search sites by keyword
+
+```python
+sites_qs = client.sites.search(keyword="Engineering").top(10)
+sites = [s async for s in sites_qs]
+print(len(sites))
+```
+
+## Access site drive and lists
+
+```python
+site = await client.sites.get(path="/sites/Engineering")
+
 drive = site.drive
 lists_qs = site.lists
+
+print(drive.path)
+print(lists_qs.path)
 ```
+
+## Get a list under a site
+
+```python
+site = await client.sites.get(path="/sites/Engineering")
+list_obj = await site.lists.by_name("Documents").get()
+print(list_obj.id, list_obj.display_name)
+```
+
+## Notes
+
+- `client.sites.by_path(...)` builds a lazy `Site` reference and may include a `HOSTNAME` placeholder.
+- `await site.get()` resolves `HOSTNAME` via `/sites/root` hostname discovery when needed.
+- `site.drive` and `site.lists` automatically preserve path-based URL formatting rules.
+
+## API Reference
+
+::: pymsgraph.models.site.Site
+    options:
+      filters: public
+
+
+::: pymsgraph.models.site.SiteQuerySet
+    options:
+      filters: public

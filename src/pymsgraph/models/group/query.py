@@ -10,12 +10,34 @@ if TYPE_CHECKING:
 
 
 class UsersQuerySet(QuerySet["User"]):
+    """
+    Specialized queryset for user-only member projections.
+    """
+
     def make_from_graph(self, data: dict[str, Any]) -> "User":
+        """
+        Materialize a `User` model from Graph payload.
+
+        Args:
+            data:
+                Raw Graph object payload for a user.
+
+        Returns:
+            User:
+                Hydrated user model bound to the current client.
+        """
         model_class = cast(type["User"], get_model_class("User"))
         return model_class.from_graph(data, client=self._client, path=model_class.PATH)
 
 
 class MembersQuerySet(QuerySet["DirectoryObject"]):
+    """
+    QuerySet for `/groups/{id}/members` directory objects.
+
+    Supports heterogeneous member payloads (user/group/device/service principal,
+    etc.) by resolving model type from `@odata.type`.
+    """
+
     PATH = "/members"
     _ODATA_TYPE_MAP = {
         "#microsoft.graph.user": "User",
@@ -27,6 +49,9 @@ class MembersQuerySet(QuerySet["DirectoryObject"]):
     }
 
     def _resolve_model_class(self, data: dict[str, Any]) -> type["DirectoryObject"]:
+        """
+        Resolve a concrete directory object model from `@odata.type`.
+        """
         odata_type = (data.get("@odata.type") or "").lower()
         model_name = self._ODATA_TYPE_MAP.get(odata_type)
         if not model_name:
@@ -37,11 +62,32 @@ class MembersQuerySet(QuerySet["DirectoryObject"]):
             return self._model_class
 
     def make_from_graph(self, data: dict[str, Any]) -> "DirectoryObject":
+        """
+        Materialize a typed directory object from Graph payload.
+
+        Args:
+            data:
+                Raw Graph member payload, optionally including `@odata.type`.
+
+        Returns:
+            DirectoryObject:
+                Hydrated model instance resolved from `@odata.type` when available.
+        """
         model_class = self._resolve_model_class(data)
         return model_class.from_graph(data, client=self._client, path=model_class.PATH)
 
     @property
     def users(self) -> UsersQuerySet:
+        """
+        Return a user-only member queryset.
+
+        This scopes members to `/members/microsoft.graph.user` and preserves
+        compatible prefetched member cache data when available.
+
+        Returns:
+            UsersQuerySet:
+                Queryset containing only user members.
+        """
         cached_data = self._kwargs.get("cached_data")
         if cached_data:
             cached_data = [
@@ -59,7 +105,23 @@ class MembersQuerySet(QuerySet["DirectoryObject"]):
 
     async def add(self, *args: Any) -> None:
         """
-        Add member(s) to this group.
+        Add one or more directory objects to the group.
+
+        Members are coerced from ids/models/querysets and submitted through
+        Graph `$batch` in chunks of up to 20 `POST .../members/$ref` requests.
+
+        Args:
+            *args:
+                Member identifiers or objects coercible to directory object ids.
+
+        Returns:
+            None
+
+        Raises:
+            httpx.HTTPStatusError:
+                If Graph returns an HTTP error.
+            RuntimeError:
+                If any batch item fails (`utils.raise_batch_errors`).
         """
 
         c = self._client
@@ -84,7 +146,24 @@ class MembersQuerySet(QuerySet["DirectoryObject"]):
 
     async def remove(self, *args: Any) -> None:
         """
-        Remove member(s) from this group.
+        Remove one or more members from the group.
+
+        Members are coerced from ids/models/querysets and submitted through
+        Graph `$batch` in chunks of up to 20 `DELETE .../members/{id}/$ref`
+        requests.
+
+        Args:
+            *args:
+                Member identifiers or objects coercible to directory object ids.
+
+        Returns:
+            None
+
+        Raises:
+            httpx.HTTPStatusError:
+                If Graph returns an HTTP error.
+            RuntimeError:
+                If any batch item fails (`utils.raise_batch_errors`).
         """
 
         c = self._client
@@ -105,7 +184,23 @@ class MembersQuerySet(QuerySet["DirectoryObject"]):
 
     async def copy_to(self, *args: Any) -> None:
         """
-        Copy all members in this queryset to other group(s).
+        Copy all members in this queryset to one or more target groups.
+
+        This first materializes current members, then issues batched
+        `POST .../members/$ref` requests (20 per batch) for each target group.
+
+        Args:
+            *args:
+                Target groups as ids/models/querysets coercible by `c.groups`.
+
+        Returns:
+            None
+
+        Raises:
+            httpx.HTTPStatusError:
+                If Graph returns an HTTP error.
+            RuntimeError:
+                If any batch item fails (`utils.raise_batch_errors`).
         """
         c = self._client
         groups = list(c.groups._coerce_objects(args))

@@ -38,6 +38,17 @@ class ListItem(BaseItem):
 
     @property
     def fields(self) -> FieldValueSet:
+        """
+        Return mutable list item field values (`/items/{id}/fields`).
+
+        Returns:
+            FieldValueSet:
+                Wrapper around the item's field payload that tracks dirty keys
+                for partial updates.
+
+        Notes:
+            The wrapper is lazily created and cached on first access.
+        """
         try:
             return getattr(self, "_fields")
         except AttributeError:
@@ -51,11 +62,39 @@ class ListItem(BaseItem):
 
 
 class ListItemsQuerySet(QuerySet[ListItem]):
+    """
+    QuerySet for SharePoint list items (`/lists/{id}/items`).
+
+    Provides create/bulk-create/bulk-update/bulk-delete helpers with Graph
+    batching where applicable.
+    """
+
     model_class = ListItem
 
     async def create(self, **kwargs: Any) -> ListItem:
         """
-        Create a list item. `fields` must be provided as a dict of field values.
+        Create a single list item.
+
+        Args:
+            **kwargs:
+                Must include `fields` as `dict[str, Any]`.
+
+        Returns:
+            ListItem:
+                Created list item model.
+
+        Raises:
+            ValueError:
+                If `fields` is missing or not a dictionary.
+            httpx.HTTPStatusError:
+                If Graph returns an HTTP error.
+
+        Example:
+            ```python
+            item = await list_obj.items.create(
+                fields={"Title": "Quarterly Report", "Status": "Draft"}
+            )
+            ```
         """
         fields = kwargs.get("fields")
         if not isinstance(fields, dict):
@@ -70,8 +109,30 @@ class ListItemsQuerySet(QuerySet[ListItem]):
 
     async def create_many(self, *items: dict[str, Any]) -> "ListItemsQuerySet":
         """
-        Create list items in batches via $batch.
-        Each item should be a dict of field values or a payload with a 'fields' dict.
+        Create many list items using Graph `$batch`.
+
+        Args:
+            *items:
+                Each item can be:
+                - a plain fields dictionary (wrapped as `{"fields": ...}`)
+                - a payload containing a `fields` dictionary
+
+        Returns:
+            ListItemsQuerySet:
+                Seeded queryset containing created list item objects.
+
+        Raises:
+            TypeError:
+                If any item is not a dictionary.
+            ValueError:
+                If an item payload includes non-dict `fields`.
+            httpx.HTTPStatusError:
+                If Graph returns an HTTP error.
+            RuntimeError:
+                If any batch item fails (`utils.raise_batch_errors`).
+
+        Notes:
+            Requests are sent in chunks of up to 20 operations per batch.
         """
         items_list = list(items)
         if not items_list:
@@ -129,8 +190,43 @@ class ListItemsQuerySet(QuerySet[ListItem]):
 
     async def update(self, **fields: Any) -> int:
         """
-        Update fields for all list items in this queryset using $batch.
-        If no fields are provided, updates per-item dirty fields cached on objects.
+        Update list item fields for all items in this queryset.
+
+        Args:
+            **fields:
+                Update payload. Two supported modes:
+                - explicit mode: pass field key/values (or `fields={...}`)
+                - dirty mode: pass nothing to persist tracked `item.fields` changes
+                  from cached/seeded objects
+
+        Returns:
+            int:
+                Number of updated items.
+
+        Raises:
+            ValueError:
+                If model is read-only.
+            httpx.HTTPStatusError:
+                If Graph returns an HTTP error.
+            RuntimeError:
+                If any batch item fails (`utils.raise_batch_errors`).
+
+        Notes:
+            - Updates are sent via `$batch` in chunks of up to 20 items.
+            - In dirty mode, only tracked keys from `FieldValueSet._dirty` are sent.
+            - Dirty markers are cleared only after successful batch update.
+
+        Example:
+            ```python
+            # Explicit bulk update
+            count = await list_obj.items.filter(...).update(Status="Archived")
+
+            # Dirty-mode update from cached object(s)
+            item = await list_obj.items.get(id="1")
+            item.fields["Status"] = "Published"
+            seeded = list_obj.items.with_objects(item)
+            await seeded.update()
+            ```
         """
         if self._model_class.READ_ONLY:
             raise ValueError(f"{self._model_class.__name__} is read-only")
@@ -234,7 +330,23 @@ class ListItemsQuerySet(QuerySet[ListItem]):
 
     async def delete(self, force: bool = False) -> int:
         """
-        Delete all list items in this queryset using $batch.
+        Delete all list items in this queryset using `$batch`.
+
+        Args:
+            force:
+                Safety flag. Must be `True` to execute deletes.
+
+        Returns:
+            int:
+                Number of deleted items.
+
+        Raises:
+            RuntimeError:
+                If `force` is not `True`.
+            httpx.HTTPStatusError:
+                If Graph returns an HTTP error.
+            RuntimeError:
+                If any batch item fails (`utils.raise_batch_errors`).
         """
         if not force:
             raise RuntimeError("Set 'force=True' to proceed.")
@@ -260,6 +372,12 @@ class ListItemsQuerySet(QuerySet[ListItem]):
         return deleted
 
     async def _get_path(self):
+        """
+        Resolve and normalize item collection path for requests.
+
+        Internal helper that resolves `HOSTNAME` placeholders and, when needed,
+        resolves list name paths to list-id paths before item operations.
+        """
         p = self.path
         if p.startswith("/sites/"):
             c = self._client
@@ -307,15 +425,36 @@ class List(BaseItem):
     subscriptions = ListField()
 
     def __repr__(self) -> str:  # pragma: no cover - trivial
+        """
+        Return a concise debug representation of this SharePoint list.
+        """
         return f"<List: {self.display_name or self.name}>"
 
     @property
     def path(self):
+        """
+        Resolve request path for this list.
+
+        Returns:
+            str:
+                List path from object id or bound constructor path.
+        """
         if self.id is None and (p := self._args[1]) is not None:
             return p
         return super().path
 
     async def get(self) -> "List":
+        """
+        Fetch and hydrate this list from Graph.
+
+        Returns:
+            List:
+                Refreshed list model.
+
+        Notes:
+            If path contains `HOSTNAME`, it is resolved through
+            `client.sites._get_hostname()` before request.
+        """
         p = self.path
         c = self._client
         if "HOSTNAME" in p:
@@ -331,6 +470,21 @@ class ListQuerySet(QuerySet[List]):
     model_class = List
 
     def by_name(self, name: str) -> "List":
+        """
+        Create a lazy list handle by list name.
+
+        Args:
+            name:
+                SharePoint list display/name segment.
+
+        Returns:
+            List:
+                List model bound to `{path}/{urlencoded_name}`.
+
+        Raises:
+            ValueError:
+                If `name` is empty.
+        """
         n = (name or "").strip()
         if not n:
             raise ValueError(f"{type(self).__name__} by_name requires a name.")
@@ -340,18 +494,53 @@ class ListQuerySet(QuerySet[List]):
 
 
 class FieldValueSet(PropertyModel):
+    """
+    Mutable list-item field payload with dirty-field tracking.
+
+    Used by `ListItem.fields` to support partial PATCH updates of changed keys.
+    """
+
     PATH = "/fields"
 
     def __getitem__(self, key: str) -> Any:
+        """
+        Read a field value by key.
+        """
         return self._graph_data[key]
 
     def __setitem__(self, key: str, value: Any) -> None:
+        """
+        Set a field value and mark it dirty if changed.
+        """
         if self._graph_data.get(key) == value:
             return
         self._graph_data[key] = value
         self._dirty.add(key)
 
     async def update(self, data: dict[str, Any] | None = None) -> bool:
+        """
+        Persist dirty field changes to Graph.
+
+        Args:
+            data:
+                Optional dictionary of field updates to apply before persisting.
+                Only existing keys are considered.
+
+        Returns:
+            bool:
+                `True` if an update request was sent, otherwise `False`.
+
+        Raises:
+            httpx.HTTPStatusError:
+                If Graph returns an HTTP error.
+
+        Example:
+            ```python
+            item = await list_obj.items.get(id="1")
+            item.fields["Status"] = "Done"
+            changed = await item.fields.update()
+            ```
+        """
         if data is not None:
             graph_data = self._graph_data
             for k, v in data.items():

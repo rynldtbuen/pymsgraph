@@ -2,61 +2,105 @@
 
 ## Overview
 
-Drive resources are accessed via parent resources (for example `user.drive` or `site.drive`), not from a root `client.drives` queryset.
+Drive resources are accessed from parent resources (for example `user.drive` or
+`site.drive`) rather than a root `client.drives` queryset.
 
-Primary models:
+- Primary models:
+  - `Drive`
+  - `DriveItem`
+  - `DriveItemsQueryset`
 
-- `Drive`
-- `DriveItem`
-- `DriveItemsQueryset` (children/item traversal)
-
-## Drive
-
-| API | Description |
-|---|---|
-| `drive.path` | Uses bound path for path-based drive references |
-| `drive.root` | Returns root `DriveItem` reference |
-| `await drive.get()` | Fetches drive data |
-| `await Drive.from_path(client, path)` | Resolve and fetch drive by arbitrary Graph path |
-
-## DriveItem
-
-### Common Properties
-
-- `id`, `name`, `size`, `file`, `folder`, `web_url`, `sharepoint_ids` (and other declared fields)
-
-### Methods and Navigation
-
-| API | Description |
-|---|---|
-| `drive_item.items` | Children queryset (`/children` semantics) |
-| `drive_item.by_path("/folder/file")` | Build path-based child reference |
-| `drive_item.by_id("item-id")` | Build id-based child reference |
-| `await drive_item.get()` | Fetch item data |
-| `await drive_item.upload(...)` | Upload file content (bytes/string/file path) |
-| `await drive_item.download(dest_path=...)` | Download file content |
-| `await drive_item.copy(...)` | Copy item (optionally with destination parent) |
-| `await drive_item.move(...)` | Move/rename item |
-
-## DriveItemsQueryset
-
-`DriveItemsQueryset` extends iteration/path resolution for children listings and path normalization across:
-
-- `/drives/{id}/root...`
-- `/users/{id}/drive/root...`
-- `/sites/{hostname}:/...:/drive/root...`
-
-Use inherited queryset operators such as `top`, `select`, `filter`, and async iteration.
-
-## Example
+## Get a drive from user/site
 
 ```python
-folder = user.drive.root.by_path("/Shared Documents")
-children = [item async for item in folder.items.top(25)]
+user = await client.users.get(id="alice@contoso.com")
+user_drive = await user.drive.get()
 
-uploaded = await folder.by_id("folder-id").upload(
+site = await client.sites.get(path="/sites/Engineering")
+site_drive = await site.drive.get()
+
+print(user_drive.id, site_drive.id)
+```
+
+## Get drive by arbitrary path
+
+```python
+drive = await Drive.from_path(
+    client,
+    "/sites/contoso.sharepoint.com:/sites/Engineering:/drive",
+)
+print(drive.id, drive.name)
+```
+
+## Browse drive items
+
+```python
+drive = await client.users.get(id="alice@contoso.com").drive.get()
+
+root = drive.root
+children = [item async for item in root.items.top(25)]
+print(len(children))
+```
+
+## Resolve item by path or id
+
+```python
+drive = await client.users.get(id="alice@contoso.com").drive.get()
+
+docs_folder = drive.root.by_path("/Shared Documents")
+docs_folder = await docs_folder.get()
+
+same_folder = drive.root.by_id(docs_folder.id)
+same_folder = await same_folder.get()
+```
+
+## Upload and download file
+
+```python
+drive = await client.users.get(id="alice@contoso.com").drive.get()
+folder = await drive.root.by_path("/Shared Documents").get()
+
+uploaded = await folder.upload(
     name="hello.txt",
     content="hello world",
     content_type="text/plain",
 )
+
+content = await uploaded.download()
+print(len(content))
+```
+
+## Copy and move item
+
+```python
+drive = await client.users.get(id="alice@contoso.com").drive.get()
+folder = await drive.root.by_path("/Shared Documents").get()
+item = await folder.by_path("/hello.txt").get()
+
+copied = await item.copy(name="hello-copy.txt")
+moved = await copied.move(name="hello-renamed.txt")
+print(moved.name)
+```
+
+## Notes
+
+- `DriveItem.items` returns `DriveItemsQueryset` and normalizes child traversal paths.
+- `DriveItem.by_path(...)` is lazy; call `await .get()` to fetch the item.
+- Site-based drive/item paths may contain `HOSTNAME` placeholders and are resolved automatically.
+- Upload uses simple upload (`...:/content`) and is suitable for small files.
+
+## API Reference
+
+::: pymsgraph.models.drive.Drive
+    options:
+      filters: public
+
+::: pymsgraph.models.drive.DriveItem
+    options:
+      filters: public
+
+
+::: pymsgraph.models.drive.DriveItemsQueryset
+    options:
+      filters: public
 ```

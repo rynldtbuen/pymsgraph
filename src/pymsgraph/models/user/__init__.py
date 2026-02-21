@@ -38,8 +38,9 @@ _logger = logging.getLogger(__name__)
 
 class User(DirectoryObject):
     """
-    Graph user resource type.
+    Graph user resource.
 
+    Reference:
     https://learn.microsoft.com/en-us/graph/api/resources/user
     """
 
