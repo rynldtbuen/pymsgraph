@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any, Protocol
 
 import msal
@@ -94,6 +95,9 @@ class PublicClientAuth(TokenProvider):
     raise if it cannot acquire a token silently.
 
     Note: Delegated auth requires explicit scopes like ["User.Read"].
+
+    Encrypted persisted token cache is used only when `token_cache_path`
+    is provided; otherwise MSAL uses in-memory cache.
     """
 
     def __init__(
@@ -102,7 +106,7 @@ class PublicClientAuth(TokenProvider):
         tenant_id: str,
         client_id: str,
         authority: str | None = None,
-        cache: Any | None = None,
+        token_cache_path: str | Path | None = None,
         allow_interactive: bool = True,
         login_hint: str | None = None,
         default_scopes: Sequence[str] | None = None,
@@ -111,14 +115,19 @@ class PublicClientAuth(TokenProvider):
         self.allow_interactive = allow_interactive
         self.login_hint = login_hint
 
+        token_cache: Any | None = None
+        if token_cache_path is not None:
+            token_cache = self._build_encrypted_persisted_cache(token_cache_path)
+
         self.app = msal.PublicClientApplication(
             client_id=client_id,
             authority=self.authority,
-            token_cache=cache,
+            token_cache=token_cache,
         )
         self._default_scopes: list[str] | None = (
             list(default_scopes) if default_scopes else None
         )
+        self._token_cache_path = token_cache_path
 
     def get_access_token(
         self, scopes: Sequence[str] | None = None, *, force_refresh: bool = False
@@ -153,3 +162,34 @@ class PublicClientAuth(TokenProvider):
                 f"(error={err!r}, description={desc!r}, correlation_id={corr!r})"
             )
         return token
+
+    @staticmethod
+    def _build_encrypted_persisted_cache(cache_path: str | Path | None = None) -> Any:
+        """Create an encrypted persisted cache for delegated auth tokens."""
+        try:
+            import msal_extensions  # pyright: ignore[reportMissingImports]
+        except ImportError as exc:
+            raise RuntimeError(
+                "PublicClientAuth requires 'msal-extensions' for encrypted persisted "
+                "token cache. Install it with: pip install msal-extensions"
+            ) from exc
+
+        if cache_path is None:
+            cache_file = Path.home() / ".pymsgraph" / "msal_token_cache.bin"
+        else:
+            cache_file = Path(cache_path).expanduser()
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            persistence = msal_extensions.build_encrypted_persistence(str(cache_file))
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to initialize encrypted token cache at '{cache_file}': {exc}"
+            ) from exc
+
+        if persistence is None:
+            raise RuntimeError(
+                "Encrypted token cache is unavailable on this platform/runtime. "
+                "Provide an explicit cache=... or configure a supported secret store."
+            )
+        return msal_extensions.PersistedTokenCache(persistence)

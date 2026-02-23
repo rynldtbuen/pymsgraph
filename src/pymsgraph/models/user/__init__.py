@@ -21,6 +21,7 @@ from pymsgraph.models.fields import (
 from pymsgraph.models.query import QuerySet
 from pymsgraph.models.subscribed_sku import SubscribedSku
 from .common import Authentication, EmployeeOrgData, PasswordProfile
+from .message import MessageQuerySet
 from .query import (
     AppRoleAssignmentQuerySet,
     AppRoleAssignmentsQuerySetProxy,
@@ -160,7 +161,7 @@ class User(DirectoryObject):
     manager = ModelField("User", expand=True)
     member_of = QuerySetField(MemberOfQuerySet, prefetch=True, expand=True)
 
-    # messages = ListField()
+    messages = QuerySetField(MessageQuerySet, prefetch=True)
     # oauth2_permission_grants = ListField()
     # onenote = Field()
     # online_meetings = ListField()

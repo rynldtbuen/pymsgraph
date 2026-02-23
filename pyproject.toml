@@ -11,7 +11,7 @@ authors = [
 description = "Microsoft Graph API Python Client"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["httpx", "msal"]
+dependencies = ["httpx", "msal", "msal-extensions"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",

@@ -9,6 +9,7 @@ from pymsgraph.models.directory_object import DirectoryObject
 from pymsgraph.models.group import Group
 from pymsgraph.models.user import User, UserQuerySet
 from pymsgraph.models.user.common import AssignedLicense, PasswordProfile
+from pymsgraph.models.user.message import Message, MessageQuerySet
 from pymsgraph.models.user.query import (
     AppRoleAssignmentQuerySet,
     AssignedLicensesQuerySet,
@@ -178,6 +179,49 @@ def test_field_app_role_assignments(make_client: "MakeClient") -> None:
     assert isinstance(qs, AppRoleAssignmentQuerySet)
     assert qs.path == "/users/u1/appRoleAssignments"
     assert qs._model_class is AppRoleAssignment
+
+
+def test_field_messages(make_client: "MakeClient") -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"value": []})
+
+    c, _ = make_client(handler)
+    u = c.users.make(id="u1")
+
+    qs = u.messages
+    assert isinstance(qs, MessageQuerySet)
+    assert qs.path == "/users/u1/messages"
+    assert qs._model_class is Message
+
+
+@pytest.mark.asyncio
+async def test_field_messages_list(make_client: "MakeClient") -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("No HTTP call expected")
+
+    client, _ = make_client(handler)
+    user = client.users._model_class.from_graph(
+        {
+            "id": "u1",
+            "messages": [
+                {
+                    "id": "m1",
+                    "subject": "Hello",
+                    "isRead": False,
+                    "receivedDateTime": "2026-02-20T00:00:00Z",
+                }
+            ],
+        },
+        client=client,
+    )
+
+    items = [obj async for obj in user.messages]
+
+    assert len(items) == 1
+    assert isinstance(items[0], Message)
+    assert items[0].id == "m1"
+    assert items[0].subject == "Hello"
+    assert items[0].is_read is False
 
 
 @pytest.mark.asyncio
