@@ -1,9 +1,10 @@
+import json
 from typing import TYPE_CHECKING
 
 import httpx
 import pytest
 
-from pymsgraph.models.drive import Drive, DriveItem
+from pymsgraph.models.drive import Drive, DriveItem, Workbook, WorkbookWorksheet
 from pymsgraph.models.user import User
 
 if TYPE_CHECKING:
@@ -69,6 +70,19 @@ def test_path():
 	User(id="123").drive.root.by_path("/123/456")
 
 
+def test_drive_item_workbook_proxy(make_client: "MakeClient"):
+	def handler(request: httpx.Request) -> httpx.Response:
+		return httpx.Response(200, json={})
+
+	client, _ = make_client(handler)
+	item = DriveItem(id="item123", client=client, path="/users/u1/drive/items")
+
+	workbook = item.workbook
+
+	assert isinstance(workbook, Workbook)
+	assert workbook.path == "/users/u1/drive/items/item123/workbook"
+
+
 @pytest.mark.asyncio
 async def test_user_drive_get_by_id(make_client: "MakeClient"):
 	def handler(request: httpx.Request) -> httpx.Response:
@@ -94,6 +108,213 @@ async def test_user_drive_get_by_id(make_client: "MakeClient"):
 
 	assert drive.id == "drive123"
 	assert drive.name == "Demo Drive"
+
+
+@pytest.mark.asyncio
+async def test_drive_item_workbook_get(make_client: "MakeClient"):
+	def handler(request: httpx.Request) -> httpx.Response:
+		if request.method == "GET" and request.url.path == "/v1.0/users/u1/drive/items/item123/workbook":
+			return httpx.Response(
+				200,
+				json={
+					"application": {"name": "Excel"},
+				},
+			)
+		raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+	client, _ = make_client(handler)
+	item = DriveItem(id="item123", client=client, path="/users/u1/drive/items")
+
+	workbook = await item.workbook.get()
+
+	assert isinstance(workbook, Workbook)
+	assert workbook.path == "/users/u1/drive/items/item123/workbook"
+	assert workbook.application == {"name": "Excel"}
+
+
+def test_workbook_sheet_requires_id_or_name(make_client: "MakeClient"):
+	def handler(request: httpx.Request) -> httpx.Response:
+		return httpx.Response(200, json={})
+
+	client, _ = make_client(handler)
+	workbook = Workbook(client=client, path="/users/u1/drive/items/item123/workbook")
+
+	with pytest.raises(ValueError):
+		workbook.by_sheet("")
+
+
+@pytest.mark.asyncio
+async def test_workbook_get_sheet_by_id(make_client: "MakeClient"):
+	def handler(request: httpx.Request) -> httpx.Response:
+		if request.method == "GET" and request.url.path == "/v1.0/users/u1/drive/items/item123/workbook/worksheets/s1":
+			return httpx.Response(
+				200,
+				json={
+					"id": "s1",
+					"name": "Sheet1",
+					"position": 0,
+					"visibility": "Visible",
+				},
+			)
+		raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+	client, _ = make_client(handler)
+	workbook = Workbook(client=client, path="/users/u1/drive/items/item123/workbook")
+
+	sheet = await workbook.get_sheet(id="s1")
+
+	assert isinstance(sheet, WorkbookWorksheet)
+	assert sheet.id == "s1"
+	assert sheet.name == "Sheet1"
+	assert sheet.position == 0
+	assert sheet.path == "/users/u1/drive/items/item123/workbook/worksheets/s1"
+
+
+@pytest.mark.asyncio
+async def test_workbook_get_sheet_by_name(make_client: "MakeClient"):
+	def handler(request: httpx.Request) -> httpx.Response:
+		if request.method == "GET" and request.url.path in {
+			"/v1.0/users/u1/drive/items/item123/workbook/worksheets/Q1 Summary",
+			"/v1.0/users/u1/drive/items/item123/workbook/worksheets/Q1%20Summary",
+		}:
+			return httpx.Response(
+				200,
+				json={
+					"id": "sheet-q1",
+					"name": "Q1 Summary",
+					"position": 1,
+					"visibility": "Visible",
+				},
+			)
+		raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+	client, _ = make_client(handler)
+	workbook = Workbook(client=client, path="/users/u1/drive/items/item123/workbook")
+
+	sheet = await workbook.get_sheet(name="Q1 Summary")
+
+	assert isinstance(sheet, WorkbookWorksheet)
+	assert sheet.id == "sheet-q1"
+	assert sheet.name == "Q1 Summary"
+	assert sheet.position == 1
+	assert sheet.path == "/users/u1/drive/items/item123/workbook/worksheets/sheet-q1"
+
+
+@pytest.mark.asyncio
+async def test_workbook_get_sheet_invalid_args(make_client: "MakeClient"):
+	def handler(request: httpx.Request) -> httpx.Response:
+		raise AssertionError("No HTTP call expected")
+
+	client, _ = make_client(handler)
+	workbook = Workbook(client=client, path="/users/u1/drive/items/item123/workbook")
+
+	with pytest.raises(ValueError):
+		await workbook.get_sheet()
+	with pytest.raises(ValueError):
+		await workbook.get_sheet(id="s1", name="Sheet1")
+
+
+@pytest.mark.asyncio
+async def test_workbook_sheet_insert_values(make_client: "MakeClient"):
+	def handler(request: httpx.Request) -> httpx.Response:
+		expected = "/v1.0/users/u1/drive/items/item123/workbook/worksheets/s1/range(address='A1:B2')"
+		if request.method == "PATCH" and request.url.path in {
+			expected,
+			expected.replace("'", "%27"),
+		}:
+			assert request.headers.get("workbook-session-id") == "session-1"
+			assert request.content
+			body = json.loads(request.content.decode())
+			assert body == {
+				"values": [["Name", "Department"], ["Alice", "Engineering"]]
+			}
+			return httpx.Response(
+				200,
+				json={
+					"address": "Sheet1!A1:B2",
+					"values": [["Name", "Department"], ["Alice", "Engineering"]],
+				},
+			)
+		raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+	client, _ = make_client(handler)
+	worksheet = WorkbookWorksheet(
+		client=client,
+		path="/users/u1/drive/items/item123/workbook/worksheets",
+		id="s1",
+	)
+
+	data = await worksheet.insert_values(
+		"A1:B2",
+		[["Name", "Department"], ["Alice", "Engineering"]],
+		workbook_session_id="session-1",
+	)
+
+	assert data["address"] == "Sheet1!A1:B2"
+	assert data["values"][1][0] == "Alice"
+
+
+@pytest.mark.asyncio
+async def test_workbook_sheet_insert_values_invalid_args(make_client: "MakeClient"):
+	def handler(request: httpx.Request) -> httpx.Response:
+		raise AssertionError("No HTTP call expected")
+
+	client, _ = make_client(handler)
+	worksheet = WorkbookWorksheet(
+		client=client,
+		path="/users/u1/drive/items/item123/workbook/worksheets",
+		id="s1",
+	)
+
+	with pytest.raises(ValueError):
+		await worksheet.insert_values("", [["a"]])
+	with pytest.raises(ValueError):
+		await worksheet.insert_values("A1", ["a"])  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_workbook_sheet_get_values(make_client: "MakeClient"):
+	def handler(request: httpx.Request) -> httpx.Response:
+		expected = "/v1.0/users/u1/drive/items/item123/workbook/worksheets/s1/range(address='A1:B2')"
+		if request.method == "GET" and request.url.path in {
+			expected,
+			expected.replace("'", "%27"),
+		}:
+			assert request.headers.get("workbook-session-id") == "session-1"
+			return httpx.Response(
+				200,
+				json={
+					"values": [["Name", "Department"], ["Alice", "Engineering"]],
+				},
+			)
+		raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+	client, _ = make_client(handler)
+	worksheet = WorkbookWorksheet(
+		client=client,
+		path="/users/u1/drive/items/item123/workbook/worksheets",
+		id="s1",
+	)
+
+	values = await worksheet.get_values("A1:B2", workbook_session_id="session-1")
+
+	assert values == [["Name", "Department"], ["Alice", "Engineering"]]
+
+
+@pytest.mark.asyncio
+async def test_workbook_sheet_get_values_invalid_args(make_client: "MakeClient"):
+	def handler(request: httpx.Request) -> httpx.Response:
+		raise AssertionError("No HTTP call expected")
+
+	client, _ = make_client(handler)
+	worksheet = WorkbookWorksheet(
+		client=client,
+		path="/users/u1/drive/items/item123/workbook/worksheets",
+		id="s1",
+	)
+
+	with pytest.raises(ValueError):
+		await worksheet.get_values("")
 
 
 @pytest.mark.asyncio
