@@ -410,6 +410,48 @@ class Workbook(ReadOnlyModel, PropertyModel):
             id=value_encoded,
         )
 
+    async def get_sheet(
+        self, id: str | None = None, *, name: str | None = None
+    ) -> "WorkbookWorksheet":
+        """
+        Fetch a worksheet by id or name.
+
+        Args:
+            id:
+                Worksheet id.
+            name:
+                Worksheet name.
+
+        Returns:
+            WorkbookWorksheet:
+                Hydrated worksheet model.
+
+        Raises:
+            ValueError:
+                If both `id` and `name` are provided, or both are omitted.
+        """
+        if id and name:
+            raise ValueError(
+                f"{type(self).__name__} get_sheet method accepts either id or name, not both."
+            )
+        if not id and not name:
+            raise ValueError(
+                f"{type(self).__name__} get_sheet method requires an id/name argument."
+            )
+        target = id or name
+        if target is None:  # pragma: no cover
+            raise ValueError(
+                f"{type(self).__name__} get_sheet method requires an id/name argument."
+            )
+
+        path = self.by_sheet(target).path
+        data = await self._client.get(path)
+        return WorkbookWorksheet.from_graph(
+            data=data,
+            client=self._client,
+            path=f"{self.path}/worksheets",
+        )
+
 
 class DriveItem(BaseItem):
     """
