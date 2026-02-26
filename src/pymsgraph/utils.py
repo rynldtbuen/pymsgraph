@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import configparser
 import importlib
+import json
+from pathlib import Path
 import re
 import secrets
 import string
 import time
+import tomllib
 import uuid
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable
 from datetime import datetime
@@ -14,6 +18,72 @@ if TYPE_CHECKING:
     from pymsgraph.models.base import Model
 
 T = TypeVar("T")
+
+
+_SUPPORTED_CONFIG_EXTENSIONS: frozenset[str] = frozenset({"json", "toml", "ini", "cfg"})
+
+
+def _normalize_config_ext(ext: str) -> str:
+    normalized = (ext or "").strip().lower().lstrip(".")
+    if not normalized:
+        raise ValueError("Config extension is required.")
+    if normalized not in _SUPPORTED_CONFIG_EXTENSIONS:
+        supported = ", ".join(sorted(_SUPPORTED_CONFIG_EXTENSIONS))
+        raise ValueError(
+            f"Unsupported config extension: {ext!r}. Supported: {supported}"
+        )
+    return normalized
+
+
+def _parse_ini_like(path: Path) -> dict[str, Any]:
+    parser = configparser.ConfigParser()
+    with path.open("r", encoding="utf-8") as f:
+        parser.read_file(f)
+
+    data: dict[str, Any] = {}
+    if parser.defaults():
+        data["DEFAULT"] = dict(parser.defaults())
+    for section in parser.sections():
+        data[section] = dict(parser[section].items())
+    return data
+
+
+def load_config(path: str | None = None, ext: str = "json") -> dict[str, Any]:
+    """
+    Load configuration from JSON, TOML, INI, or CFG files.
+
+    Args:
+        path:
+            Explicit path to the config file. When omitted, defaults to
+            `config.{ext}`.
+        ext:
+            Config extension/format. Supports `json`, `toml`, `ini`, `cfg`.
+            If `path` has a recognized suffix, that suffix is used.
+
+    Returns:
+        dict[str, Any]:
+            Parsed configuration dictionary.
+    """
+    fallback_ext = _normalize_config_ext(ext)
+    _path = Path(path) if path is not None else Path(f"config.{fallback_ext}")
+
+    if not _path.exists():
+        raise FileNotFoundError(f"Missing configuration file: {_path}")
+
+    suffix = _path.suffix.lower().lstrip(".")
+    config_ext = (
+        _normalize_config_ext(suffix)
+        if suffix in _SUPPORTED_CONFIG_EXTENSIONS
+        else fallback_ext
+    )
+
+    if config_ext == "json":
+        with _path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    if config_ext == "toml":
+        with _path.open("rb") as f:
+            return tomllib.load(f)
+    return _parse_ini_like(_path)
 
 
 def to_datestr(val: datetime | str, astimezone: bool = True) -> str:

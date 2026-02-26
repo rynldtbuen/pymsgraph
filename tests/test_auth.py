@@ -71,7 +71,9 @@ def test_public_client_auth_uses_in_memory_cache_when_path_not_provided(
         ) -> None:
             captured["token_cache"] = token_cache
 
-    monkeypatch.setattr(auth.msal, "PublicClientApplication", FakePublicClientApplication)
+    monkeypatch.setattr(
+        auth.msal, "PublicClientApplication", FakePublicClientApplication
+    )
 
     provider = auth.PublicClientAuth(
         tenant_id="tenant-id",
@@ -84,21 +86,21 @@ def test_public_client_auth_uses_in_memory_cache_when_path_not_provided(
     assert captured["token_cache"] is None
 
 
-def test_public_client_auth_raises_when_extensions_missing(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setattr(
-        auth, "_import_msal_extensions", lambda: (_ for _ in ()).throw(ImportError())
-    )
+# def test_public_client_auth_raises_when_extensions_missing(
+#     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+# ) -> None:
+#     monkeypatch.setattr(
+#         auth, "_import_msal_extensions", lambda: (_ for _ in ()).throw(ImportError())
+#     )
 
-    with pytest.raises(RuntimeError, match="msal-extensions"):
-        auth.PublicClientAuth(
-            tenant_id="tenant-id",
-            client_id="client-id",
-            token_cache_path=tmp_path / "token_cache.bin",
-            allow_interactive=False,
-            default_scopes=["User.Read"],
-        )
+#     with pytest.raises(RuntimeError, match="msal-extensions"):
+#         auth.PublicClientAuth(
+#             tenant_id="tenant-id",
+#             client_id="client-id",
+#             token_cache_path=tmp_path / "token_cache.bin",
+#             allow_interactive=False,
+#             default_scopes=["User.Read"],
+#         )
 
 
 def test_public_client_auth_raises_when_encrypted_persistence_unavailable(

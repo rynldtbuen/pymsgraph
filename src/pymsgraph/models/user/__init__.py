@@ -21,6 +21,7 @@ from pymsgraph.models.fields import (
 from pymsgraph.models.query import QuerySet
 from pymsgraph.models.subscribed_sku import SubscribedSku
 from .common import Authentication, EmployeeOrgData, PasswordProfile
+from .mail_folder import MailFolderQuerySet
 from .message import MessageQuerySet
 from .query import (
     AppRoleAssignmentQuerySet,
@@ -155,7 +156,7 @@ class User(DirectoryObject):
     # insights = Field()
     # joined_teams = ListField()
     # license_details = ListField()
-    # mail_folders = ListField()
+    mail_folders = QuerySetField(MailFolderQuerySet, prefetch=True)
     # managed_app_registrations = ListField()
     # managed_devices = ListField()
     manager = ModelField("User", expand=True)
@@ -406,6 +407,42 @@ class User(DirectoryObject):
         return self.id
 
 
+class Me(User):
+    """
+    Graph `me` endpoint modeled as the signed-in delegated user.
+
+    Reference:
+    https://learn.microsoft.com/en-us/graph/api/user-get?view=graph-rest-1.0&tabs=http#http-request
+    """
+
+    PATH = "/me"
+
+    @property
+    def path(self) -> str:
+        """
+        Return the `me` endpoint path.
+
+        Returns:
+                str:
+                        `/me` (or bound custom path when provided).
+        """
+        return self._args[1] or self.PATH  # pyright: ignore[reportReturnType]
+
+    async def get(self) -> "Me":
+        """
+        Fetch the signed-in user from `/me`.
+
+        Returns:
+                Me:
+                        Hydrated `Me` model.
+        """
+        data = await self._client.get(self.path)
+        return Me.from_graph(data=data, client=self._client, path=self.path)
+
+    def __repr__(self):
+        return f"<Me: {self.id}, {self.display_name}, {self.user_principal_name}>"
+
+
 class UserQuerySet(QuerySet["User"]):
     model_class = User
 
@@ -434,6 +471,9 @@ class UserQuerySet(QuerySet["User"]):
     @property
     def app_role_assignments(self) -> AppRoleAssignmentsQuerySetProxy:
         return AppRoleAssignmentsQuerySetProxy(self)
+
+    def by_id(self, id: str) -> User:
+        return User(client=self._args[0], id=id)
 
     async def get(self, id: str | None = None, **kwargs: Any) -> "User":
         """

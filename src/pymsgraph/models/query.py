@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import AsyncIterator, Callable, Iterable
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Collection, Generic, Iterator, Self, TypeVar
@@ -480,6 +480,43 @@ class QuerySet(Generic[_Tm]):
         qs = self._clone()
         qs._headers["ConsistencyLevel"] = "eventual"
         _logger.debug("QuerySet.with_consistency_level_eventual enabled")
+        return qs
+
+    def with_headers(
+        self, headers: Mapping[str, Any] | None = None, **kwargs: Any
+    ) -> Self:
+        """
+        Return a cloned queryset with additional HTTP headers.
+
+        Args:
+            headers:
+                Header mapping merged into queryset request headers.
+            **kwargs:
+                Additional header key/value pairs merged after `headers`.
+
+        Returns:
+            QuerySet[_Tm]:
+                A new queryset with merged headers.
+
+        Notes:
+            - Existing header keys are overwritten by later values.
+            - Original queryset instance is not mutated.
+
+        Example:
+            ```python
+            qs = client.users.with_headers(
+                {"Prefer": 'outlook.body-content-type="text"'}
+            )
+            ```
+        """
+        if headers is None and not kwargs:
+            return self
+        qs = self._clone()
+        if headers is not None:
+            qs._headers.update(dict(headers))
+        if kwargs:
+            qs._headers.update(kwargs)
+        _logger.debug("QuerySet.with_headers merged=%s", sorted(qs._headers))
         return qs
 
     def prefetch(self, *fields: str) -> "QuerySet[_Tm]":

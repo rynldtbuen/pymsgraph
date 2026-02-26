@@ -165,6 +165,32 @@ def test_exclude_q_object(users_qs) -> None:
     assert params["$filter"] == "(not ((displayName eq 'A') or (mail eq 'a@x.com')))"
 
 
+def test_with_headers_merges_and_clones(users_qs) -> None:
+    base = users_qs.with_headers({"Prefer": 'outlook.body-content-type="html"'})
+    updated = base.with_headers({"ConsistencyLevel": "eventual", "Prefer": "text/plain"})
+
+    assert base._headers == {"Prefer": 'outlook.body-content-type="html"'}
+    assert updated._headers == {
+        "Prefer": "text/plain",
+        "ConsistencyLevel": "eventual",
+    }
+
+
+@pytest.mark.asyncio
+async def test_with_headers_applies_to_requests(make_client: "MakeClient") -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1.0/users":
+            assert request.headers.get("Prefer") == 'outlook.body-content-type="text"'
+            return httpx.Response(200, json={"value": [{"id": "u1"}]})
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    c, _ = make_client(handler)
+    qs = c.users.with_headers({"Prefer": 'outlook.body-content-type="text"'})
+    users = [u async for u in qs]
+
+    assert [u.id for u in users] == ["u1"]
+
+
 def test_raise_batch_errors_includes_request_body() -> None:
     batch_payload = {
         "responses": [

@@ -7,12 +7,6 @@ from typing import Any, Protocol
 import msal
 
 
-__all__ = [
-    "ConfidentialClientAuth",
-    "PublicClientAuth",
-]
-
-
 class TokenProvider(Protocol):
     """Minimal interface GraphClient needs.
 

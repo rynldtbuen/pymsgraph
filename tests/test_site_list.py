@@ -1,4 +1,5 @@
 import json
+import base64
 from typing import TYPE_CHECKING
 
 import httpx
@@ -243,6 +244,117 @@ async def test_field_items_qs_create(make_client: "MakeClient"):
 	assert item.id == "new-item"
 	# Expect POST captured
 	assert any(e["method"] == "POST" and e["path"].endswith("/items") for e in seen)
+
+
+@pytest.mark.asyncio
+async def test_list_item_attachment_upload_content(make_client: "MakeClient"):
+	def handler(request: httpx.Request) -> httpx.Response:
+		if request.method == "POST" and request.url.path == "/v1.0/sites/s123/lists/l1/items/i1/attachments":
+			payload = json.loads(request.content.decode())
+			assert payload == {
+				"name": "note.txt",
+				"contentBytes": base64.b64encode(b"hello").decode("ascii"),
+				"contentType": "text/plain",
+			}
+			return httpx.Response(201, json={"id": "a1", "name": "note.txt"})
+		return httpx.Response(404)
+
+	client, _ = make_client(handler)
+	from pymsgraph.models.site.list import ListItem
+
+	item = ListItem(client=client, path="/sites/s123/lists/l1/items", id="i1")
+	resp = await item.attachment(
+		name="note.txt",
+		content=b"hello",
+		content_type="text/plain",
+	)
+
+	assert resp["id"] == "a1"
+	assert resp["name"] == "note.txt"
+
+
+@pytest.mark.asyncio
+async def test_list_item_attachment_upload_file_path(
+	make_client: "MakeClient", tmp_path
+):
+	file_path = tmp_path / "upload.txt"
+	file_path.write_bytes(b"from-file")
+
+	def handler(request: httpx.Request) -> httpx.Response:
+		if request.method == "POST" and request.url.path == "/v1.0/sites/s123/lists/l1/items/i1/attachments":
+			payload = json.loads(request.content.decode())
+			assert payload == {
+				"name": "upload.txt",
+				"contentBytes": base64.b64encode(b"from-file").decode("ascii"),
+			}
+			return httpx.Response(201, json={"id": "a2", "name": "upload.txt"})
+		return httpx.Response(404)
+
+	client, _ = make_client(handler)
+	from pymsgraph.models.site.list import ListItem
+
+	item = ListItem(client=client, path="/sites/s123/lists/l1/items", id="i1")
+	resp = await item.attachment(file_path=file_path)
+
+	assert resp["id"] == "a2"
+	assert resp["name"] == "upload.txt"
+
+
+@pytest.mark.asyncio
+async def test_list_item_download_attachments_from_content_bytes(
+	make_client: "MakeClient",
+):
+	raw = b"hello-download"
+
+	def handler(request: httpx.Request) -> httpx.Response:
+		if request.method == "GET" and request.url.path == "/v1.0/sites/s123/lists/l1/items/i1/attachments":
+			return httpx.Response(
+				200,
+				json={
+					"value": [
+						{
+							"id": "a1",
+							"name": "note.txt",
+							"contentBytes": base64.b64encode(raw).decode("ascii"),
+						}
+					]
+				},
+			)
+		return httpx.Response(404)
+
+	client, _ = make_client(handler)
+	from pymsgraph.models.site.list import ListItem
+
+	item = ListItem(client=client, path="/sites/s123/lists/l1/items", id="i1")
+	downloaded = await item.download()
+
+	assert downloaded == {"a1": raw}
+
+
+@pytest.mark.asyncio
+async def test_list_item_download_attachments_fetches_value_and_writes_files(
+	make_client: "MakeClient", tmp_path
+):
+	raw = b"attachment-value"
+
+	def handler(request: httpx.Request) -> httpx.Response:
+		if request.method == "GET" and request.url.path == "/v1.0/sites/s123/lists/l1/items/i1/attachments":
+			return httpx.Response(
+				200,
+				json={"value": [{"id": "a1", "name": "doc.txt"}]},
+			)
+		if request.method == "GET" and request.url.path == "/v1.0/sites/s123/lists/l1/items/i1/attachments/a1/$value":
+			return httpx.Response(200, content=raw)
+		return httpx.Response(404)
+
+	client, _ = make_client(handler)
+	from pymsgraph.models.site.list import ListItem
+
+	item = ListItem(client=client, path="/sites/s123/lists/l1/items", id="i1")
+	downloaded = await item.download(tmp_path)
+
+	assert downloaded == {"a1": raw}
+	assert (tmp_path / "doc.txt").read_bytes() == raw
 
 
 @pytest.mark.asyncio

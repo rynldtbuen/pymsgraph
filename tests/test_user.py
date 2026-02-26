@@ -1,4 +1,5 @@
 import json
+import base64
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -9,7 +10,13 @@ from pymsgraph.models.directory_object import DirectoryObject
 from pymsgraph.models.group import Group
 from pymsgraph.models.user import User, UserQuerySet
 from pymsgraph.models.user.common import AssignedLicense, PasswordProfile
-from pymsgraph.models.user.message import Message, MessageQuerySet
+from pymsgraph.models.user.mail_folder import MailFolder, MailFolderQuerySet
+from pymsgraph.models.user.message import (
+    Attachment,
+    AttachmentQuerySet,
+    Message,
+    MessageQuerySet,
+)
 from pymsgraph.models.user.query import (
     AppRoleAssignmentQuerySet,
     AssignedLicensesQuerySet,
@@ -194,6 +201,32 @@ def test_field_messages(make_client: "MakeClient") -> None:
     assert qs._model_class is Message
 
 
+def test_field_mail_folders(make_client: "MakeClient") -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"value": []})
+
+    c, _ = make_client(handler)
+    u = c.users.make(id="u1")
+
+    qs = u.mail_folders
+    assert isinstance(qs, MailFolderQuerySet)
+    assert qs.path == "/users/u1/mailFolders"
+    assert qs._model_class is MailFolder
+
+
+def test_field_mail_folders_upn_path(make_client: "MakeClient") -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"value": []})
+
+    c, _ = make_client(handler)
+    u = c.users.make(user_principal_name="alice@contoso.com")
+
+    qs = u.mail_folders
+    assert isinstance(qs, MailFolderQuerySet)
+    assert qs.path == "/users/alice@contoso.com/mailFolders"
+    assert qs._model_class is MailFolder
+
+
 @pytest.mark.asyncio
 async def test_field_messages_list(make_client: "MakeClient") -> None:
     def handler(request: httpx.Request) -> httpx.Response:
@@ -222,6 +255,232 @@ async def test_field_messages_list(make_client: "MakeClient") -> None:
     assert items[0].id == "m1"
     assert items[0].subject == "Hello"
     assert items[0].is_read is False
+
+
+@pytest.mark.asyncio
+async def test_field_mail_folders_list(make_client: "MakeClient") -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("No HTTP call expected")
+
+    client, _ = make_client(handler)
+    user = client.users._model_class.from_graph(
+        {
+            "id": "u1",
+            "mailFolders": [
+                {
+                    "id": "f1",
+                    "displayName": "Inbox",
+                    "totalItemCount": 10,
+                    "unreadItemCount": 3,
+                }
+            ],
+        },
+        client=client,
+    )
+
+    items = [obj async for obj in user.mail_folders]
+
+    assert len(items) == 1
+    assert isinstance(items[0], MailFolder)
+    assert items[0].id == "f1"
+    assert items[0].display_name == "Inbox"
+    assert items[0].total_item_count == 10
+    assert items[0].unread_item_count == 3
+
+
+def test_message_attachments_queryset(make_client: "MakeClient") -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"value": []})
+
+    client, _ = make_client(handler)
+    message = Message(id="m1", client=client, path="/users/u1/messages")
+
+    qs = message.attachments
+
+    assert isinstance(qs, AttachmentQuerySet)
+    assert qs.path == "/users/u1/messages/m1/attachments"
+    assert qs._model_class is Attachment
+
+
+@pytest.mark.asyncio
+async def test_message_attachments_list_uses_cached_data(make_client: "MakeClient") -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("No HTTP call expected")
+
+    client, _ = make_client(handler)
+    message = Message.from_graph(
+        {
+            "id": "m1",
+            "attachments": [
+                {
+                    "id": "a1",
+                    "name": "report.txt",
+                    "size": 42,
+                    "contentType": "text/plain",
+                }
+            ],
+        },
+        client=client,
+        path="/users/u1/messages",
+    )
+
+    items = [obj async for obj in message.attachments]
+
+    assert len(items) == 1
+    assert isinstance(items[0], Attachment)
+    assert items[0].id == "a1"
+    assert items[0].name == "report.txt"
+    assert items[0].size == 42
+    assert items[0].content_type == "text/plain"
+
+
+@pytest.mark.asyncio
+async def test_message_attachments_download_from_content_bytes(
+    make_client: "MakeClient",
+) -> None:
+    raw = b"hello-attachment"
+    encoded = base64.b64encode(raw).decode("ascii")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("No HTTP call expected")
+
+    client, _ = make_client(handler)
+    message = Message.from_graph(
+        {
+            "id": "m1",
+            "attachments": [
+                {
+                    "id": "a1",
+                    "name": "note.txt",
+                    "contentBytes": encoded,
+                }
+            ],
+        },
+        client=client,
+        path="/users/u1/messages",
+    )
+
+    downloaded = await message.attachments.download()
+
+    assert downloaded == {"a1": raw}
+
+
+@pytest.mark.asyncio
+async def test_message_attachments_download_fetches_value_and_writes_files(
+    make_client: "MakeClient", tmp_path: Path
+) -> None:
+    raw = b"from-value-endpoint"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1.0/users/u1/messages/m1/attachments":
+            return httpx.Response(
+                200,
+                json={"value": [{"id": "a1", "name": "doc.txt"}]},
+            )
+        if request.method == "GET" and request.url.path == "/v1.0/users/u1/messages/m1/attachments/a1/$value":
+            return httpx.Response(200, content=raw)
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    client, _ = make_client(handler)
+    message = Message(id="m1", client=client, path="/users/u1/messages")
+
+    downloaded = await message.attachments.download(tmp_path)
+
+    assert downloaded == {"a1": raw}
+    assert (tmp_path / "doc.txt").read_bytes() == raw
+
+
+def test_message_attachments_requires_id(make_client: "MakeClient") -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"value": []})
+
+    client, _ = make_client(handler)
+    message = Message(client=client, path="/users/u1/messages")
+
+    with pytest.raises(AttributeError):
+        _ = message.attachments
+
+
+@pytest.mark.asyncio
+async def test_message_move(make_client: "MakeClient") -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if (
+            request.method == "POST"
+            and request.url.path == "/v1.0/users/u1/messages/m1/move"
+        ):
+            body = json.loads(request.content.decode())
+            assert body == {"destinationId": "folder-archive"}
+            return httpx.Response(
+                201,
+                json={
+                    "id": "m1",
+                    "subject": "Hello",
+                    "parentFolderId": "folder-archive",
+                },
+            )
+
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    client, _ = make_client(handler)
+    message = Message(id="m1", client=client, path="/users/u1/messages")
+
+    moved = await message.move("folder-archive")
+
+    assert isinstance(moved, Message)
+    assert moved.id == "m1"
+    assert moved.subject == "Hello"
+    assert moved.parent_folder_id == "folder-archive"
+    assert moved.path == "/users/u1/messages/m1"
+
+
+@pytest.mark.asyncio
+async def test_message_download(make_client: "MakeClient") -> None:
+    raw = b"From: sender@example.com\r\nSubject: Hello\r\n\r\nBody"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1.0/users/u1/messages/m1/$value":
+            return httpx.Response(200, content=raw)
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    client, _ = make_client(handler)
+    message = Message(id="m1", client=client, path="/users/u1/messages")
+
+    data = await message.download()
+
+    assert data == raw
+
+
+@pytest.mark.asyncio
+async def test_message_download_to_path(
+    make_client: "MakeClient", tmp_path: Path
+) -> None:
+    raw = b"From: sender@example.com\r\nSubject: Hello\r\n\r\nBody"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1.0/users/u1/messages/m1/$value":
+            return httpx.Response(200, content=raw)
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    client, _ = make_client(handler)
+    message = Message(id="m1", client=client, path="/users/u1/messages")
+    out = tmp_path / "message.eml"
+
+    data = await message.download(out)
+
+    assert data == raw
+    assert out.read_bytes() == raw
+
+
+@pytest.mark.asyncio
+async def test_message_move_requires_destination_id(make_client: "MakeClient") -> None:
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("HTTP should not be called")
+
+    client, _ = make_client(handler)
+    message = Message(id="m1", client=client, path="/users/u1/messages")
+
+    with pytest.raises(ValueError, match="destination_id is required"):
+        await message.move("")
 
 
 @pytest.mark.asyncio
