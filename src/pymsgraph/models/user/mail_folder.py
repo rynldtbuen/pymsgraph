@@ -1,11 +1,17 @@
 from __future__ import annotations
 
-from pymsgraph.models.base import PropertyModel
-from pymsgraph.models.fields import BooleanField, CharField, IntegerField
+from pymsgraph.models.base import ReadOnlyModel
+from pymsgraph.models.fields import (
+    BooleanField,
+    CharField,
+    IntegerField,
+    QuerySetField,
+)
 from pymsgraph.models.query import QuerySet
+from .message import MessageQuerySet
 
 
-class MailFolder(PropertyModel):
+class MailFolder(ReadOnlyModel):
     """
     Graph `mailFolder` resource.
 
@@ -21,6 +27,36 @@ class MailFolder(PropertyModel):
     total_item_count = IntegerField()
     unread_item_count = IntegerField()
     well_known_name = CharField()
+
+    # Navigation properties
+    messages = QuerySetField(MessageQuerySet, prefetch=True)
+
+    @property
+    def child_folders(self) -> "MailFolderQuerySet":
+        """
+        Return child folders for this mail folder.
+
+        Returns:
+            MailFolderQuerySet:
+                Queryset bound to `{mail_folder.path}/childFolders`.
+        """
+        kwargs = {
+            "path": f"{self.path}/childFolders",
+            "model_class": MailFolder,
+            "obj": self,
+        }
+        cached_data = self._data.get("child_folders")
+        if cached_data is None:
+            cached_data = self._graph_data.get("childFolders")
+        if cached_data:
+            kwargs["cached_data"] = cached_data
+        if hasattr(self, "_prefetch_meta"):
+            meta = self._prefetch_meta.get("child_folders", {})
+            if meta.get("next_link"):
+                kwargs["prefetch_next_link"] = meta["next_link"]
+            if meta.get("count") is not None:
+                kwargs["prefetch_count"] = int(meta["count"])
+        return MailFolderQuerySet(self._client, **kwargs)
 
     def __repr__(self) -> str:
         return f"<MailFolder: {self.display_name or self.id}>"

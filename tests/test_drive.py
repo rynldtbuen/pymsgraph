@@ -4,7 +4,14 @@ from typing import TYPE_CHECKING
 import httpx
 import pytest
 
-from pymsgraph.models.drive import Drive, DriveItem, Workbook, Worksheet
+from pymsgraph.models.drive import (
+	Drive,
+	DriveItem,
+	ItemActivity,
+	ItemActivityQuerySet,
+	Workbook,
+	Worksheet,
+)
 from pymsgraph.models.user import User
 
 if TYPE_CHECKING:
@@ -81,6 +88,53 @@ def test_drive_item_workbook_proxy(make_client: "MakeClient"):
 
 	assert isinstance(workbook, Workbook)
 	assert workbook.path == "/users/u1/drive/items/item123/workbook"
+
+
+def test_drive_item_activities_queryset(make_client: "MakeClient"):
+	def handler(request: httpx.Request) -> httpx.Response:
+		return httpx.Response(200, json={"value": []})
+
+	client, _ = make_client(handler)
+	item = DriveItem(id="item123", client=client, path="/users/u1/drive/items")
+
+	qs = item.activities
+
+	assert isinstance(qs, ItemActivityQuerySet)
+	assert qs.path == "/users/u1/drive/items/item123/activities"
+	assert qs._model_class is ItemActivity
+
+
+@pytest.mark.asyncio
+async def test_drive_item_activities_list_uses_cached_data(
+	make_client: "MakeClient",
+) -> None:
+	def handler(request: httpx.Request) -> httpx.Response:
+		raise AssertionError("No HTTP call expected")
+
+	client, _ = make_client(handler)
+	item = DriveItem.from_graph(
+		{
+			"id": "item123",
+			"activities": [
+				{
+					"id": "a1",
+					"activityDateTime": "2026-03-10T01:23:45Z",
+					"access": {},
+					"actor": {"user": {"displayName": "Ada Lovelace"}},
+				}
+			],
+		},
+		client=client,
+		path="/users/u1/drive/items",
+	)
+
+	items = [obj async for obj in item.activities]
+
+	assert len(items) == 1
+	assert isinstance(items[0], ItemActivity)
+	assert items[0].id == "a1"
+	assert items[0].activity_date_time is not None
+	assert items[0].actor == {"user": {"displayName": "Ada Lovelace"}}
 
 
 @pytest.mark.asyncio
@@ -477,6 +531,144 @@ async def test_workbook_sheet_range_get_invalid_args(make_client: "MakeClient"):
 
 
 @pytest.mark.asyncio
+async def test_workbook_sheet_range_font_set_color(make_client: "MakeClient"):
+	def handler(request: httpx.Request) -> httpx.Response:
+		expected = "/v1.0/users/u1/drive/items/item123/workbook/worksheets/s1/range(address='A1:B1')/format/font"
+		if request.method == "PATCH" and request.url.path in {
+			expected,
+			expected.replace("'", "%27"),
+		}:
+			assert request.headers.get("workbook-session-id") == "session-font"
+			body = json.loads(request.content.decode())
+			assert body == {"color": "#FF0000"}
+			return httpx.Response(200, json={"color": "#FF0000"})
+		raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+	client, _ = make_client(handler)
+	worksheet = Worksheet(
+		client=client,
+		path="/users/u1/drive/items/item123/workbook/worksheets",
+		id="s1",
+	)
+
+	data = await worksheet.range("A1:B1", workbook_session_id="session-font").font.set_color("#FF0000")
+
+	assert data["color"] == "#FF0000"
+
+
+@pytest.mark.asyncio
+async def test_workbook_sheet_range_font_set_color_named_color(make_client: "MakeClient"):
+	def handler(request: httpx.Request) -> httpx.Response:
+		expected = "/v1.0/users/u1/drive/items/item123/workbook/worksheets/s1/range(address='A1:B1')/format/font"
+		if request.method == "PATCH" and request.url.path in {
+			expected,
+			expected.replace("'", "%27"),
+		}:
+			body = json.loads(request.content.decode())
+			assert body == {"color": "#000000"}
+			return httpx.Response(200, json={"color": "#000000"})
+		raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+	client, _ = make_client(handler)
+	worksheet = Worksheet(
+		client=client,
+		path="/users/u1/drive/items/item123/workbook/worksheets",
+		id="s1",
+	)
+
+	data = await worksheet.range("A1:B1").font.set_color("black")
+
+	assert data["color"] == "#000000"
+
+
+@pytest.mark.asyncio
+async def test_workbook_sheet_range_font_set_color_invalid_args(make_client: "MakeClient"):
+	def handler(request: httpx.Request) -> httpx.Response:
+		raise AssertionError("No HTTP call expected")
+
+	client, _ = make_client(handler)
+	worksheet = Worksheet(
+		client=client,
+		path="/users/u1/drive/items/item123/workbook/worksheets",
+		id="s1",
+	)
+
+	with pytest.raises(ValueError):
+		await worksheet.range("A1").font.set_color("")
+	with pytest.raises(ValueError):
+		await worksheet.range("").font.set_color("#FF0000")
+
+
+@pytest.mark.asyncio
+async def test_workbook_sheet_range_fill_set_color(make_client: "MakeClient"):
+	def handler(request: httpx.Request) -> httpx.Response:
+		expected = "/v1.0/users/u1/drive/items/item123/workbook/worksheets/s1/range(address='A1:B1')/format/fill"
+		if request.method == "PATCH" and request.url.path in {
+			expected,
+			expected.replace("'", "%27"),
+		}:
+			assert request.headers.get("workbook-session-id") == "session-fill"
+			body = json.loads(request.content.decode())
+			assert body == {"color": "#FFF2CC"}
+			return httpx.Response(200, json={"color": "#FFF2CC"})
+		raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+	client, _ = make_client(handler)
+	worksheet = Worksheet(
+		client=client,
+		path="/users/u1/drive/items/item123/workbook/worksheets",
+		id="s1",
+	)
+
+	data = await worksheet.range("A1:B1", workbook_session_id="session-fill").fill.set_color("#FFF2CC")
+
+	assert data["color"] == "#FFF2CC"
+
+
+@pytest.mark.asyncio
+async def test_workbook_sheet_range_fill_set_color_named_color(make_client: "MakeClient"):
+	def handler(request: httpx.Request) -> httpx.Response:
+		expected = "/v1.0/users/u1/drive/items/item123/workbook/worksheets/s1/range(address='A1:B1')/format/fill"
+		if request.method == "PATCH" and request.url.path in {
+			expected,
+			expected.replace("'", "%27"),
+		}:
+			body = json.loads(request.content.decode())
+			assert body == {"color": "#D3D3D3"}
+			return httpx.Response(200, json={"color": "#D3D3D3"})
+		raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+	client, _ = make_client(handler)
+	worksheet = Worksheet(
+		client=client,
+		path="/users/u1/drive/items/item123/workbook/worksheets",
+		id="s1",
+	)
+
+	data = await worksheet.range("A1:B1").fill.set_color("light gray")
+
+	assert data["color"] == "#D3D3D3"
+
+
+@pytest.mark.asyncio
+async def test_workbook_sheet_range_fill_set_color_invalid_args(make_client: "MakeClient"):
+	def handler(request: httpx.Request) -> httpx.Response:
+		raise AssertionError("No HTTP call expected")
+
+	client, _ = make_client(handler)
+	worksheet = Worksheet(
+		client=client,
+		path="/users/u1/drive/items/item123/workbook/worksheets",
+		id="s1",
+	)
+
+	with pytest.raises(ValueError):
+		await worksheet.range("A1").fill.set_color("")
+	with pytest.raises(ValueError):
+		await worksheet.range("").fill.set_color("#FFF2CC")
+
+
+@pytest.mark.asyncio
 async def test_user_driveitems_get_by_id(make_client: "MakeClient"):
 	def handler(request: httpx.Request) -> httpx.Response:
 		if request.url.path == "/v1.0/users/u1":
@@ -531,6 +723,31 @@ async def test_user_driveitems_get_by_path(make_client: "MakeClient"):
 
 	assert item.id == "itemXYZ"
 	assert item.name == "2024.xlsx"
+
+
+@pytest.mark.asyncio
+async def test_driveitem_get_by_path_rebases_workbook_path(make_client: "MakeClient"):
+	def handler(request: httpx.Request) -> httpx.Response:
+		if request.url.path == "/v1.0/users/u1":
+			return httpx.Response(200, json={"id": "u1"})
+		if request.url.path == "/v1.0/users/u1/drive/root:/Reports/2024.xlsx":
+			return httpx.Response(
+				200,
+				json={
+					"id": "itemXYZ",
+					"name": "2024.xlsx",
+					"file": {},
+				},
+			)
+		return httpx.Response(404)
+
+	client, _ = make_client(handler)
+	user = await client.users.get(id="u1")
+
+	item = await user.drive.root.by_path("/Reports/2024.xlsx").get()
+
+	assert item.path == "/users/u1/drive/items/itemXYZ"
+	assert item.workbook.path == "/users/u1/drive/items/itemXYZ/workbook"
 
 
 @pytest.mark.asyncio
@@ -657,6 +874,61 @@ async def test_driveitem_upload_from_path(make_client: "MakeClient", tmp_path):
 		and entry["path"] == "/v1.0/users/u1/drive/items/folder1:/hello.txt:/content"
 			for entry in seen
 	)
+
+
+@pytest.mark.asyncio
+async def test_driveitem_upload_then_by_path_get_rebases_child_path(make_client: "MakeClient"):
+	def handler(request: httpx.Request) -> httpx.Response:
+		if request.method == "GET" and request.url.path == "/v1.0/users/u1/drive":
+			return httpx.Response(
+				200,
+				json={
+					"id": "drive123",
+					"name": "User Drive",
+					"driveType": "documentLibrary",
+				},
+			)
+		if request.method == "GET" and request.url.path == "/v1.0/drives/drive123/root:/Unprocessed":
+			return httpx.Response(
+				200,
+				json={
+					"id": "folder1",
+					"name": "Unprocessed",
+					"folder": {"childCount": 1},
+				},
+			)
+		if request.method == "PUT" and request.url.path == "/v1.0/drives/drive123/items/folder1:/report.xlsx:/content":
+			return httpx.Response(
+				201,
+				json={
+					"id": "file1",
+					"name": "report.xlsx",
+					"file": {},
+				},
+			)
+		if request.method == "GET" and request.url.path == "/v1.0/drives/drive123/items/folder1:/report.xlsx":
+			return httpx.Response(
+				200,
+				json={
+					"id": "file1",
+					"name": "report.xlsx",
+					"file": {},
+				},
+			)
+		raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+	client, _ = make_client(handler)
+	folder = DriveItem(
+		client=client,
+		path="/users/u1/drive/root:/Unprocessed",
+	)
+
+	await folder.upload("report.xlsx", b"hello")
+	drive_item = await folder.by_path("report.xlsx").get()
+
+	assert folder.path == "/drives/drive123/items/folder1"
+	assert drive_item.path == "/drives/drive123/items/file1"
+	assert drive_item.workbook.path == "/drives/drive123/items/file1/workbook"
 
 
 @pytest.mark.asyncio
@@ -787,6 +1059,37 @@ async def test_driveitem_download(make_client: "MakeClient", tmp_path):
 	assert data == b"hello"
 	assert dest.read_bytes() == b"hello"
 	assert "/v1.0/users/u1/drive/items/file1/content" in seen
+
+
+@pytest.mark.asyncio
+async def test_driveitem_download_follows_redirect(make_client: "MakeClient", tmp_path):
+	seen = []
+
+	def handler(request: httpx.Request) -> httpx.Response:
+		seen.append(str(request.url))
+		if request.url.path == "/v1.0/users/u1/drive/items/file1/content":
+			return httpx.Response(
+				302,
+				headers={"Location": "https://download.example.com/file1"},
+			)
+		if str(request.url) == "https://download.example.com/file1":
+			return httpx.Response(200, content=b"redirected-data")
+		return httpx.Response(404)
+
+	client, _ = make_client(handler)
+	item = DriveItem.from_graph(
+		{"id": "file1", "name": "file1.txt", "file": {}},
+		client=client,
+		path="/users/u1/drive/items",
+	)
+
+	dest = tmp_path / "file1.txt"
+	data = await item.download(dest_path=dest)
+
+	assert data == b"redirected-data"
+	assert dest.read_bytes() == b"redirected-data"
+	assert "https://graph.microsoft.com/v1.0/users/u1/drive/items/file1/content" in seen
+	assert "https://download.example.com/file1" in seen
 
 
 @pytest.mark.asyncio

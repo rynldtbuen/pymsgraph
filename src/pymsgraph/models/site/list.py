@@ -352,7 +352,7 @@ class ListItemsQuerySet(QuerySet[ListItem]):
             raise RuntimeError("Set 'force=True' to proceed.")
 
         deleted = 0
-        async for chunked_items in utils.achunks(self.select("id"), 20):
+        async for chunked_items in utils.achunks(self.select("id").all(), 20):
             requests: list[dict[str, Any]] = []
             for i, item in enumerate(chunked_items, start=1):
                 if not getattr(item, "id", None):

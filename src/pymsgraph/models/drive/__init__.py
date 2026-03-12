@@ -8,10 +8,12 @@ from urllib.parse import quote
 from pymsgraph.models.common import BaseItem, IdentitySet, SharePointIds
 from pymsgraph.models.fields import (
     CharField,
+    DateTimeField,
     Field,
     IntegerField,
     ListField,
     ModelField,
+    QuerySetField,
 )
 from pymsgraph.models.query import QuerySet
 from .workbook import Workbook, Worksheet
@@ -159,6 +161,36 @@ class DriveQuerySetProxy:
         self._client = client
 
 
+class ItemActivity(BaseItem):
+    """
+    Graph `itemActivity` resource.
+
+    Exposes activity events associated with a drive item.
+
+    https://learn.microsoft.com/en-us/graph/api/resources/itemactivity?view=graph-rest-1.0
+    """
+
+    PATH = "/activities"
+
+    access = Field()
+    activity_date_time = DateTimeField()
+    actor = Field()
+    drive_item = Field()
+    list_item = Field()
+    times = Field()
+
+    def __repr__(self) -> str:
+        return f"<ItemActivity: {self.id}>"
+
+
+class ItemActivityQuerySet(QuerySet[ItemActivity]):
+    """
+    QuerySet for drive item activities (`.../items/{id}/activities`).
+    """
+
+    model_class = ItemActivity
+
+
 class DriveItem(BaseItem):
     """
     Graph `driveItem` resource.
@@ -208,6 +240,7 @@ class DriveItem(BaseItem):
     subscriptions = ListField()
     thumbnails = ListField()
     versions = ListField()
+    activities = QuerySetField(ItemActivityQuerySet, order_by=True)
     workbook = ModelField(Workbook, is_proxy=True)
 
     def __repr__(self) -> str:
@@ -385,6 +418,18 @@ class DriveItem(BaseItem):
                 p = f"{d.path}/root:{tail}"
             else:
                 raise RuntimeError(f"Unknown path, {p}")
+        elif p.startswith("/users/") and "/drive/root" in p:
+            # Rebase path-based/root-based user drive items to /drive/items
+            di_p = f"{p.split('/root', 1)[0]}/items"
+        elif p.startswith("/users/") and "/drive/items/" in p and ":" in p:
+            # Rebase user drive id+path items to /drive/items
+            di_p = f"{p.split('/items/', 1)[0]}/items"
+        elif p.startswith("/drives/") and "/root" in p:
+            # Rebase path-based/root-based drive items to /drives/{id}/items
+            di_p = f"{'/'.join(p.split('/')[:3])}/items"
+        elif p.startswith("/drives/") and "/items/" in p and ":" in p:
+            # Rebase drive id+path items to /drives/{id}/items
+            di_p = f"{'/'.join(p.split('/')[:3])}/items"
         _logger.debug("DriveItem.get request_path=%s model_path=%s", p, di_p or p)
         data = await self._client.get(p)
 

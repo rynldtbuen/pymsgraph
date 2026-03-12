@@ -7,6 +7,62 @@ from pymsgraph.models.base import PropertyModel, ReadOnlyModel
 from pymsgraph.models.fields import CharField, Field, IntegerField
 
 
+_COMMON_COLORS: dict[str, str] = {
+    "black": "#000000",
+    "white": "#FFFFFF",
+    "red": "#FF0000",
+    "green": "#008000",
+    "blue": "#0000FF",
+    "yellow": "#FFFF00",
+    "orange": "#FFA500",
+    "purple": "#800080",
+    "pink": "#FFC0CB",
+    "brown": "#A52A2A",
+    "gray": "#808080",
+    "grey": "#808080",
+    "light_gray": "#D3D3D3",
+    "light_grey": "#D3D3D3",
+    "dark_gray": "#A9A9A9",
+    "dark_grey": "#A9A9A9",
+    "cyan": "#00FFFF",
+    "magenta": "#FF00FF",
+    "lime": "#00FF00",
+    "maroon": "#800000",
+    "navy": "#000080",
+    "olive": "#808000",
+    "teal": "#008080",
+    "silver": "#C0C0C0",
+    "gold": "#FFD700",
+}
+
+
+def _normalize_color_value(color: str) -> str:
+    value = (color or "").strip()
+    if not value:
+        raise ValueError("Color value is required.")
+
+    if value.startswith("#"):
+        hex_part = value[1:]
+        if len(hex_part) == 3 and all(ch in "0123456789abcdefABCDEF" for ch in hex_part):
+            hex_part = "".join(ch * 2 for ch in hex_part)
+        if len(hex_part) != 6 or not all(
+            ch in "0123456789abcdefABCDEF" for ch in hex_part
+        ):
+            raise ValueError(
+                "Color must be a named color or a valid hex value like '#RRGGBB'."
+            )
+        return f"#{hex_part.upper()}"
+
+    key = value.lower().replace("-", "_").replace(" ", "_")
+    if mapped := _COMMON_COLORS.get(key):
+        return mapped
+
+    supported = ", ".join(sorted(k for k in _COMMON_COLORS if k == k.replace(" ", "_")))
+    raise ValueError(
+        f"Unsupported color: {color!r}. Use hex '#RRGGBB' or one of: {supported}"
+    )
+
+
 class WorksheetRange:
     """
     Lazy worksheet range handle.
@@ -33,24 +89,52 @@ class WorksheetRange:
         """
         return self._address
 
+    @property
+    def font(self) -> "WorksheetRangeFont":
+        """
+        Return font-formatting helper for this range.
+
+        Example:
+            ```python
+            await worksheet.range("A1:B1").font.set_color("#FF0000")
+            ```
+        """
+        return WorksheetRangeFont(self)
+
+    @property
+    def fill(self) -> "WorksheetRangeFill":
+        """
+        Return fill-formatting helper for this range.
+
+        Example:
+            ```python
+            await worksheet.range("A1:B1").fill.set_color("#FFF2CC")
+            ```
+        """
+        return WorksheetRangeFill(self)
+
+    def _range_path(self) -> str:
+        addr = (self._address or "").strip()
+        if not addr:
+            raise ValueError(
+                f"{type(self._worksheet).__name__} range method requires an address."
+            )
+        escaped_address = addr.replace("'", "''")
+        return f"{self._worksheet.path}/range(address='{escaped_address}')"
+
+    def _headers(self, workbook_session_id: str | None = None) -> dict[str, str] | None:
+        session_id = workbook_session_id or self._workbook_session_id
+        if session_id:
+            return {"workbook-session-id": session_id}
+        return None
+
     async def get(self, *, workbook_session_id: str | None = None) -> list[list[Any]]:
         """
         Get values from this bound range.
         """
-        addr = (self._address or "").strip()
-        if not addr:
-            raise ValueError(
-                f"{type(self._worksheet).__name__} range.get method requires an address."
-            )
-
-        escaped_address = addr.replace("'", "''")
-        path = f"{self._worksheet.path}/range(address='{escaped_address}')"
-        session_id = workbook_session_id or self._workbook_session_id
-        headers: dict[str, str] | None = None
-        if session_id:
-            headers = {"workbook-session-id": session_id}
-
-        data = await self._worksheet._client.get(path, headers=headers)
+        data = await self._worksheet._client.get(
+            self._range_path(), headers=self._headers(workbook_session_id)
+        )
         values = data.get("values")
         if isinstance(values, list):
             return values
@@ -65,25 +149,102 @@ class WorksheetRange:
         """
         Update values in this bound range.
         """
-        addr = (self._address or "").strip()
-        if not addr:
-            raise ValueError(
-                f"{type(self._worksheet).__name__} range.update method requires an address."
-            )
+        self._range_path()
         if not isinstance(values, list) or any(not isinstance(r, list) for r in values):
             raise ValueError(
                 f"{type(self._worksheet).__name__} range.update method requires values as list[list[Any]]."
             )
 
-        escaped_address = addr.replace("'", "''")
-        path = f"{self._worksheet.path}/range(address='{escaped_address}')"
         body = {"values": values}
-        session_id = workbook_session_id or self._workbook_session_id
-        headers: dict[str, str] | None = None
-        if session_id:
-            headers = {"workbook-session-id": session_id}
+        data = await self._worksheet._client.patch(
+            self._range_path(),
+            body=body,
+            headers=self._headers(workbook_session_id),
+        )
+        if isinstance(data, dict):
+            return data
+        return {}
 
-        data = await self._worksheet._client.patch(path, body=body, headers=headers)
+
+class WorksheetRangeFont:
+    """
+    Font-formatting helper for a worksheet range.
+
+    Reference:
+    https://learn.microsoft.com/en-us/graph/api/resources/workbookrangefont
+    """
+
+    def __init__(self, range_ref: WorksheetRange) -> None:
+        self._range = range_ref
+
+    async def set_color(
+        self,
+        color: str,
+        *,
+        workbook_session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Set text color for all cells in the bound range.
+
+        Args:
+            color:
+                Font color value (for example `#FF0000`).
+            workbook_session_id:
+                Optional workbook session id sent as `workbook-session-id`.
+
+        Returns:
+            dict[str, Any]:
+                Graph response payload for range font update.
+        """
+        color_value = _normalize_color_value(color)
+
+        data = await self._range._worksheet._client.patch(
+            f"{self._range._range_path()}/format/font",
+            body={"color": color_value},
+            headers=self._range._headers(workbook_session_id),
+        )
+        if isinstance(data, dict):
+            return data
+        return {}
+
+
+class WorksheetRangeFill:
+    """
+    Fill-formatting helper for a worksheet range.
+
+    Reference:
+    https://learn.microsoft.com/en-us/graph/api/resources/workbookrangefill
+    """
+
+    def __init__(self, range_ref: WorksheetRange) -> None:
+        self._range = range_ref
+
+    async def set_color(
+        self,
+        color: str,
+        *,
+        workbook_session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Set fill color for all cells in the bound range.
+
+        Args:
+            color:
+                Fill color value (for example `#FFF2CC`).
+            workbook_session_id:
+                Optional workbook session id sent as `workbook-session-id`.
+
+        Returns:
+            dict[str, Any]:
+                Graph response payload for range fill update.
+        """
+        color_value = _normalize_color_value(color)
+
+        data = await self._range._worksheet._client.patch(
+            f"{self._range._range_path()}/format/fill",
+            body={"color": color_value},
+            headers=self._range._headers(workbook_session_id),
+        )
         if isinstance(data, dict):
             return data
         return {}

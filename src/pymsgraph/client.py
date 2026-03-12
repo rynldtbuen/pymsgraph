@@ -171,6 +171,7 @@ class Client:
             url,
             params=params,
             headers=self._headers(headers),
+            follow_redirects=True,
         )
         _logger.debug("GET %s -> %s (content)", url, resp.status_code)
         _raise_for_status(resp)

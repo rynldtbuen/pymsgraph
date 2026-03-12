@@ -227,6 +227,34 @@ def test_field_mail_folders_upn_path(make_client: "MakeClient") -> None:
     assert qs._model_class is MailFolder
 
 
+def test_mail_folder_messages(make_client: "MakeClient") -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"value": []})
+
+    client, _ = make_client(handler)
+    folder = MailFolder(id="f1", client=client, path="/users/u1/mailFolders")
+
+    qs = folder.messages
+
+    assert isinstance(qs, MessageQuerySet)
+    assert qs.path == "/users/u1/mailFolders/f1/messages"
+    assert qs._model_class is Message
+
+
+def test_mail_folder_child_folders(make_client: "MakeClient") -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"value": []})
+
+    client, _ = make_client(handler)
+    folder = MailFolder(id="f1", client=client, path="/users/u1/mailFolders")
+
+    qs = folder.child_folders
+
+    assert isinstance(qs, MailFolderQuerySet)
+    assert qs.path == "/users/u1/mailFolders/f1/childFolders"
+    assert qs._model_class is MailFolder
+
+
 @pytest.mark.asyncio
 async def test_field_messages_list(make_client: "MakeClient") -> None:
     def handler(request: httpx.Request) -> httpx.Response:
@@ -286,6 +314,71 @@ async def test_field_mail_folders_list(make_client: "MakeClient") -> None:
     assert items[0].display_name == "Inbox"
     assert items[0].total_item_count == 10
     assert items[0].unread_item_count == 3
+
+
+@pytest.mark.asyncio
+async def test_mail_folder_messages_list(make_client: "MakeClient") -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("No HTTP call expected")
+
+    client, _ = make_client(handler)
+    folder = MailFolder.from_graph(
+        {
+            "id": "f1",
+            "displayName": "Test Folder",
+            "messages": [
+                {
+                    "id": "m1",
+                    "subject": "Nested message",
+                    "isRead": True,
+                    "receivedDateTime": "2026-02-20T00:00:00Z",
+                }
+            ],
+        },
+        client=client,
+        path="/users/u1/mailFolders",
+    )
+
+    items = [obj async for obj in folder.messages]
+
+    assert len(items) == 1
+    assert isinstance(items[0], Message)
+    assert items[0].id == "m1"
+    assert items[0].subject == "Nested message"
+    assert items[0].is_read is True
+
+
+@pytest.mark.asyncio
+async def test_mail_folder_child_folders_list(make_client: "MakeClient") -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("No HTTP call expected")
+
+    client, _ = make_client(handler)
+    folder = MailFolder.from_graph(
+        {
+            "id": "f1",
+            "displayName": "Inbox",
+            "childFolders": [
+                {
+                    "id": "f2",
+                    "displayName": "Test Folder",
+                    "totalItemCount": 5,
+                    "unreadItemCount": 1,
+                }
+            ],
+        },
+        client=client,
+        path="/users/u1/mailFolders",
+    )
+
+    items = [obj async for obj in folder.child_folders]
+
+    assert len(items) == 1
+    assert isinstance(items[0], MailFolder)
+    assert items[0].id == "f2"
+    assert items[0].display_name == "Test Folder"
+    assert items[0].total_item_count == 5
+    assert items[0].unread_item_count == 1
 
 
 def test_message_attachments_queryset(make_client: "MakeClient") -> None:
