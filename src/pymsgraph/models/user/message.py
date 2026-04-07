@@ -165,6 +165,7 @@ class Message(PropertyModel):
     sent_date_time = DateTimeField()
     subject = CharField(select_default=True, order_by=True)
     to_recipients = ListField(item_type=Recipient)
+    unique_body = ModelField(ItemBody)
     web_link = CharField()
     attachments = QuerySetField(AttachmentQuerySet)
 
