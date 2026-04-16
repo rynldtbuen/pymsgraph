@@ -18,6 +18,7 @@ from pymsgraph.models import (
     SubscribedSkuQuerySet,
     UserQuerySet,
 )
+from pymsgraph.models.device_management import DeviceManagementProxy
 from pymsgraph.models.user import Me
 
 if TYPE_CHECKING:
@@ -242,6 +243,13 @@ class Client:
     @property
     def me(self) -> Me:
         return Me(client=self, path="/me")
+
+    @property
+    def device_management(self) -> DeviceManagementProxy:
+        """
+        Root proxy for Microsoft Graph device management endpoints.
+        """
+        return DeviceManagementProxy(self)
 
 
 def _default_user_agent() -> str:
