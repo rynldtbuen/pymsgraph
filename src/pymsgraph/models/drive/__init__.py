@@ -16,7 +16,7 @@ from pymsgraph.models.fields import (
     QuerySetField,
 )
 from pymsgraph.models.query import QuerySet
-from .workbook import Workbook, Worksheet
+from .workbook import Workbook, WorkbookTable, Worksheet
 
 if TYPE_CHECKING:
     from pymsgraph.client import Client

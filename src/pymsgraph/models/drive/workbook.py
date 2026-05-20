@@ -3,9 +3,15 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import quote
 
-from pymsgraph.models.base import PropertyModel, ReadOnlyModel
-from pymsgraph.models.fields import CharField, Field, IntegerField
-
+from pymsgraph.models.base import Model, PropertyModel, ReadOnlyModel
+from pymsgraph.models.fields import (
+    BooleanField,
+    CharField,
+    Field,
+    IntegerField,
+    ListField,
+)
+from pymsgraph.models.query import QuerySet
 
 _COMMON_COLORS: dict[str, str] = {
     "black": "#000000",
@@ -43,7 +49,9 @@ def _normalize_color_value(color: str) -> str:
 
     if value.startswith("#"):
         hex_part = value[1:]
-        if len(hex_part) == 3 and all(ch in "0123456789abcdefABCDEF" for ch in hex_part):
+        if len(hex_part) == 3 and all(
+            ch in "0123456789abcdefABCDEF" for ch in hex_part
+        ):
             hex_part = "".join(ch * 2 for ch in hex_part)
         if len(hex_part) != 6 or not all(
             ch in "0123456789abcdefABCDEF" for ch in hex_part
@@ -306,6 +314,18 @@ class Worksheet(ReadOnlyModel):
         """
         return WorksheetRangeProxy(self)
 
+    @property
+    def tables(self) -> "WorkbookTablesProxy":
+        """
+        Return worksheet-scoped table collection helper.
+
+        Example:
+            ```python
+            table = await worksheet.tables.add("Sheet1!A1:D5")
+            ```
+        """
+        return WorkbookTablesProxy(self)
+
     async def get(self) -> "Worksheet":
         """
         Fetch this worksheet from Graph.
@@ -445,6 +465,423 @@ class WorksheetsProxy:
         )
 
 
+class WorkbookTableColumn(ReadOnlyModel):
+    """
+    Graph `workbookTableColumn` resource.
+
+    https://learn.microsoft.com/en-us/graph/api/resources/workbooktablecolumn?view=graph-rest-1.0
+    """
+
+    PATH = "/columns"
+
+    index = IntegerField()
+    name = CharField()
+    values = Field()
+
+    def __repr__(self) -> str:
+        return f"<WorkbookTableColumn: {self.name or self.id}>"
+
+
+class WorkbookTableColumnQuerySet(QuerySet[WorkbookTableColumn]):
+    """
+    QuerySet for workbook table columns.
+    """
+
+    model_class = WorkbookTableColumn
+
+
+class WorkbookTableRow(ReadOnlyModel):
+    """
+    Graph `workbookTableRow` resource.
+
+    https://learn.microsoft.com/en-us/graph/api/resources/workbooktablerow?view=graph-rest-1.0
+    """
+
+    PATH = "/rows"
+
+    index = IntegerField()
+    values = Field()
+
+    def __repr__(self) -> str:
+        return (
+            f"<WorkbookTableRow: {self.index if self.index is not None else self.id}>"
+        )
+
+
+class WorkbookTableRowQuerySet(QuerySet[WorkbookTableRow]):
+    """
+    QuerySet for workbook table rows.
+    """
+
+    model_class = WorkbookTableRow
+
+
+class WorkbookTableRowsProxy:
+    """
+    Helper for workbook table row collection operations.
+    """
+
+    def __init__(self, table: "WorkbookTable") -> None:
+        self._table = table
+
+    @property
+    def path(self) -> str:
+        return f"{self._table.path}/rows"
+
+    def queryset(self) -> WorkbookTableRowQuerySet:
+        return WorkbookTableRowQuerySet(self._table._client, path=self.path)
+
+    def __aiter__(self):
+        return self.queryset().__aiter__()
+
+    async def add(
+        self,
+        values: list[list[Any]],
+        *,
+        index: int | None = None,
+        workbook_session_id: str | None = None,
+    ) -> WorkbookTableRow:
+        """
+        Add one or more rows to this table.
+
+        Args:
+            values:
+                Two-dimensional row values to append or insert.
+            index:
+                Optional zero-based insertion index. When omitted, Graph appends rows.
+            workbook_session_id:
+                Optional workbook session id sent as `workbook-session-id`.
+        """
+        if not isinstance(values, list) or any(not isinstance(r, list) for r in values):
+            raise ValueError(
+                f"{type(self).__name__} add method requires values as list[list[Any]]."
+            )
+
+        body: dict[str, Any] = {"values": values}
+        if index is not None:
+            body["index"] = index
+
+        data = await self._table._client.post(
+            f"{self.path}/add",
+            body=body,
+            headers=_workbook_headers(workbook_session_id),
+        )
+        return WorkbookTableRow.from_graph(
+            data=data,
+            client=self._table._client,
+            path=self.path,
+        )
+
+
+class WorkbookTableColumnsProxy:
+    """
+    Helper for workbook table column collection operations.
+    """
+
+    def __init__(self, table: "WorkbookTable") -> None:
+        self._table = table
+
+    @property
+    def path(self) -> str:
+        return f"{self._table.path}/columns"
+
+    def queryset(self) -> WorkbookTableColumnQuerySet:
+        return WorkbookTableColumnQuerySet(self._table._client, path=self.path)
+
+    def __aiter__(self):
+        return self.queryset().__aiter__()
+
+    async def add(
+        self,
+        *,
+        index: int | None = None,
+        values: list[list[Any]] | None = None,
+        name: str | None = None,
+        workbook_session_id: str | None = None,
+    ) -> WorkbookTableColumn:
+        """
+        Add a column to this table.
+
+        Args:
+            index:
+                Optional zero-based insertion index.
+            values:
+                Optional two-dimensional column values.
+            name:
+                Optional new column name.
+            workbook_session_id:
+                Optional workbook session id sent as `workbook-session-id`.
+        """
+        body: dict[str, Any] = {}
+        if index is not None:
+            body["index"] = index
+        if values is not None:
+            if not isinstance(values, list) or any(
+                not isinstance(r, list) for r in values
+            ):
+                raise ValueError(
+                    f"{type(self).__name__} add method requires values as list[list[Any]]."
+                )
+            body["values"] = values
+        if name:
+            body["name"] = name
+        if not body:
+            raise ValueError(
+                f"{type(self).__name__} add method requires index, values, or name."
+            )
+
+        data = await self._table._client.post(
+            f"{self.path}/add",
+            body=body,
+            headers=_workbook_headers(workbook_session_id),
+        )
+        return WorkbookTableColumn.from_graph(
+            data=data,
+            client=self._table._client,
+            path=self.path,
+        )
+
+
+class WorkbookTable(Model):
+    """
+    Graph `workbookTable` resource.
+
+    https://learn.microsoft.com/en-us/graph/api/resources/workbooktable?view=graph-rest-1.0
+    """
+
+    PATH = "/tables"
+
+    highlight_first_column = BooleanField()
+    highlight_last_column = BooleanField()
+    legacy_id = CharField(read_only=True, graph_attr_name="legacyId")
+    name = CharField()
+    show_banded_columns = BooleanField()
+    show_banded_rows = BooleanField()
+    show_filter_button = BooleanField()
+    show_headers = BooleanField()
+    show_totals = BooleanField()
+    style = CharField()
+
+    def __repr__(self) -> str:
+        return f"<WorkbookTable: {self.name or self.id}>"
+
+    @property
+    def rows(self) -> WorkbookTableRowsProxy:
+        """
+        Return table row collection helper.
+        """
+        return WorkbookTableRowsProxy(self)
+
+    @property
+    def columns(self) -> WorkbookTableColumnsProxy:
+        """
+        Return table column collection helper.
+        """
+        return WorkbookTableColumnsProxy(self)
+
+    async def get(self) -> "WorkbookTable":
+        """
+        Fetch this table from Graph.
+        """
+        data = await self._client.get(self.path)
+        return WorkbookTable.from_graph(
+            data=data,
+            client=self._client,
+            path=self._args[1],
+        )
+
+    async def update(
+        self,
+        *,
+        workbook_session_id: str | None = None,
+        **fields: Any,
+    ) -> "WorkbookTable":
+        """
+        Update table properties and return the updated table.
+        """
+        if not fields:
+            return self
+
+        body: dict[str, Any] = {}
+        for attr_name, value in fields.items():
+            field = self.FIELDS.get(attr_name)
+            if field is None:
+                raise ValueError(f"Unknown field {attr_name!r}")
+            if field.read_only:
+                raise ValueError(f"{attr_name!r} is read-only")
+            body[field.graph_attr_name or attr_name] = field.to_graph(value)
+
+        data = await self._client.patch(
+            self.path,
+            body=body,
+            headers=_workbook_headers(workbook_session_id),
+        )
+        if isinstance(data, dict):
+            refreshed = WorkbookTable.from_graph(
+                data=data,
+                client=self._client,
+                path=self._args[1],
+            )
+            self._data = refreshed._data
+            self._graph_data = refreshed._graph_data
+        return self
+
+    async def delete(self, *, workbook_session_id: str | None = None) -> None:
+        """
+        Delete this table.
+        """
+        await self._client.delete(
+            self.path,
+            headers=_workbook_headers(workbook_session_id),
+        )
+
+    async def clear_filters(self, *, workbook_session_id: str | None = None) -> None:
+        """
+        Clear all filters currently applied to this table.
+        """
+        await self._client.post(
+            f"{self.path}/clearFilters",
+            body={},
+            headers=_workbook_headers(workbook_session_id),
+        )
+
+    async def reapply_filters(self, *, workbook_session_id: str | None = None) -> None:
+        """
+        Reapply filters currently applied to this table.
+        """
+        await self._client.post(
+            f"{self.path}/reapplyFilters",
+            body={},
+            headers=_workbook_headers(workbook_session_id),
+        )
+
+    async def convert_to_range(
+        self, *, workbook_session_id: str | None = None
+    ) -> dict[str, Any]:
+        """
+        Convert this table into a normal range and return Graph range payload.
+        """
+        data = await self._client.post(
+            f"{self.path}/convertToRange",
+            body={},
+            headers=_workbook_headers(workbook_session_id),
+        )
+        return data if isinstance(data, dict) else {}
+
+    async def range(self, *, workbook_session_id: str | None = None) -> dict[str, Any]:
+        """
+        Return the range associated with the entire table.
+        """
+        return await self._get_range("range", workbook_session_id=workbook_session_id)
+
+    async def data_body_range(
+        self, *, workbook_session_id: str | None = None
+    ) -> dict[str, Any]:
+        """
+        Return the range associated with the table data body.
+        """
+        return await self._get_range(
+            "dataBodyRange", workbook_session_id=workbook_session_id
+        )
+
+    async def header_row_range(
+        self, *, workbook_session_id: str | None = None
+    ) -> dict[str, Any]:
+        """
+        Return the range associated with the table header row.
+        """
+        return await self._get_range(
+            "headerRowRange", workbook_session_id=workbook_session_id
+        )
+
+    async def total_row_range(
+        self, *, workbook_session_id: str | None = None
+    ) -> dict[str, Any]:
+        """
+        Return the range associated with the table total row.
+        """
+        return await self._get_range(
+            "totalRowRange", workbook_session_id=workbook_session_id
+        )
+
+    async def _get_range(
+        self,
+        endpoint: str,
+        *,
+        workbook_session_id: str | None = None,
+    ) -> dict[str, Any]:
+        data = await self._client.get(
+            f"{self.path}/{endpoint}",
+            headers=_workbook_headers(workbook_session_id),
+        )
+        return data if isinstance(data, dict) else {}
+
+
+class WorkbookTableQuerySet(QuerySet[WorkbookTable]):
+    """
+    QuerySet for workbook table collections.
+    """
+
+    model_class = WorkbookTable
+
+
+class WorkbookTablesProxy:
+    """
+    Workbook table collection helper.
+    """
+
+    def __init__(self, parent: "Workbook | Worksheet") -> None:
+        self._parent = parent
+
+    @property
+    def path(self) -> str:
+        return f"{self._parent.path}/tables"
+
+    def queryset(self) -> WorkbookTableQuerySet:
+        return WorkbookTableQuerySet(self._parent._client, path=self.path)
+
+    def __aiter__(self):
+        return self.queryset().__aiter__()
+
+    def by_id(self, id_or_name: str) -> WorkbookTable:
+        """
+        Create a lazy table handle from table id or name.
+        """
+        value = (id_or_name or "").strip()
+        if not value:
+            raise ValueError(f"{type(self).__name__} by_id requires an id/name.")
+        return WorkbookTable(
+            client=self._parent._client,
+            path=self.path,
+            id=quote(value, safe=""),
+        )
+
+    async def add(
+        self,
+        address: str,
+        *,
+        has_headers: bool = True,
+        workbook_session_id: str | None = None,
+    ) -> WorkbookTable:
+        """
+        Create a table from a worksheet range address.
+        """
+        range_address = (address or "").strip()
+        if not range_address:
+            raise ValueError(f"{type(self).__name__} add method requires an address.")
+
+        data = await self._parent._client.post(
+            f"{self.path}/add",
+            body={"address": range_address, "hasHeaders": has_headers},
+            headers=_workbook_headers(workbook_session_id),
+        )
+        return WorkbookTable.from_graph(
+            data=data,
+            client=self._parent._client,
+            path=self.path,
+        )
+
+
 class Workbook(ReadOnlyModel, PropertyModel):
     """
     Graph `workbook` resource bound to a `driveItem`.
@@ -460,7 +897,6 @@ class Workbook(ReadOnlyModel, PropertyModel):
     application = Field()
     names = Field()
     operations = Field()
-    tables = Field()
 
     def __repr__(self) -> str:
         return f"<Workbook: path={self.path}>"
@@ -513,3 +949,22 @@ class Workbook(ReadOnlyModel, PropertyModel):
             ```
         """
         return WorksheetsProxy(self)
+
+    @property
+    def tables(self) -> WorkbookTablesProxy:
+        """
+        Return workbook table collection helper.
+
+        Example:
+            ```python
+            table = await workbook.tables.add("Sheet1!A1:D5")
+            rows = [row async for row in table.rows]
+            ```
+        """
+        return WorkbookTablesProxy(self)
+
+
+def _workbook_headers(workbook_session_id: str | None = None) -> dict[str, str] | None:
+    if workbook_session_id:
+        return {"workbook-session-id": workbook_session_id}
+    return None

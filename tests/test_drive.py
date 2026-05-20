@@ -10,6 +10,7 @@ from pymsgraph.models.drive import (
 	ItemActivity,
 	ItemActivityQuerySet,
 	Workbook,
+	WorkbookTable,
 	Worksheet,
 )
 from pymsgraph.models.user import User
@@ -194,6 +195,291 @@ def test_workbook_worksheets_proxy_path(make_client: "MakeClient"):
 	workbook = Workbook(client=client, path="/users/u1/drive/items/item123/workbook")
 
 	assert workbook.worksheets.path == "/users/u1/drive/items/item123/workbook/worksheets"
+
+
+def test_workbook_tables_proxy_path(make_client: "MakeClient"):
+	def handler(request: httpx.Request) -> httpx.Response:
+		return httpx.Response(200, json={})
+
+	client, _ = make_client(handler)
+	workbook = Workbook(client=client, path="/users/u1/drive/items/item123/workbook")
+
+	assert workbook.tables.path == "/users/u1/drive/items/item123/workbook/tables"
+	assert workbook.tables.by_id("Table 1").path in {
+		"/users/u1/drive/items/item123/workbook/tables/Table%201",
+		"/users/u1/drive/items/item123/workbook/tables/Table 1",
+	}
+
+
+@pytest.mark.asyncio
+async def test_workbook_tables_list(make_client: "MakeClient"):
+	def handler(request: httpx.Request) -> httpx.Response:
+		if (
+			request.method == "GET"
+			and request.url.path == "/v1.0/users/u1/drive/items/item123/workbook/tables"
+		):
+			return httpx.Response(
+				200,
+				json={
+					"value": [
+						{
+							"id": "table-1",
+							"name": "SalesTable",
+							"showHeaders": True,
+							"showTotals": False,
+							"style": "TableStyleMedium2",
+						}
+					]
+				},
+			)
+		raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+	client, _ = make_client(handler)
+	workbook = Workbook(client=client, path="/users/u1/drive/items/item123/workbook")
+
+	tables = [table async for table in workbook.tables]
+
+	assert len(tables) == 1
+	assert isinstance(tables[0], WorkbookTable)
+	assert tables[0].id == "table-1"
+	assert tables[0].name == "SalesTable"
+	assert tables[0].show_headers is True
+	assert tables[0].style == "TableStyleMedium2"
+
+
+@pytest.mark.asyncio
+async def test_workbook_tables_add(make_client: "MakeClient"):
+	def handler(request: httpx.Request) -> httpx.Response:
+		if (
+			request.method == "POST"
+			and request.url.path == "/v1.0/users/u1/drive/items/item123/workbook/tables/add"
+		):
+			assert request.headers.get("workbook-session-id") == "session-table"
+			body = json.loads(request.content.decode())
+			assert body == {"address": "Sheet1!A1:D5", "hasHeaders": True}
+			return httpx.Response(
+				200,
+				json={
+					"id": "table-1",
+					"name": "Table1",
+					"showHeaders": True,
+					"showTotals": False,
+				},
+			)
+		raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+	client, _ = make_client(handler)
+	workbook = Workbook(client=client, path="/users/u1/drive/items/item123/workbook")
+
+	table = await workbook.tables.add(
+		"Sheet1!A1:D5",
+		workbook_session_id="session-table",
+	)
+
+	assert isinstance(table, WorkbookTable)
+	assert table.id == "table-1"
+	assert table.name == "Table1"
+	assert table.path == "/users/u1/drive/items/item123/workbook/tables/table-1"
+
+
+@pytest.mark.asyncio
+async def test_worksheet_tables_add(make_client: "MakeClient"):
+	def handler(request: httpx.Request) -> httpx.Response:
+		if (
+			request.method == "POST"
+			and request.url.path
+			== "/v1.0/users/u1/drive/items/item123/workbook/worksheets/s1/tables/add"
+		):
+			body = json.loads(request.content.decode())
+			assert body == {"address": "A1:B3", "hasHeaders": False}
+			return httpx.Response(
+				200,
+				json={
+					"id": "table-2",
+					"name": "SheetTable",
+					"showHeaders": False,
+				},
+			)
+		raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+	client, _ = make_client(handler)
+	worksheet = Worksheet(
+		client=client,
+		path="/users/u1/drive/items/item123/workbook/worksheets",
+		id="s1",
+	)
+
+	table = await worksheet.tables.add("A1:B3", has_headers=False)
+
+	assert isinstance(table, WorkbookTable)
+	assert table.id == "table-2"
+	assert table.path == (
+		"/users/u1/drive/items/item123/workbook/worksheets/s1/tables/table-2"
+	)
+
+
+@pytest.mark.asyncio
+async def test_workbook_table_get_update_delete(make_client: "MakeClient"):
+	seen = []
+
+	def handler(request: httpx.Request) -> httpx.Response:
+		seen.append(
+			{
+				"method": request.method,
+				"path": request.url.path,
+				"body": json.loads(request.content.decode()) if request.content else None,
+				"headers": dict(request.headers),
+			}
+		)
+		if (
+			request.method == "GET"
+			and request.url.path == "/v1.0/users/u1/drive/items/item123/workbook/tables/table-1"
+		):
+			return httpx.Response(
+				200,
+				json={"id": "table-1", "name": "SalesTable", "showHeaders": True},
+			)
+		if (
+			request.method == "PATCH"
+			and request.url.path == "/v1.0/users/u1/drive/items/item123/workbook/tables/table-1"
+		):
+			assert request.headers.get("workbook-session-id") == "session-update"
+			return httpx.Response(
+				200,
+				json={
+					"id": "table-1",
+					"name": "SalesTableRenamed",
+					"showHeaders": False,
+				},
+			)
+		if (
+			request.method == "DELETE"
+			and request.url.path == "/v1.0/users/u1/drive/items/item123/workbook/tables/table-1"
+		):
+			return httpx.Response(204)
+		raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+	client, _ = make_client(handler)
+	table_ref = Workbook(
+		client=client,
+		path="/users/u1/drive/items/item123/workbook",
+	).tables.by_id("table-1")
+
+	table = await table_ref.get()
+	await table.update(
+		name="SalesTableRenamed",
+		show_headers=False,
+		workbook_session_id="session-update",
+	)
+	await table.delete()
+
+	assert table.name == "SalesTableRenamed"
+	assert any(
+		item["method"] == "PATCH"
+		and item["body"] == {"name": "SalesTableRenamed", "showHeaders": False}
+		for item in seen
+	)
+
+
+@pytest.mark.asyncio
+async def test_workbook_table_rows_add(make_client: "MakeClient"):
+	def handler(request: httpx.Request) -> httpx.Response:
+		if (
+			request.method == "POST"
+			and request.url.path
+			== "/v1.0/users/u1/drive/items/item123/workbook/tables/table-1/rows/add"
+		):
+			assert request.headers.get("workbook-session-id") == "session-rows"
+			body = json.loads(request.content.decode())
+			assert body == {"values": [[1, 2, 3], [4, 5, 6]], "index": 5}
+			return httpx.Response(200, json={"index": 5, "values": [[1, 2, 3]]})
+		raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+	client, _ = make_client(handler)
+	table = Workbook(
+		client=client,
+		path="/users/u1/drive/items/item123/workbook",
+	).tables.by_id("table-1")
+
+	row = await table.rows.add(
+		[[1, 2, 3], [4, 5, 6]],
+		index=5,
+		workbook_session_id="session-rows",
+	)
+
+	assert row.index == 5
+	assert row.values == [[1, 2, 3]]
+
+
+@pytest.mark.asyncio
+async def test_workbook_table_columns_add(make_client: "MakeClient"):
+	def handler(request: httpx.Request) -> httpx.Response:
+		if (
+			request.method == "POST"
+			and request.url.path
+			== "/v1.0/users/u1/drive/items/item123/workbook/tables/table-1/columns/add"
+		):
+			body = json.loads(request.content.decode())
+			assert body == {
+				"index": 1,
+				"values": [["Region"], ["West"]],
+				"name": "Region",
+			}
+			return httpx.Response(
+				200,
+				json={"id": "col-1", "index": 1, "name": "Region"},
+			)
+		raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+	client, _ = make_client(handler)
+	table = Workbook(
+		client=client,
+		path="/users/u1/drive/items/item123/workbook",
+	).tables.by_id("table-1")
+
+	column = await table.columns.add(
+		index=1,
+		values=[["Region"], ["West"]],
+		name="Region",
+	)
+
+	assert column.id == "col-1"
+	assert column.index == 1
+	assert column.name == "Region"
+
+
+@pytest.mark.asyncio
+async def test_workbook_table_range_actions(make_client: "MakeClient"):
+	def handler(request: httpx.Request) -> httpx.Response:
+		base = "/v1.0/users/u1/drive/items/item123/workbook/tables/table-1"
+		if request.method == "GET" and request.url.path == f"{base}/range":
+			assert request.headers.get("workbook-session-id") == "session-range"
+			return httpx.Response(200, json={"address": "Sheet1!A1:D5"})
+		if request.method == "GET" and request.url.path == f"{base}/dataBodyRange":
+			return httpx.Response(200, json={"address": "Sheet1!A2:D5"})
+		if request.method == "POST" and request.url.path == f"{base}/clearFilters":
+			return httpx.Response(204)
+		if request.method == "POST" and request.url.path == f"{base}/reapplyFilters":
+			return httpx.Response(204)
+		if request.method == "POST" and request.url.path == f"{base}/convertToRange":
+			return httpx.Response(200, json={"address": "Sheet1!A1:D5"})
+		raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+	client, _ = make_client(handler)
+	table = Workbook(
+		client=client,
+		path="/users/u1/drive/items/item123/workbook",
+	).tables.by_id("table-1")
+
+	table_range = await table.range(workbook_session_id="session-range")
+	data_body = await table.data_body_range()
+	await table.clear_filters()
+	await table.reapply_filters()
+	converted = await table.convert_to_range()
+
+	assert table_range["address"] == "Sheet1!A1:D5"
+	assert data_body["address"] == "Sheet1!A2:D5"
+	assert converted["address"] == "Sheet1!A1:D5"
 
 
 @pytest.mark.asyncio

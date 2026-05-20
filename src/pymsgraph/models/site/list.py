@@ -517,6 +517,25 @@ class FieldValueSet(PropertyModel):
         self._graph_data[key] = value
         self._dirty.add(key)
 
+    def serialize(self) -> dict[str, Any]:
+        """
+        Build a Graph PATCH payload from tracked field changes.
+
+        Returns:
+            dict[str, Any]:
+                Mapping of dirty SharePoint column names to their current
+                values from `_graph_data`. Returns an empty dict when no
+                fields have been modified.
+
+        Notes:
+            Schemaless counterpart of `Model.serialize()`: since
+            `FieldValueSet` has no declared `Field` descriptors, the payload
+            is read directly from `_graph_data` using `_dirty` as the key
+            set. Safe to pass as `body=` to `utils.build_batch_requests` /
+            `utils.send_batch_requests`.
+        """
+        return {k: self._graph_data[k] for k in self._dirty if k in self._graph_data}
+
     async def update(self, data: dict[str, Any] | None = None) -> bool:
         """
         Persist dirty field changes to Graph.
@@ -551,9 +570,8 @@ class FieldValueSet(PropertyModel):
                 graph_data[k] = v
                 self._dirty.add(k)
 
-        if not self._dirty:
+        if not (payload := self.serialize()):
             return False
-        payload = {k: self._graph_data[k] for k in self._dirty}
         await self._client.patch(self.path, body=payload)
         self._dirty.clear()
         return True

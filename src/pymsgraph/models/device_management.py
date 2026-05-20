@@ -144,9 +144,7 @@ class WindowsAutoPilotDeviceIdentity(ReadOnlyModel):
         )
 
 
-class WindowsAutoPilotDeviceIdentityQuerySet(
-    QuerySet[WindowsAutoPilotDeviceIdentity]
-):
+class WindowsAutoPilotDeviceIdentityQuerySet(QuerySet[WindowsAutoPilotDeviceIdentity]):
     """
     QuerySet for Graph Windows Autopilot device identities
     (`/deviceManagement/windowsAutopilotDeviceIdentities`).
