@@ -74,6 +74,7 @@ class Client:
 
         self._owns_http = http is None
         self.http = http or httpx.AsyncClient(timeout=timeout)
+        self._requests_sent = 0
 
         ua = _default_user_agent()
         if user_agent:
@@ -101,7 +102,9 @@ class Client:
         if url is None:
             raise ValueError("Argument required, path/url.")
         _logger.debug("GET %s params=%s", url, params)
-        resp = await self.http.get(url, params=params, headers=self._headers(headers))
+        resp = await self._send(
+            "GET", url, params=params, headers=self._headers(headers)
+        )
         _logger.debug("GET %s -> %s", url, resp.status_code)
         _raise_for_status(resp)
         data = _json_or_none(resp)
@@ -117,7 +120,8 @@ class Client:
     ) -> dict[str, Any]:
         url = self._url(path)
         _logger.debug("POST %s params=%s body_keys=%s", url, params, _keys(body))
-        resp = await self.http.post(
+        resp = await self._send(
+            "POST",
             url,
             params=params,
             json=dict(body) if body is not None else None,
@@ -147,7 +151,8 @@ class Client:
             _keys(body),
             None if content is None else len(content),
         )
-        resp = await self.http.put(
+        resp = await self._send(
+            "PUT",
             url,
             params=params,
             content=content.encode() if isinstance(content, str) else content,
@@ -168,7 +173,8 @@ class Client:
     ) -> bytes:
         url = self._url(path)
         _logger.debug("GET %s params=%s (content)", url, params)
-        resp = await self.http.get(
+        resp = await self._send(
+            "GET",
             url,
             params=params,
             headers=self._headers(headers),
@@ -188,7 +194,8 @@ class Client:
     ) -> Any:
         url = self._url(path)
         _logger.debug("PATCH %s params=%s body_keys=%s", url, params, _keys(body))
-        resp = await self.http.patch(
+        resp = await self._send(
+            "PATCH",
             url,
             params=params,
             json=dict(body) if body is not None else None,
@@ -207,12 +214,28 @@ class Client:
     ) -> Any:
         url = self._url(path)
         _logger.debug("DELETE %s params=%s", url, params)
-        resp = await self.http.delete(
-            url, params=params, headers=self._headers(headers)
+        resp = await self._send(
+            "DELETE", url, params=params, headers=self._headers(headers)
         )
         _logger.debug("DELETE %s -> %s", url, resp.status_code)
         _raise_for_status(resp)
         return _json_or_none(resp)
+
+    @property
+    def requests_sent(self) -> int:
+        """
+        Number of HTTP requests sent by this client instance.
+
+        This counts actual outgoing HTTP calls made through the client helpers.
+        A Microsoft Graph `$batch` call counts as one request.
+        """
+        return self._requests_sent
+
+    def reset_requests_sent(self) -> None:
+        """
+        Reset the HTTP request counter for this client instance.
+        """
+        self._requests_sent = 0
 
     async def close(self) -> None:
         if self._owns_http:
@@ -234,6 +257,10 @@ class Client:
         if headers:
             out.update(dict(headers))
         return out
+
+    async def _send(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        self._requests_sent += 1
+        return await self.http.request(method, url, **kwargs)
 
     groups = RootQuerySetDescriptor(GroupQuerySet)
     subscribed_skus = RootQuerySetDescriptor(SubscribedSkuQuerySet)
