@@ -163,6 +163,7 @@ class User(DirectoryObject):
     member_of = QuerySetField(MemberOfQuerySet, prefetch=True, expand=True)
 
     messages = QuerySetField(MessageQuerySet, prefetch=True)
+
     # oauth2_permission_grants = ListField()
     # onenote = Field()
     # online_meetings = ListField()
@@ -213,14 +214,14 @@ class User(DirectoryObject):
         return f"<User: {self.id}, {self.display_name}, {self.user_principal_name}>"
 
     async def reset_password(
-        self,
-        *,
-        password: str | None = None,
-        force_change_password_next_sign_in: bool = True,
-        force_change_password_next_sign_in_with_mfa: bool | None = None,
-        auto_generate_password: bool = False,
-        as_batch_request: bool = False,
-        request_id: str | None = None,
+            self,
+            *,
+            password: str | None = None,
+            force_change_password_next_sign_in: bool = True,
+            force_change_password_next_sign_in_with_mfa: bool | None = None,
+            auto_generate_password: bool = False,
+            as_batch_request: bool = False,
+            request_id: str | None = None,
     ) -> None | dict[str, Any]:
         """
         Reset this user's password.
@@ -295,10 +296,10 @@ class User(DirectoryObject):
         await self._client.patch(path, body=password_profile.serialize())
 
     async def assign_manager(
-        self,
-        manager_id: str,
-        as_batch_request: bool = False,
-        request_id: str | None = None,
+            self,
+            manager_id: str,
+            as_batch_request: bool = False,
+            request_id: str | None = None,
     ) -> None | dict[str, Any]:
         """
         Assign a manager to this user.
@@ -577,13 +578,13 @@ class UserQuerySet(QuerySet["User"]):
             )
 
     async def reset_password(
-        self,
-        path: "str | Path",
-        *,
-        password: str | None = None,
-        auto_generate_password: bool = False,
-        force_change_password_next_sign_in: bool = True,
-        force_change_password_next_sign_in_with_mfa: bool | None = None,
+            self,
+            path: "str | Path",
+            *,
+            password: str | None = None,
+            auto_generate_password: bool = False,
+            force_change_password_next_sign_in: bool = True,
+            force_change_password_next_sign_in_with_mfa: bool | None = None,
     ) -> None:
         """
         Reset passwords for all users in this queryset and export results to CSV.
@@ -709,18 +710,18 @@ class UserQuerySet(QuerySet["User"]):
     #         return results
 
     async def create(
-        self,
-        *,
-        display_name: str,
-        user_principal_name: str,
-        mail_nickname: str,
-        account_enabled: bool = True,
-        password: str | None = None,
-        force_change_password_next_sign_in: bool = True,
-        auto_generate_password: bool = False,
-        licenses: str | Collection[str] | None = None,
-        manager: str | None = None,
-        **kwargs: Any,
+            self,
+            *,
+            display_name: str,
+            user_principal_name: str,
+            mail_nickname: str,
+            account_enabled: bool = True,
+            password: str | None = None,
+            force_change_password_next_sign_in: bool = True,
+            auto_generate_password: bool = False,
+            licenses: str | Collection[str] | None = None,
+            manager: str | None = None,
+            **kwargs: Any,
     ) -> "User":
         """
         Create a single Microsoft Graph user.
@@ -827,7 +828,7 @@ class UserQuerySet(QuerySet["User"]):
             await obj.assign_manager(manager)
         if licenses is not None:
             if isinstance(licenses, (str, bytes)) or not isinstance(
-                licenses, Collection
+                    licenses, Collection
             ):
                 licenses = (licenses,)
 
@@ -847,14 +848,14 @@ class UserQuerySet(QuerySet["User"]):
         return obj
 
     async def create_many(
-        self,
-        *args: dict[str, Any],
-        auto_generate_password: bool = False,
-        force_change_password_next_sign_in: bool = True,
-        path: str | Path | None = None,
-        encoding: str = "utf-8",
-        export_path: str | Path | None = None,
-        export_encoding: str = "utf-8",
+            self,
+            *args: dict[str, Any],
+            auto_generate_password: bool = False,
+            force_change_password_next_sign_in: bool = True,
+            path: str | Path | None = None,
+            encoding: str = "utf-8",
+            export_path: str | Path | None = None,
+            export_encoding: str = "utf-8",
     ) -> "UserQuerySet":
         """
         Create many users in Graph using `$batch` requests.

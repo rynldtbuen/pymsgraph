@@ -355,15 +355,25 @@ class QuerySet(Generic[_Tm]):
         _logger.debug("QuerySet.top value=%s", value)
         return qs
 
-    def expand(self, field: str, *select: str) -> Self:
+    def expand(
+        self,
+        field: str | None = None,
+        *select: str,
+        raw: str | Iterable[str] | None = None,
+    ) -> Self:
         """
         Return a cloned queryset with a related field expansion.
 
         Args:
             field:
-                Related field name to expand.
+                Related field name to expand. This is validated against the
+                model fields unless omitted.
             *select:
                 Optional field subset for the expanded object(s).
+            raw:
+                Optional raw Microsoft Graph `$expand` expression or
+                expressions. Raw values are sent without model-field validation
+                or Python-to-Graph name conversion.
 
         Returns:
             QuerySet[_Tm]:
@@ -376,25 +386,42 @@ class QuerySet(Generic[_Tm]):
         Notes:
             - If no explicit select is provided, model defaults may be used.
             - When explicit select is used, `id` is auto-included.
+            - Use `raw` only for advanced Graph expressions that are not
+              represented by pymsgraph model fields.
 
         Example:
             ```python
             qs = client.users.expand("manager", "display_name", "mail")
             # Expanding multitple fields
             qs = client.users.expand("manager", "display_name", "mail").expand("assigned_licenses")
+            # Raw Graph expand expression
+            qs = client.users.expand(raw="memberOf($select=id,displayName)")
             ```
         """
+        if field is None and raw is None:
+            return self
+
         qs = self._clone()
-        expands: dict[str, set[str]] = qs._params.setdefault("$expand", {})
+
+        if field is not None:
+            qs._expand_validated(field, *select)
+
+        if raw is not None:
+            qs._expand_raw(raw)
+
+        return qs
+
+    def _expand_validated(self, field: str, *select: str) -> Self:
+        expands: dict[str, set[str]] = self._params.setdefault("$expand", {})
         explicit_select = bool(select)
-        default_expands = getattr(qs._model_class, "DEFAULT_EXPAND_FIELDS", None) or ()
+        default_expands = getattr(self._model_class, "DEFAULT_EXPAND_FIELDS", None) or ()
         default_expand_fields = {name for name in default_expands}
         default_expand_camel = {to_camel_case(name) for name in default_expand_fields}
         allow_default_expand = (
             field in default_expand_fields
             or to_camel_case(field) in default_expand_camel
         )
-        if field_obj := qs._model_class.FIELDS.get(field):
+        if field_obj := self._model_class.FIELDS.get(field):
             if not field_obj.expand and not allow_default_expand:
                 raise ValueError(f"Field {field!r} does not support expand")
             graph_field = field_obj.graph_attr_name or to_camel_case(field)
@@ -420,7 +447,23 @@ class QuerySet(Generic[_Tm]):
             graph_field,
             sorted(expands[graph_field]),
         )
-        return qs
+        return self
+
+    def _expand_raw(self, raw: str | Iterable[str]) -> Self:
+        values = [raw] if isinstance(raw, str) else list(raw)
+        if not values:
+            return self
+
+        raw_expands: list[str] = self._params.setdefault("$expand_raw", [])
+        for value in values:
+            expr = value.strip()
+            if not expr:
+                raise ValueError("raw expand expression cannot be empty.")
+            if expr not in raw_expands:
+                raw_expands.append(expr)
+
+        _logger.debug("QuerySet.expand raw=%s", raw_expands)
+        return self
 
     def all(self) -> Self:
         """
@@ -1384,6 +1427,7 @@ class QuerySet(Generic[_Tm]):
         if values := params.pop("$search", None):
             compiled_params["$search"] = " AND ".join(values)
 
+        expand_parts: list[str] = []
         if expands := params.pop("$expand", None):
             parts: list[str] = []
             for name, fields in expands.items():
@@ -1391,7 +1435,13 @@ class QuerySet(Generic[_Tm]):
                     parts.append(f"{name}($select={','.join(sorted(fields))})")
                 else:
                     parts.append(name)
-            compiled_params["$expand"] = ",".join(parts)
+            expand_parts.extend(parts)
+
+        if raw_expands := params.pop("$expand_raw", None):
+            expand_parts.extend(raw_expands)
+
+        if expand_parts:
+            compiled_params["$expand"] = ",".join(expand_parts)
 
         compiled_params.update(params)
 

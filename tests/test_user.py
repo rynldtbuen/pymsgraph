@@ -201,6 +201,47 @@ def test_field_messages(make_client: "MakeClient") -> None:
     assert qs._model_class is Message
 
 
+def test_message_queryset_by_id(make_client: "MakeClient") -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("No HTTP call expected")
+
+    client, _ = make_client(handler)
+    user = client.users.make(id="u1")
+
+    message = user.messages.by_id("m1")
+
+    assert isinstance(message, Message)
+    assert message.id == "m1"
+    assert message.path == "/users/u1/messages/m1"
+
+
+def test_message_queryset_by_id_preserves_mail_folder_path(
+    make_client: "MakeClient",
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("No HTTP call expected")
+
+    client, _ = make_client(handler)
+    folder = MailFolder(id="f1", client=client, path="/users/u1/mailFolders")
+
+    message = folder.messages.by_id("m1")
+
+    assert isinstance(message, Message)
+    assert message.id == "m1"
+    assert message.path == "/users/u1/mailFolders/f1/messages/m1"
+
+
+def test_message_queryset_by_id_requires_id(make_client: "MakeClient") -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("No HTTP call expected")
+
+    client, _ = make_client(handler)
+    user = client.users.make(id="u1")
+
+    with pytest.raises(ValueError, match="requires a message id"):
+        user.messages.by_id("")
+
+
 def test_field_mail_folders(make_client: "MakeClient") -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"value": []})
@@ -425,6 +466,25 @@ async def test_message_attachments_list_uses_cached_data(make_client: "MakeClien
     assert items[0].name == "report.txt"
     assert items[0].size == 42
     assert items[0].content_type == "text/plain"
+
+
+@pytest.mark.asyncio
+async def test_message_attachments_empty_list_uses_cached_data(
+    make_client: "MakeClient",
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("No HTTP call expected")
+
+    client, _ = make_client(handler)
+    message = Message.from_graph(
+        {"id": "m1", "attachments": []},
+        client=client,
+        path="/users/u1/messages",
+    )
+
+    items = [obj async for obj in message.attachments]
+
+    assert items == []
 
 
 @pytest.mark.asyncio

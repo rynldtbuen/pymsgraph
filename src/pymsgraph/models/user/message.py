@@ -280,3 +280,35 @@ class MessageQuerySet(QuerySet[Message]):
     """
 
     model_class = Message
+
+    def by_id(self, id: str) -> Message:
+        """
+        Create a lazy message handle from a message id.
+
+        This does not send a Graph request. It returns a `Message` bound to the
+        current queryset path, so the same method works for user messages and
+        mail-folder messages.
+
+        Args:
+            id:
+                Message id.
+
+        Returns:
+            Message:
+                Lazy message model bound to `{queryset.path}/{id}`.
+
+        Raises:
+            ValueError:
+                If `id` is empty.
+
+        Example:
+            ```python
+            message = user.messages.by_id("AQMkAD...")
+            await message.move("archive-folder-id")
+            ```
+        """
+        value = (id or "").strip()
+        if not value:
+            raise ValueError(f"{type(self).__name__}.by_id requires a message id.")
+
+        return Message(client=self._client, path=self.path, id=value)

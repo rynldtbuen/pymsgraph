@@ -559,8 +559,8 @@ class QuerySetField(Field["_Tqs"]):
             path = f"{obj.path}/{path.lstrip('/')}"
 
         kwargs = {"path": path, "model_class": model_class, "obj": obj}
-        if cached_data := obj._data.get(self.name):
-            kwargs["cached_data"] = cached_data
+        if self.name in obj._data:
+            kwargs["cached_data"] = obj._data[self.name]
         if hasattr(obj, "_prefetch_meta"):
             meta = obj._prefetch_meta.get(self.name, {})
             if meta.get("next_link"):

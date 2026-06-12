@@ -124,6 +124,41 @@ def test_expand_allows_default_expand_for_property(make_client) -> None:
     assert params["$expand"] == "fields"
 
 
+def test_expand_raw_only(users_qs) -> None:
+    qs = users_qs.expand(raw="memberOf($select=id,displayName)")
+    params = qs._build_params()
+    assert params["$expand"] == "memberOf($select=id,displayName)"
+
+
+def test_expand_validated_and_raw(users_qs) -> None:
+    qs = users_qs.expand("manager", "display_name").expand(
+        raw="memberOf($select=id,displayName)"
+    )
+    params = qs._build_params()
+    assert params["$expand"] == (
+        "manager($select=displayName,id),memberOf($select=id,displayName)"
+    )
+
+
+def test_expand_raw_accepts_multiple_and_dedupes(users_qs) -> None:
+    qs = users_qs.expand(
+        raw=[
+            "memberOf($select=id,displayName)",
+            "memberOf($select=id,displayName)",
+            "ownedObjects($select=id,displayName)",
+        ]
+    )
+    params = qs._build_params()
+    assert params["$expand"] == (
+        "memberOf($select=id,displayName),ownedObjects($select=id,displayName)"
+    )
+
+
+def test_expand_raw_requires_non_empty_expression(users_qs) -> None:
+    with pytest.raises(ValueError, match="raw expand expression cannot be empty"):
+        users_qs.expand(raw=" ")
+
+
 def test_search_with_q_and_kwargs(users_qs) -> None:
     params = users_qs.search(display_name="A")._build_params()
     assert params["$search"] == '"displayName:A"'

@@ -91,6 +91,7 @@ class Group(DirectoryObject):
     # group_lifecycle_policies = ListField()
     # member_of = ListField()
     members = QuerySetField(MembersQuerySet, model_class="User", prefetch=True)
+
     # members_with_license_errors = ListField()
     # on_premises_sync_behavior = Field()
     # onenote = Field()
@@ -167,12 +168,12 @@ class GroupQuerySet(QuerySet["Group"]):
     model_class = Group
 
     async def create_security_group(
-        self,
-        *,
-        display_name: str,
-        mail_nickname: str,
-        mail_enabled: bool = False,
-        **kwargs: Any,
+            self,
+            *,
+            display_name: str,
+            mail_nickname: str,
+            mail_enabled: bool = False,
+            **kwargs: Any,
     ) -> Group:
         """
         Create a security group.
@@ -217,7 +218,7 @@ class GroupQuerySet(QuerySet["Group"]):
         )
 
     async def create_m365_group(
-        self, *, display_name: str, mail_nickname: str, visibility: str, **kwargs: Any
+            self, *, display_name: str, mail_nickname: str, visibility: str, **kwargs: Any
     ) -> Group:
         """
         Create a Microsoft 365 (Unified) group.
