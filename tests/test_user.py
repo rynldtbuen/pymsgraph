@@ -255,6 +255,99 @@ def test_field_mail_folders(make_client: "MakeClient") -> None:
     assert qs._model_class is MailFolder
 
 
+def test_mail_folder_queryset_by_id(make_client: "MakeClient") -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("No HTTP call expected")
+
+    client, _ = make_client(handler)
+    user = client.users.by_id("alice@contoso.com")
+
+    folder = user.mail_folders.by_id("AQMkADYAAAIBXQAAAA==")
+
+    assert isinstance(folder, MailFolder)
+    assert folder.id == "AQMkADYAAAIBXQAAAA=="
+    assert (
+        folder.path
+        == "/users/alice@contoso.com/mailFolders/AQMkADYAAAIBXQAAAA=="
+    )
+
+
+def test_mail_folder_queryset_by_id_preserves_child_folder_path(
+    make_client: "MakeClient",
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("No HTTP call expected")
+
+    client, _ = make_client(handler)
+    parent = MailFolder(id="f1", client=client, path="/users/u1/mailFolders")
+
+    folder = parent.child_folders.by_id("f2")
+
+    assert isinstance(folder, MailFolder)
+    assert folder.id == "f2"
+    assert folder.path == "/users/u1/mailFolders/f1/childFolders/f2"
+
+
+def test_mail_folder_queryset_by_id_requires_id(make_client: "MakeClient") -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("No HTTP call expected")
+
+    client, _ = make_client(handler)
+    user = client.users.by_id("u1")
+
+    with pytest.raises(ValueError, match="requires a mail folder id"):
+        user.mail_folders.by_id("")
+
+
+def test_mail_folder_queryset_by_id_rejects_paths_and_well_known_names(
+    make_client: "MakeClient",
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("No HTTP call expected")
+
+    client, _ = make_client(handler)
+    user = client.users.by_id("u1")
+
+    with pytest.raises(ValueError, match="not a folder path"):
+        user.mail_folders.by_id("inbox/Test Folder")
+
+    with pytest.raises(ValueError, match="well-known folder property"):
+        user.mail_folders.by_id("inbox")
+
+    with pytest.raises(ValueError, match="well-known folder property"):
+        user.mail_folders.by_id("sent_items")
+
+
+def test_mail_folder_queryset_well_known_folders(make_client: "MakeClient") -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("No HTTP call expected")
+
+    client, _ = make_client(handler)
+    folders = client.me.mail_folders
+
+    assert folders.inbox.path == "/me/mailFolders/inbox"
+    assert folders.sent_items.path == "/me/mailFolders/sentitems"
+    assert folders.deleted_items.path == "/me/mailFolders/deleteditems"
+    assert folders.junk_email.path == "/me/mailFolders/junkemail"
+
+
+def test_mail_folder_well_known_child_folder_by_id(
+    make_client: "MakeClient",
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("No HTTP call expected")
+
+    client, _ = make_client(handler)
+
+    child = client.me.mail_folders.inbox.by_id("AQMkADYAAAIBXQAAAA==")
+    explicit_child = client.me.mail_folders.inbox.child_folders.by_id(
+        "AQMkADYAAAIBXQAAAA=="
+    )
+
+    assert child.path == "/me/mailFolders/inbox/childFolders/AQMkADYAAAIBXQAAAA=="
+    assert explicit_child.path == child.path
+
+
 def test_field_mail_folders_upn_path(make_client: "MakeClient") -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"value": []})
